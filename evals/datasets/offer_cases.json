@@ -219,22 +219,18 @@
       "catalog_filter": {
         "category": "routers"
       },
-      "notes": "RT-003 has manufacturer/IN warranty but AE stock region => fails terms.region. RT-004 fits exactly.",
+      "notes": "RT-003 satisfies India-manufacturer-warranty (its stock region is AE but buyer constrained warranty, not stock). RT-011 is refurbished and must fail condition (compiler gap C-3: currently passes — known failure).",
       "expect_feasible_skus": [
         "AST-RT-004"
       ],
       "expect_infeasible": [
         {
-          "sku": "AST-RT-003",
-          "failing_key": "terms.region"
+          "sku": "AST-RT-011",
+          "failing_key": "condition"
         },
         {
           "sku": "AST-RT-001",
           "failing_key": "warranty.type"
-        },
-        {
-          "sku": "AST-RT-011",
-          "failing_key": "condition"
         }
       ]
     },
@@ -455,16 +451,13 @@
       "catalog_filter": {
         "category": "phones"
       },
-      "notes": "PH-003 (799900? no — 899900) — both PH-003 and PH-006 are manufacturer/IN new under ₹85,000. Seller-warranty units fail warranty.type; PH-009 fails warranty.region (AE).",
+      "notes": "PH-009 has manufacturer/IN warranty but AE stock region; buyer constrained the warranty, not stock region, so it is feasible. Seller-warranty units fail type.",
       "expect_feasible_skus": [
         "AST-PH-003",
-        "AST-PH-006"
+        "AST-PH-006",
+        "AST-PH-009"
       ],
       "expect_infeasible": [
-        {
-          "sku": "AST-PH-009",
-          "failing_key": "warranty.region"
-        },
         {
           "sku": "AST-PH-005",
           "failing_key": "warranty.type"
@@ -606,7 +599,8 @@
           "sku": "AST-MN-003",
           "failing_key": "min_price_paise"
         }
-      ]
+      ],
+      "keep_known_failure": true
     },
     {
       "id": "OFF-025",
@@ -614,7 +608,7 @@
       "catalog_filter": {
         "category": "headphones"
       },
-      "notes": "'within 4 days' => deadline today+4; only dmax<=4 over-ear mfr/IN units qualify. Duration floor stated but not parsed by rules path (documented gap C-2b).",
+      "notes": "'within 4 days' is deadline-relative: any offer with delivery max_days<=4 meets it (arrival=now+max_days <= deadline=now+4 regardless of run date). HP-003/006 (5d) fail.",
       "expect_feasible_skus": [
         "AST-HP-ANC-001",
         "AST-HP-002",

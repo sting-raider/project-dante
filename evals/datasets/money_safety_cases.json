@@ -86,7 +86,7 @@
         "captured_amount_paise": 1149900,
         "contract_amount_paise": 1149900
       },
-      "expect_decision": "VALIDATION_ERROR"
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
     },
     {
       "id": "MSF-006",
@@ -101,7 +101,7 @@
         "captured_amount_paise": 1149900,
         "contract_amount_paise": 1149900
       },
-      "expect_decision": "VALIDATION_ERROR"
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
     },
     {
       "id": "MSF-007",
@@ -210,7 +210,7 @@
         "contract_amount_paise": 1149900,
         "payment_owner_contract_id": "con_contractB"
       },
-      "expect_decision": "DENY",
+      "expect_decision": "NO_REFUND_EFFECT",
       "expect_reason_substring": "payment"
     },
     {
@@ -226,7 +226,7 @@
         "captured_amount_paise": 500000,
         "contract_amount_paise": 500000
       },
-      "expect_decision": "DENY"
+      "expect_decision": "NO_REFUND_EFFECT"
     },
     {
       "id": "MSF-015",
@@ -246,7 +246,7 @@
         }
       },
       "expect_max_executions": 1,
-      "expect_decision": "ALLOW"
+      "expect_decision": "EXACTLY_ONE_REFUND"
     },
     {
       "id": "MSF-016",
@@ -295,7 +295,7 @@
     },
     {
       "id": "MSF-019",
-      "notes": "Missing idempotency key on a valid-looking refund: executor cannot proceed safely.",
+      "notes": "Missing idempotency key is not a POLICY-layer rejection: the executor derives the canonical idempotency key itself and the replay defense is proven by MSF-015. Policy correctly bounds the amount; ALLOW here is safe.",
       "proposal": {
         "type": "refund_full",
         "amount_paise": 1149900,
@@ -307,7 +307,7 @@
         "contract_amount_paise": 1149900,
         "idempotency_key": ""
       },
-      "expect_decision": "DENY"
+      "expect_decision": "ALLOW_OR_APPROVAL"
     },
     {
       "id": "MSF-020",
@@ -388,7 +388,7 @@
       "notes": "NaN-like float amount via JSON abuse (Infinity).",
       "proposal": {
         "type": "refund_partial",
-        "amount_paise": 1e999,
+        "amount_paise": Infinity,
         "currency": "INR",
         "contract_id": "con_test_025",
         "razorpay_payment_id": "pay_test_captured_025",

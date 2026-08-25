@@ -103,8 +103,24 @@ responding so the wire format matches the contract exactly.
 
 ```
 cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_agents.py tests/test_intent_rules.py -q
-45 passed in 0.49s
+64 passed in 0.56s
 ```
+
+Eval iteration round 1 (Agent J's intent dataset, rules path): all 7 reported
+gap clusters fixed — trailing price caps ("150k max", "cap at 12k", "Budget
+10k.", "12k budget,"), word-number caps ("under fifteen thousand") with a
+duration guard ("under three days" -> delivery, not money), "500 bucks tops",
+"willing to go to 13k", warranty word-order variants ("Manufacturer India
+warranty", "warranty from the manufacturer ... valid in India",
+"manufacturer-backed AND valid in India"), condition extraction ("brand new",
+"new condition"), Aster catalog brands (zephyr/orbio/soniq/kaira/voltaq/hexon/
+lumenx/quanta/nucleon), bare "over-ears"/"over-ear cans" -> headphones,
+delivery verbs "arriving" + "before this coming Thursday"/"before next Friday"
+qualifiers + "under N days" windows, and "Do NOT substitute alternatives".
+Each case is a regression test under the "eval round 1 gaps" section of
+test_intent_rules.py. Known-arguable: INT-051 "seller warranty acceptable"
+hard-gates seller warranty (no polarity detection for "acceptable"); flagged,
+left as-is pending dataset-owner decision.
 
 Coverage highlights: hero query parses to category=headphones,
 form_factor=over-ear, anc=true, max price 1200000 paise, warranty

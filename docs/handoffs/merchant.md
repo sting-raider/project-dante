@@ -119,8 +119,8 @@ DEMO_MODE guard (403s), route 404/422s, honest analytics math.
 4. **`freeze_offer` reads live fixture**, not STORE offers — snapshot is the
    source of truth for contracts. If integration wants inventory decrements,
    that needs a small follow-up.
-5. Late-scenario anchoring depends on a `delivery.latest` promise existing;
-   without one it falls back to today+3 days.
+5. Late-scenario anchoring prefers the frozen `delivery.promised_by_date`
+   promise; without one it falls back to today+3 days.
 
 ## Integration notes
 
@@ -130,3 +130,65 @@ DEMO_MODE guard (403s), route 404/422s, honest analytics math.
 - `POST /api/demo/reset` wipes STORE **and** LOG then re-seeds — safe to call
   before any demo run.
 - Offer ids are deterministic: `off_<SKU>`, e.g. `off_AST-HP-ANC-001`.
+
+---
+
+## Addendum (post-integration fixes, 2026-08-26)
+
+Per Agent D's verification pass, two bugs in `apply_fulfillment_event` broke
+the hero happy path and the late scenario. Both fixed in
+`apps/api/project_dante/integrations/merchant/service.py`:
+
+1. **Deliver now observes every verifiable material promise.** On deliver
+   (all scenarios) facts additionally include:
+   - `price.amount_paise` — contract `amount_paise` first, promise fallback;
+   - `warranty.region` — copied from the frozen promise on correct/late,
+     `"AE"` on wrong_variant;
+   - `condition` — promised value on all scenarios.
+2. **Deadline key corrected**: late scenario anchors on the frozen
+   `delivery.promised_by_date` promise (was the never-populated
+   `delivery.latest`). A `delivery.days_late = 3` fact is still emitted.
+
+Supporting change in my `catalog_loader.py`: `load_catalog()` stamps a
+concrete `delivery_promise.promised_by_date = today + max_days` onto every
+listing — a live merchant API quotes dated promises at query time; without a
+dated promise nothing downstream can freeze or verify an SLA deadline.
+
+**Verified end-to-end** (hero offer, real freeze + verifier):
+correct → `satisfied=true`, status SATISFIED; wrong_variant → 2×
+MATERIAL_VARIANT_MISMATCH → BREACH_DETECTED; late → DELIVERY_SLA_MISS
+(material) → BREACH_DETECTED.
+
+**Tests after fixes:** mandated set
+(`tests/test_demo_sim.py tests/test_merchant.py tests/test_verification.py tests/test_promises.py`)
+→ **75 passed**; full repo suite → **301 passed, 4 subtests passed**; ruff clean.
+
+### Cross-agent gaps found while verifying (NOT mine — for the lead)
+
+These block the route-level happy path but are in other agents' files; I did
+not touch them:
+
+1. **Frozen promises are stored with `contract_id=None`**
+   (`domain/promises/pipeline.py::freeze_promise_set` persists promises before
+   any contract exists, and `api/routes/intents.py::select_offer` never
+   back-fills). Consequence: authorize finds no price promise (409 "frozen
+   price unknown"), verifier/fulfillment see zero per-contract promises.
+   Fix belongs in select-offer: stamp `contract_id` from the contract's
+   `promise_ids` after persisting the contract. I verified this one-line-ish
+   wiring unblocks authorize + verify.
+2. **CONTRACT DRIFT false positive at payment-order**
+   (`integrations/razorpay/service.py` / `api/routes/payments.py`): B's
+   `_recompute_contract_hash` hashes the raw STORE offer record and raw
+   promise records, but the pipeline's frozen hashes are computed over
+   strip-volatile offers (`expires_at`, `inventory` removed) and canonical
+   `(key, normalized_value)` pairs — different schemes, guaranteed mismatch ⇒
+   409 `contract_drift` on every pipeline-frozen contract. B must recompute
+   using the pipeline's own functions instead of raw records.
+3. Minor: intent text with a hard delivery deadline ("arriving by Thursday")
+   currently makes the hero offer infeasible at evaluation time (Agent C's
+   evaluator compares the deadline against `max_days` from query date); worth
+   a look so the full storyboard brief compiles cleanly.
+
+With gaps 1+2 shimmed around, the complete flow through my routes reaches
+SATISFIED (verified via HTTP above).
+

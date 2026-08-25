@@ -118,6 +118,15 @@ the suite stays green independently of other agents' modules.
 
 ## Post-review fixes (integration + red team)
 
+**CLOSED by security-lead after re-verification:** 72/0/0 on security suites,
+303 passed full API tree. Two permanent regression attacks added to
+test_webhook_chaos.py (graft-block on non-payable contracts, post-paid
+idempotency under late redelivery). Secrets allowlist pruned to a single
+entry: the clearly-labelled synthetic sandbox key in client.py
+(`SANDBOX_KEY_SECRET`, marked "NOT-A-REAL-CREDENTIAL" — required for real
+HMAC math in the offline adapter).
+
+
 - **K-03 / HIGH (fixed):** `_on_payment_captured`'s final fallback force-wrote
   `status="PAID"` for ANY unhandled state — a signature-valid capture could
   teleport CANCELLED/FAILED/DRAFT contracts to PAID, bypassing

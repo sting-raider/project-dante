@@ -5,6 +5,7 @@ out-of-order, forged, and unknown-entity events. Invariants under attack:
   I10 signature verification from raw body
   I11 duplicate events idempotently ignored
   I12 out-of-order events never corrupt state
+  K-03 follow-up: non-payable contracts neither resurrected nor grafted
 
 A skipped test is NOT a pass.
 """
@@ -386,7 +387,7 @@ class TestWebhookChaos:
 
     def test_captured_never_resurrects_cancelled_or_draft_contracts(self, chaos_env):
         """A capture event must not teleport terminal/pre-payment states to
-        PAID outside the state machine (webhooks.py out-of-order fallback)."""
+        PAID outside the state machine."""
         client = chaos_env
         secret = _working_secret()
         if secret is None:
@@ -417,4 +418,74 @@ class TestWebhookChaos:
             assert after["status"] == illegal_status, (
                 f"capture teleported {illegal_status} -> {after['status']} "
                 f"bypassing validate_transition (state machine abuse)"
+            )
+
+    def test_captured_does_not_graft_payment_id_onto_non_payable_contracts(self, chaos_env):
+        """K-03 follow-up hardening: an orphaned capture on a cancelled/draft
+        contract must not graft its payment id onto that contract either —
+        downstream refund lookups key off razorpay_payment_id."""
+        client = chaos_env
+        secret = _working_secret()
+        if secret is None:
+            pytest.skip("no working webhook secret configured")
+
+        from project_dante.db.store import STORE
+
+        for idx, illegal_status in enumerate(["CANCELLED", "FAILED", "DRAFT"]):
+            cid = f"con_chaos_graft_{idx}"
+            _seed_contract(
+                contract_id=cid,
+                order_id=f"order_chaos_graft_{idx}",
+                status=illegal_status,
+            )
+            body = _captured_body(
+                event_id_suffix=f"graft{idx}",
+                order_id=f"order_chaos_graft_{idx}",
+                payment_id=f"pay_attacker_graft_{idx}",
+            )
+            r = client.post(
+                WEBHOOK_URL,
+                content=body,
+                headers={"X-Razorpay-Signature": _sign(body, secret)},
+            )
+            assert r.status_code == 200
+            after = STORE.get(cid)
+            assert after.get("razorpay_payment_id") is None, (
+                f"{illegal_status} contract grafted attacker payment id "
+                f"{after.get('razorpay_payment_id')!r} — refund lookups would "
+                f"key off an orphaned capture"
+            )
+
+    def test_captured_still_records_on_post_paid_states_without_regression(self, chaos_env):
+        """Late redelivery on SATISFIED/BREMEDIATED-family contracts is a no-op
+        recording; status must never regress toward PAID-side writes."""
+        client = chaos_env
+        secret = _working_secret()
+        if secret is None:
+            pytest.skip("no working webhook secret configured")
+
+        from project_dante.db.store import STORE
+
+        for idx, post_status in enumerate(["SATISFIED", "REMEDIATED", "BREACH_DETECTED"]):
+            cid = f"con_chaos_post_{idx}"
+            _seed_contract(
+                contract_id=cid,
+                order_id=f"order_chaos_post_{idx}",
+                status=post_status,
+            )
+            body = _captured_body(
+                event_id_suffix=f"post{idx}",
+                order_id=f"order_chaos_post_{idx}",
+                payment_id=f"pay_chaos_post_{idx}",
+            )
+            r = client.post(
+                WEBHOOK_URL,
+                content=body,
+                headers={"X-Razorpay-Signature": _sign(body, secret)},
+            )
+            assert r.status_code == 200
+            after = STORE.get(cid)
+            assert after["status"] == post_status, (
+                f"post-paid capture changed status {post_status} -> "
+                f"{after['status']}"
             )
