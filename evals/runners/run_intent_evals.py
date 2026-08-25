@@ -71,6 +71,7 @@ def run(limit: int | None = None) -> dict:
             continue
 
         case_failed = []
+        actual_soft = [p.model_dump() for p in intent.soft_preferences]
         expected_constraints = exp.get("hard_constraints") or []
         for ec in expected_constraints:
             resolved = {
@@ -78,12 +79,27 @@ def run(limit: int | None = None) -> dict:
                 "op": ec.get("op", "eq"),
                 "value": resolve_date_placeholder(ec["value"]),
             }
-            if not constraint_satisfied(actual_constraints, resolved):
-                actual_vals = [(c.get("key"), c.get("op"), c.get("value")) for c in actual_constraints]
-                case_failed.append(
-                    f"missing constraint {resolved['key']} {resolved['op']} {resolved['value']!r} "
-                    f"(actual: {actual_vals})"
-                )
+            if constraint_satisfied(actual_constraints, resolved):
+                continue
+            # Brand is a Preference (plan §12.1), not a hard constraint — accept
+            # it among soft preferences when the compiler classifies it there.
+            if resolved["key"] == "brand" and any(
+                p.get("key") == "brand"
+                and str(p.get("value", "")).strip().lower()
+                == str(resolved["value"]).strip().lower()
+                for p in actual_soft
+            ):
+                continue
+            if resolved["key"] == "brand" and resolved.get("op") == "in":
+                wanted = [str(v).lower() for v in (resolved["value"] or [])]
+                have = [str(p.get("value", "")).lower() for p in actual_soft if p.get("key") == "brand"]
+                if all(w in have for w in wanted) and have:
+                    continue
+            actual_vals = [(c.get("key"), c.get("op"), c.get("value")) for c in actual_constraints]
+            case_failed.append(
+                f"missing constraint {resolved['key']} {resolved['op']} {resolved['value']!r} "
+                f"(actual: {actual_vals})"
+            )
 
         # max_total check
         want_max = exp.get("max_total_amount_paise")

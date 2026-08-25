@@ -184,7 +184,11 @@ palette                     // raw hex consts for SVG/canvas work
 - Import path alias `@/*` maps to `apps/web/*` (e.g. `@/components/ui/Panel`).
 - `formatINR` takes **paise** (integers straight off the wire). Never divide yourself.
 - Status badges: just render the literal status string (`<Badge>{c.status}</Badge>`);
-  tone resolution is automatic via `statusTone`.
+  tone resolution is automatic via `statusTone`. Precedence: an **explicit
+  `tone` prop always wins** over auto-derivation — existing call sites that
+  pass `tone="neutral"` etc. keep working unchanged through the atoms swap;
+  auto-derivation only fills the gap when `tone` is omitted. Only constraint:
+  `children` must be a string.
 - Breach spread (§28): use `<Rule weight="signal"/>` for the red breach line and
   `accent="signal"` PullQuote for PROMISED/OBSERVED headers.
 - Demo surfaces: every synthetic row gets `<SyntheticBadge synthetic={ev.synthetic}/>`;

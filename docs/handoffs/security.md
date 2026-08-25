@@ -40,37 +40,30 @@ plan: never fabricate results — skipped = skipped, fail = fail.
 
 ```
 cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q
-→ 66 passed / 1 failed / 3 xfailed(strict) / 0 skipped   (~1s)
+→ 70 passed / 0 failed / 0 skipped   (<1s)
 ```
+Full API tree at verification time: **301 passed** (one unrelated midnight-boundary flake in
+Agent C's `test_intent_rules.py::test_delivery_within_n_days`, passes standalone — the test
+computes its expectation from module-import time while rule_compile reads the clock per call;
+worth a fix to pin `now`).
 
-- The 1 FAILED is **K-03** (real vulnerability, live regression marker — see below).
-- The 3 xfails are strict markers for **K-01/K-02**; they flip to hard passes when Agent E
-  fixes policy.py.
-- Earlier intermediate runs during module landing had up to 31 skips; every skip was
-  resolved by re-running as modules merged. No test was ever relaxed to force a pass;
-  two of my own tests were corrected where my seed state was wrong (not the defense).
+## VULNERABILITIES FOUND — all three VERIFIED FIXED (2026-08-26)
 
-## VULNERABILITIES FOUND
+Red team found 3 vulnerabilities across 2 owners during Wave 1; all were fixed by their
+owners and verified by re-running these suites against the patched modules:
 
-### K-03 — HIGH — webhook capture resurrects CANCELLED/FAILED/DRAFT contracts to PAID
-`api/routes/webhooks.py:300` (`_on_payment_captured` fallback) force-writes
-`status="PAID"` outside `validate_transition`. Verified standalone: valid-signed captured
-event on a CANCELLED contract → HTTP 200, status PAID. Violates I12 + single-point
-transition validation. Owner: Agent B. Live failing test:
-`test_webhook_chaos.py::TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts`.
+| ID | Severity | Summary | Verified fix |
+|---|---|---|---|
+| K-03 | HIGH | Webhook capture force-wrote PAID onto CANCELLED/FAILED/DRAFT contracts, bypassing validate_transition | `webhooks.py`: `_walk_to_paid` legal-path walk + record-withhold fallback (`paid_withheld`) — no status write from non-payable states |
+| K-01 | HIGH | `refund_full` under-amount auto-approved → contract REMEDIATED while buyer under-refunded | `policy.py:385` exact-amount DENY + executor mirror at `policy.py:710` (downward tamper also blocked) |
+| K-02 | MEDIUM | string/float/bool amounts coerced via `int()` | `policy.py:281` strict typing, `INVALID_AMOUNT_TYPE`, bools rejected; mirrored at `policy.py:699` |
 
-### K-01 — HIGH — refund_full under-amount auto-approves and closes the case
-`domain/money/policy.py:361`: no equality check for refund_full → half-amount "full"
-refund gets ALLOW, executes, contract marked REMEDIATED (`policy.py:902`). Buyer
-under-refunded while case shows resolved; partial-refund reason list + ₹500 cap bypassed.
-Owner: Agent E. Strict xfail markers ×1 in `TestAmountManipulation`.
+Lifecycle details + original reproductions preserved in
+`docs/handoffs/security_findings.md`. The regression tests stay permanent.
 
-### K-02 — MEDIUM — money amounts coerced instead of rejected
-`policy.py:280`: `int()` accepts `"11499"`, truncates `114.99`→114, maps `True`→1.
-Bounded by captured ceiling (not an over-refund path) but violates §19 strict typing.
-Owner: Agent E. Strict xfail markers ×2.
-
-Full details + fix directions: `docs/handoffs/security_findings.md`.
+Process note: my owned test files were edited once externally (xfail markers removed after
+the K-01/K-02 fixes landed). Test bodies/assertions were intact and I independently verified
+each fix against policy.py/webhooks.py source before accepting the green run.
 
 ## Defenses verified holding (highlights)
 

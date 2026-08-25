@@ -264,14 +264,11 @@ class TestSecretsHygiene:
             "apps/api/project_dante/integrations/razorpay/client.py",
             _SANDBOX_KEY_PREFIX,
         ),
-        # Deliberate dummy env fixture in Agent B's webhook guard test
-        # (tests/test_webhooks.py): simulates live-keys-present mode. Obvious
-        # placeholder value, verified inert. Owner was asked to prefer a
-        # non-key-shaped literal; allowlisted until then.
-        (
-            "apps/api/tests/test_webhooks.py",
-            "rzp_test_" + "LiveKey" + "12345678",
-        ),
+        # NOTE: former entries for tests/test_webhooks.py and docs/RAZORPAY.md
+        # were removed after owners replaced secret-shaped literals with
+        # non-key-shaped placeholders ("dummy-key-id-for-guard-test",
+        # "paste-your-test-key-id-here"). Prefer fixing literals over growing
+        # this list.
     }
 
     @pytest.mark.filterwarnings("ignore::DeprecationWarning")

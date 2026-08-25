@@ -1,8 +1,21 @@
 # Security Findings — Agent K (Red Team)
 
-Last updated: 2026-08-25, after all Wave 1 modules landed.
+Last updated: 2026-08-26 — **all three confirmed vulnerabilities VERIFIED FIXED**
+by re-running the red-team suites against the patched modules.
+
 Suites: `apps/api/tests/test_security_redteam.py` + `tests/test_webhook_chaos.py`
-Latest run: **66 passed / 1 failed / 3 xfailed (strict), 0 skipped**.
+Latest run: **72 passed / 0 failed / 0 skipped** (red-team suites);
+full API tree: **303 passed**.
+
+Post-fix hardening verified (2026-08-26, second pass): Agent B additionally
+gated the `razorpay_payment_id` graft (`webhooks.py:245`) so orphaned captures
+on non-payable contracts can no longer plant their payment id for downstream
+refund lookups to trip over; post-paid states confirmed no-regression under
+late redelivery. New permanent attacks:
+`test_captured_does_not_graft_payment_id_onto_non_payable_contracts`,
+`test_captured_still_records_on_post_paid_states_without_regression`.
+Secrets-scan allowlist pruned back to a single entry after owners replaced
+secret-shaped test/doc literals with non-key-shaped placeholders.
 
 Severity scale: CRITICAL = unauthorized money movement or forged payment truth;
 HIGH = invariant violation reachable by an authenticated/valid-signature party;
@@ -10,16 +23,18 @@ MEDIUM = hardening gap bounded by other controls; LOW = defense-in-depth nit.
 
 ---
 
-## CONFIRMED VULNERABILITIES
+## CONFIRMED VULNERABILITIES (all RESOLVED + regression-tested)
 
 ### K-03 — Webhook capture teleports CANCELLED/FAILED/DRAFT contracts to PAID (HIGH)
 
-**Status:** OPEN — assigned to Agent B (webhooks.py owner). PARTIALLY ADDRESSED by
-Agent B's `_walk_to_paid` refactor (`webhooks.py:275`), which legally walks every
-pre-payment state to PAID — but the force-write fallback remains at
-`webhooks.py:291` and still fires for CANCELLED/FAILED/DRAFT. Regression test
-still failing as of 2026-08-26.
-**File:** `apps/api/project_dante/api/routes/webhooks.py:291` (`_on_payment_captured`, final fallback)
+**Status: VERIFIED FIXED (2026-08-26).** Agent B replaced the force-write fallback
+with a record-but-withhold path: `_walk_to_paid` (`webhooks.py:275`) legally walks
+every pre-payment state along the transition spine; non-payable states
+(DRAFT/CANCELLED/FAILED) now get a `STATE_RECONCILED` event with
+`reason="captured_event_for_non_payable_state"`, `action="paid_withheld"` and NO
+status write (`webhooks.py:300`). Regression test
+`test_webhook_chaos.py::TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts`
+passes against all three illegal source states.
 **Suite:** `tests/test_webhook_chaos.py::TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts`
 
 Reproduction (verified standalone):
@@ -59,46 +74,38 @@ walk states keep their existing reconciliation behavior.
 
 ### K-01 — refund_full under-amount auto-approves and closes the case (HIGH)
 
-**Status:** OPEN — assigned to Agent E (policy.py owner)
-**File:** `apps/api/project_dante/domain/money/policy.py:361` (`evaluate_money_action`) + `policy.py:902` (`_execute_allowed` → REMEDIATED)
-**Marker:** strict xfail at `tests/test_security_redteam.py::TestAmountManipulation::test_under_amount_not_allowed_silently`
+**Status: VERIFIED FIXED (2026-08-26).** Agent E enforced exact-amount semantics
+TWICE: `evaluate_money_action` now DENIES with `FULL_REFUND_AMOUNT_MISMATCH`
+(P-REFUND-01) unless `amount == captured` (`policy.py:385`), and the new shared
+`_executor_structural_check` mirrors the rule at call time (`policy.py:710`) so a
+downward tamper after a prior ALLOW still fails the final executor check.
+Legitimate smaller compensations must travel through `refund_partial` with an
+allowed reason and its 50000-paise cap. Semantic consequence noted by Agent E:
+full refunds are exact-captured only, so the ₹20k approval threshold is reached
+via contracts with captured > ₹20,000, not via under-amount full refunds.
 
-Attack: propose `type="refund_full"` with `amount_paise = captured // 2`.
-`evaluate_money_action` checks only `amount <= captured` and positivity — there
-is no equality requirement for full refunds — so it returns ALLOW
-(AUTO-APPROVED BY POLICY P-REFUND-03). The executor then runs the refund and
-marks the contract REMEDIATED (`policy.py:902`). Result: the buyer is silently
-under-refunded while the case shows resolved; the partial-refund reason
-allow-list and its `max_auto_amount_paise` cap are bypassed entirely (a partial
-refund of the same amount would have required an allowed partial reason).
-
-Exploitability note: requires the ability to author a MoneyActionProposal (an
-agent or route caller). It does NOT require approval above ₹20,000 since the
-half amount stays under the threshold. Bounded by captured amount, so it cannot
-over-refund — this is case-closure fraud, not money multiplication.
-
-Fix direction (Agent E): for `refund_full`, DENY (or REQUIRE_APPROVAL) when
-`amount < captured`; alternatively clamp to captured and re-type as
-refund_partial subject to partial rules.
+Original attack (now blocked): propose `type="refund_full"` with
+`amount_paise = captured // 2` — previously ALLOWed (P-REFUND-03), executed,
+contract marked REMEDIATED while the buyer was under-refunded; the
+partial-refund reason allow-list and cap were bypassed entirely. Bounded by the
+captured ceiling, so it was case-closure fraud rather than money multiplication.
+Regression tests: `test_under_amount_not_allowed_silently`,
+`test_over_by_one_paise_denied`, plus Agent E's `FullRefundAmountIntegrityTests`.
 
 ---
 
 ### K-02 — Non-int amounts coerced instead of rejected (MEDIUM)
 
-**File:** `apps/api/project_dante/domain/money/policy.py:280` (`amount = int(proposal.get("amount_paise"))`)
-**Status:** OPEN — assigned to Agent E
-**Markers:** strict xfail x2 at `tests/test_security_redteam.py::TestAmountManipulation::test_string_amount_never_becomes_money` and `::test_float_rupee_confusion_never_becomes_money`
+**Status: VERIFIED FIXED (2026-08-26).** Strict money typing per plan §19:
+bools explicitly rejected, any non-int (`"11499"`, `114.99`, `True`, `None`)
+DENIED with `INVALID_AMOUNT_TYPE`, un-coerced (`policy.py:281-296`); mirrored in
+`_executor_structural_check` (`policy.py:699`).
 
-`int()` accepts `"11499"` → 11499, `114.99` → 114 (silent truncation), `True`
-→ 1. Plan §19 says never coerce malformed financial values. Not currently an
-over-refund path (positivity + captured-ceiling bounds hold), but truncation of
-114.99 → 114 paise is silent data corruption of a financial field, and bool is
-a footgun. Fix: reject non-int types outright:
-```python
-raw_amt = proposal.get("amount_paise")
-if isinstance(raw_amt, bool) or not isinstance(raw_amt, int):
-    -> DENY INVALID_AMOUNT_TYPE
-```
+Original gap: `int()` accepted `"11499"` → 11499, truncated `114.99` → 114,
+mapped `True` → 1. Not an over-refund path (bounds held) but silent corruption
+of a financial field. Regression tests:
+`test_string_amount_never_becomes_money`,
+`test_float_rupee_confusion_never_becomes_money`.
 
 ---
 

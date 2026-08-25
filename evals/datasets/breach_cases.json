@@ -4,65 +4,111 @@
     "version": 1,
     "owner": "Agent J (Evals & Simulation Lead)",
     "description": "Breach verification eval cases. Each case is a (promised, observed) pair fed through project_dante.domain.promises.verifier.evaluate_contract semantics: a material mismatch must be flagged with the expected severity and reason code; cosmetic/identical pairs must NOT breach.",
-    "severity_vocabulary": ["informational", "minor", "material", "critical"],
+    "severity_vocabulary": [
+      "informational",
+      "minor",
+      "material",
+      "critical"
+    ],
     "matcher_semantics": "expect_severity compared exactly; expect_reason_code matched case-insensitively as substring of actual reason_code (so WARRANTY_MISMATCH matches warranty_type_mismatch); expect_breach=false cases pass iff no material-or-higher breach is produced for the pair."
   },
   "cases": [
     {
       "id": "BRC-001",
       "notes": "Hero failure path: UAE region variant delivered when India promised.",
-      "promised": { "key": "terms.region", "value": "IN" },
-      "observed": { "key": "terms.region", "value": "AE" },
+      "promised": {
+        "key": "product.region",
+        "value": "IN"
+      },
+      "observed": {
+        "key": "product.region",
+        "value": "AE"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "REGION_MISMATCH"
+      "expect_reason_code": "MATERIAL_VARIANT_MISMATCH"
     },
     {
       "id": "BRC-002",
       "notes": "Hero failure path companion: seller warranty where manufacturer promised.",
-      "promised": { "key": "warranty.type", "value": "manufacturer" },
-      "observed": { "key": "warranty.type", "value": "seller" },
+      "promised": {
+        "key": "warranty.type",
+        "value": "manufacturer"
+      },
+      "observed": {
+        "key": "warranty.type",
+        "value": "seller"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "WARRANTY_TYPE_MISMATCH"
+      "expect_reason_code": "MATERIAL_VARIANT_MISMATCH"
     },
     {
       "id": "BRC-003",
       "notes": "Warranty region flip IN -> AE while type stays manufacturer.",
-      "promised": { "key": "warranty.region", "value": "IN" },
-      "observed": { "key": "warranty.region", "value": "AE" },
+      "promised": {
+        "key": "warranty.region",
+        "value": "IN"
+      },
+      "observed": {
+        "key": "warranty.region",
+        "value": "AE"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "WARRANTY_REGION_MISMATCH"
+      "expect_reason_code": "MATERIAL_VARIANT_MISMATCH"
     },
     {
       "id": "BRC-004",
       "notes": "Late delivery by ~3 days beyond promise: material SLA miss.",
-      "promised": { "key": "delivery.delivered_at", "value": "2026-08-27" },
-      "observed": { "key": "delivery.delivered_at", "value": "2026-08-30" },
+      "promised": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27"
+      },
+      "observed": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-30"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "DELIVERY_LATE"
+      "expect_reason_code": "DELIVERY_SLA_MISS"
     },
     {
       "id": "BRC-005",
       "notes": "Late delivery by ~2 hours past end-of-day: minor.",
-      "promised": { "key": "delivery.delivered_at", "value": "2026-08-27T21:00:00+00:00" },
-      "observed": { "key": "delivery.delivered_at", "value": "2026-08-27T23:02:00+00:00" },
+      "promised": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27T21:00:00+00:00"
+      },
+      "observed": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27T23:02:00+00:00"
+      },
       "material_to_intent": false,
       "expect_breach": true,
       "expect_severity": "minor",
-      "expect_reason_code": "DELIVERY_LATE"
+      "expect_reason_code": "DELIVERY_SLA_MISS"
     },
     {
       "id": "BRC-006",
       "notes": "Missing low-value included accessory (USB cable): informational per merchant policy.",
-      "promised": { "key": "accessories.included", "value": ["usb-c-cable", "carry-case"] },
-      "observed": { "key": "accessories.included", "value": ["carry-case"] },
+      "promised": {
+        "key": "accessories.included",
+        "value": [
+          "usb-c-cable",
+          "carry-case"
+        ]
+      },
+      "observed": {
+        "key": "accessories.included",
+        "value": [
+          "carry-case"
+        ]
+      },
       "material_to_intent": false,
       "expect_breach": true,
       "expect_severity": "informational",
@@ -71,8 +117,14 @@
     {
       "id": "BRC-007",
       "notes": "Color variant differs but buyer never constrained color — cosmetic, no breach.",
-      "promised": { "key": "variant.color", "value": "midnight-black" },
-      "observed": { "key": "variant.color", "value": "arctic-white" },
+      "promised": {
+        "key": "variant.color",
+        "value": "midnight-black"
+      },
+      "observed": {
+        "key": "variant.color",
+        "value": "arctic-white"
+      },
       "material_to_intent": false,
       "color_was_material": false,
       "expect_breach": false
@@ -80,29 +132,53 @@
     {
       "id": "BRC-008",
       "notes": "Identical region values: satisfied, no breach.",
-      "promised": { "key": "terms.region", "value": "IN" },
-      "observed": { "key": "terms.region", "value": "IN" },
+      "promised": {
+        "key": "product.region",
+        "value": "IN"
+      },
+      "observed": {
+        "key": "product.region",
+        "value": "IN"
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-009",
       "notes": "Identical manufacturer warranty: satisfied.",
-      "promised": { "key": "warranty.type", "value": "manufacturer" },
-      "observed": { "key": "warranty.type", "value": "manufacturer" },
+      "promised": {
+        "key": "warranty.type",
+        "value": "manufacturer"
+      },
+      "observed": {
+        "key": "warranty.type",
+        "value": "manufacturer"
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-010",
       "notes": "Delivery on or before promised date: no breach even if early.",
-      "promised": { "key": "delivery.delivered_at", "value": "2026-08-27" },
-      "observed": { "key": "delivery.delivered_at", "value": "2026-08-25" },
+      "promised": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27"
+      },
+      "observed": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-25"
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-011",
       "notes": "Wrong SKU delivered entirely: critical — buyer got a different product class.",
-      "promised": { "key": "sku", "value": "AST-HP-ANC-001" },
-      "observed": { "key": "sku", "value": "AST-HP-017" },
+      "promised": {
+        "key": "sku",
+        "value": "AST-HP-ANC-001"
+      },
+      "observed": {
+        "key": "sku",
+        "value": "AST-HP-017"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "critical",
@@ -111,8 +187,14 @@
     {
       "id": "BRC-012",
       "notes": "Condition downgrade new -> refurbished without consent: material.",
-      "promised": { "key": "condition", "value": "new" },
-      "observed": { "key": "condition", "value": "refurbished" },
+      "promised": {
+        "key": "condition",
+        "value": "new"
+      },
+      "observed": {
+        "key": "condition",
+        "value": "refurbished"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "critical",
@@ -121,8 +203,14 @@
     {
       "id": "BRC-013",
       "notes": "ANC feature absent on delivered unit though advertised and intent-material.",
-      "promised": { "key": "attributes.anc", "value": true },
-      "observed": { "key": "attributes.anc", "value": false },
+      "promised": {
+        "key": "attributes.anc",
+        "value": true
+      },
+      "observed": {
+        "key": "attributes.anc",
+        "value": false
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
@@ -131,33 +219,57 @@
     {
       "id": "BRC-014",
       "notes": "US warranty region delivered instead of India.",
-      "promised": { "key": "warranty.region", "value": "IN" },
-      "observed": { "key": "warranty.region", "value": "US" },
+      "promised": {
+        "key": "warranty.region",
+        "value": "IN"
+      },
+      "observed": {
+        "key": "warranty.region",
+        "value": "US"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "WARRANTY_REGION_MISMATCH"
+      "expect_reason_code": "MATERIAL_VARIANT_MISMATCH"
     },
     {
       "id": "BRC-015",
       "notes": "Delivery exactly ON the deadline timestamp boundary (same ISO day): no breach.",
-      "promised": { "key": "delivery.delivered_at", "value": "2026-08-27T21:00:00+00:00" },
-      "observed": { "key": "delivery.delivered_at", "value": "2026-08-27T20:59:30+00:00" },
+      "promised": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27T21:00:00+00:00"
+      },
+      "observed": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27T20:59:30+00:00"
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-016",
       "notes": "Cosmetic packaging note difference in free-text notes field: informational at most, not material.",
-      "promised": { "key": "offer.notes", "value": "Ships in recycled packaging" },
-      "observed": { "key": "offer.notes", "value": "Ships in standard packaging" },
+      "promised": {
+        "key": "offer.notes",
+        "value": "Ships in recycled packaging"
+      },
+      "observed": {
+        "key": "offer.notes",
+        "value": "Ships in standard packaging"
+      },
       "material_to_intent": false,
       "expect_breach": false
     },
     {
       "id": "BRC-017",
       "notes": "Warranty duration shorted 24 -> 12 months.",
-      "promised": { "key": "warranty.duration_months", "value": 24 },
-      "observed": { "key": "warranty.duration_months", "value": 12 },
+      "promised": {
+        "key": "warranty.duration_months",
+        "value": 24
+      },
+      "observed": {
+        "key": "warranty.duration_months",
+        "value": 12
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
@@ -166,25 +278,43 @@
     {
       "id": "BRC-018",
       "notes": "Warranty duration longer than promised (12 -> 24): upgrade, never a breach.",
-      "promised": { "key": "warranty.duration_months", "value": 12 },
-      "observed": { "key": "warranty.duration_months", "value": 24 },
+      "promised": {
+        "key": "warranty.duration_months",
+        "value": 12
+      },
+      "observed": {
+        "key": "warranty.duration_months",
+        "value": 24
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-019",
-      "notes": "Late by one full day past a hard buyer deadline (Thursday -> Friday): material.",
-      "promised": { "key": "delivery.delivered_at", "value": "2026-08-27T23:59:00+00:00" },
-      "observed": { "key": "delivery.delivered_at", "value": "2026-08-28T23:59:00+00:00" },
+      "notes": "Late by ~25h past a hard buyer deadline: material DELIVERY_SLA_MISS (verifier: >24h material).",
+      "promised": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-27T23:59:00+00:00"
+      },
+      "observed": {
+        "key": "delivery.delivered_at",
+        "value": "2026-08-29T00:59:00+00:00"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "material",
-      "expect_reason_code": "DELIVERY_LATE"
+      "expect_reason_code": "DELIVERY_SLA_MISS"
     },
     {
       "id": "BRC-020",
       "notes": "Return window shorter than advertised: minor (post-purchase right reduced).",
-      "promised": { "key": "returns.window_days", "value": 10 },
-      "observed": { "key": "returns.window_days", "value": 7 },
+      "promised": {
+        "key": "returns.window_days",
+        "value": 10
+      },
+      "observed": {
+        "key": "returns.window_days",
+        "value": 7
+      },
       "material_to_intent": false,
       "expect_breach": true,
       "expect_severity": "minor",
@@ -193,15 +323,27 @@
     {
       "id": "BRC-021",
       "notes": "Return window longer than advertised: improvement, no breach.",
-      "promised": { "key": "returns.window_days", "value": 7 },
-      "observed": { "key": "returns.window_days", "value": 15 },
+      "promised": {
+        "key": "returns.window_days",
+        "value": 7
+      },
+      "observed": {
+        "key": "returns.window_days",
+        "value": 15
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-022",
       "notes": "Region case-insensitive match (in vs IN normalization): no breach.",
-      "promised": { "key": "terms.region", "value": "IN" },
-      "observed": { "key": "terms.region", "value": "in" },
+      "promised": {
+        "key": "product.region",
+        "value": "IN"
+      },
+      "observed": {
+        "key": "product.region",
+        "value": "in"
+      },
       "expect_breach": false
     },
     {
@@ -209,32 +351,56 @@
       "notes": "Both hero breaches together (region + warranty) — verifier must flag BOTH promises.",
       "multi": [
         {
-          "promised": { "key": "terms.region", "value": "IN" },
-          "observed": { "key": "terms.region", "value": "AE" }
+          "promised": {
+            "key": "product.region",
+            "value": "IN"
+          },
+          "observed": {
+            "key": "product.region",
+            "value": "AE"
+          }
         },
         {
-          "promised": { "key": "warranty.type", "value": "manufacturer" },
-          "observed": { "key": "warranty.type", "value": "seller" }
+          "promised": {
+            "key": "warranty.type",
+            "value": "manufacturer"
+          },
+          "observed": {
+            "key": "warranty.type",
+            "value": "seller"
+          }
         }
       ],
       "material_to_intent": true,
       "expect_breach": true,
       "expect_min_breaches": 2,
       "expect_severity": "material",
-      "expect_reason_code": "REGION_MISMATCH"
+      "expect_reason_code": "MATERIAL_VARIANT_MISMATCH"
     },
     {
       "id": "BRC-024",
       "notes": "Price paid equals frozen offer price: financial identity holds, no breach.",
-      "promised": { "key": "amount_paise", "value": 1149900 },
-      "observed": { "key": "amount_paise", "value": 1149900 },
+      "promised": {
+        "key": "amount_paise",
+        "value": 1149900
+      },
+      "observed": {
+        "key": "amount_paise",
+        "value": 1149900
+      },
       "expect_breach": false
     },
     {
       "id": "BRC-025",
       "notes": "Delivered-unit serial indicates different brand than ordered: critical wrong-item family.",
-      "promised": { "key": "brand", "value": "aster" },
-      "observed": { "key": "brand", "value": "kaira" },
+      "promised": {
+        "key": "brand",
+        "value": "aster"
+      },
+      "observed": {
+        "key": "brand",
+        "value": "kaira"
+      },
       "material_to_intent": true,
       "expect_breach": true,
       "expect_severity": "critical",

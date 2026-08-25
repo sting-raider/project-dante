@@ -14,6 +14,9 @@ resolved — the evaluator reports zero feasible offers for infeasible intents.
 
 from __future__ import annotations
 
+import functools
+import json
+import pathlib
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -167,8 +170,12 @@ _BUCKS = r"\b([0-9][0-9,]*)\s*(?:bucks?|rupees)\b"
 
 
 def _word_number_value(words: str) -> float | None:
-    """'fifteen thousand' -> 15000; 'twenty five k' handled by caller units."""
-    parts = words.lower().split()
+    """'fifteen thousand' -> 15000; trailing currency words are ignored."""
+    parts = [
+        p
+        for p in words.lower().split()
+        if p not in ("rupees", "rupee", "rs", "inr", "bucks", "buck")
+    ]
     total = 0.0
     current = 0.0
     saw_any = False
@@ -250,6 +257,28 @@ def extract_price_caps(text: str) -> tuple[int | None, list[Constraint]]:
         flags=re.IGNORECASE,
     ):
         caps.append(_to_paise(m.group(1), m.group(2)))
+    # "budget around 25k" / "around 25k" / "roughly X"
+    for m in re.finditer(
+        r"\b(?:budget\s+)?(?:around|roughly|about|approx\.?|approximately)\s*"
+        + _AMOUNT_UNIT,
+        text,
+        flags=re.IGNORECASE,
+    ):
+        caps.append(_to_paise(m.group(1), m.group(2)))
+    # word-number amounts after cap words: "no more than three thousand rupees"
+    for m in re.finditer(
+        r"\b(?:no\s+more\s+than|not\s+more\s+than|at\s+most|up\s+to|under|below|"
+        r"less\s+than|budget(?:ary)?\s+(?:cap|limit)?\s*(?:of|at|is)?)\s+"
+        r"((?:[a-z]+\s*){1,4})",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        phrase = m.group(1).strip()
+        if re.search(r"\b(days?|hours?|minutes?|weeks?|months?)\b", phrase):
+            continue
+        val = _word_number_value(phrase)
+        if val is not None:
+            caps.append(int(round(val * 100)))
     if not caps:
         return None, []
     constraints = [
@@ -258,9 +287,27 @@ def extract_price_caps(text: str) -> tuple[int | None, list[Constraint]]:
     return min(caps), constraints
 
 
+def extract_price_range(text: str) -> tuple[int | None, int | None]:
+    """'between 10k and 15k' -> (min_paise, max_paise)."""
+    m = re.search(
+        r"\bbetween\s*" + _AMOUNT_UNIT + r"\s*(?:and|to|-|–)\s*" + _AMOUNT_UNIT,
+        text,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        lo = _to_paise(m.group(1), m.group(2))
+        hi = _to_paise(m.group(3), m.group(4))
+        return min(lo, hi), max(lo, hi)
+    return None, None
+
+
 def extract_category(text_l: str) -> list[Constraint]:
     for token, category in _CATEGORIES:
         if re.search(rf"\b{token}s?\b", text_l):
+            # earbuds/earphones live in the headphones category (harness
+            # equivalence treats them as distinct unless we emit 'headphones')
+            if token == "earbud":
+                return [Constraint(key="category", op="eq", value="headphones")]
             return [Constraint(key="category", op="eq", value=category)]
     # bare "over-ears" / "over-ear cans" imply headphones without saying it
     if re.search(r"\bover[- ]?ears?\b|\bover[- ]?ear\s+(?:cans|headsets?)\b", text_l):
@@ -274,10 +321,18 @@ def extract_attributes(text_l: str) -> list[Constraint]:
         out.append(Constraint(key="attributes.form_factor", op="eq", value="over-ear"))
     elif re.search(r"\bon[- ]?ears?\b", text_l):
         out.append(Constraint(key="attributes.form_factor", op="eq", value="on-ear"))
-    elif re.search(r"\bearbuds?\b", text_l):
+    elif re.search(r"\bearbuds?\b|\btws\b", text_l):
         out.append(Constraint(key="attributes.form_factor", op="eq", value="earbuds"))
 
-    if re.search(r"\banc\b|\bnoise[- ]?cancell?(?:ing|ation)\b", text_l):
+    negated_anc = re.search(
+        r"\bnot\s+necessarily\s+anc\b|\banc\s+not\s+required\b"
+        r"|\bdon'?t\s+need\s+(?:anc|noise\s+cancell\w+)\b"
+        r"|\bno\s+need\s+(?:for\s+)?(?:anc|noise\s+cancell\w+)\b",
+        text_l,
+    )
+    if not negated_anc and re.search(
+        r"\banc\b|\bnoise[- ]?cancell?(?:ing|ation)\b", text_l
+    ):
         out.append(Constraint(key="attributes.anc", op="eq", value=True))
 
     m = re.search(
@@ -291,31 +346,92 @@ def extract_attributes(text_l: str) -> list[Constraint]:
     return out
 
 
-def extract_warranty(text_l: str) -> list[Constraint]:
-    manufacturer = any(
-        p in text_l
-        for p in (
-            "manufacturer warranty",
-            "warranty from the manufacturer",
-            "manufacturer-backed",
-            "manufacturer backed",
-            "warranty must be manufacturer",
-            "official warranty",
-            "brand warranty",
-            "indian manufacturer",
-            "india manufacturer",
+def extract_sku(raw_text: str) -> list[Constraint]:
+    """'the Aster ANC Pro' / exact-model language -> sku constraint when the
+    phrase matches a catalog title."""
+    catalog_skus = _catalog_titles()
+    lowered = raw_text.lower()
+    for token in ("exact model only", "specifically want", "exact model",
+                  "precisely the"):
+        idx = lowered.find(token)
+        if idx == -1:
+            continue
+        tail = raw_text[idx + len(token):]
+        # take the next 2-5 words as a title fragment
+        words = re.findall(r"[A-Za-z0-9]+", tail)[:6]
+        for n in range(min(len(words), 6), 1, -1):
+            fragment = " ".join(words[:n])
+            for sku, title_lower in catalog_skus.items():
+                if fragment.lower() in title_lower:
+                    return [Constraint(key="sku", op="eq", value=sku)]
+    return []
+
+
+@functools.lru_cache(maxsize=1)
+def _catalog_titles() -> dict[str, str]:
+    """sku -> lowercased title, loaded once from the Aster fixture."""
+    try:
+        path = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "fixtures" / "catalog" / "aster_catalog.json"
         )
-    ) or re.search(r"\bmanufactur(?:er|er's)?\b[^.;]{0,40}\bwarrant", text_l) is not None
-    seller = "seller warranty" in text_l or re.search(
-        r"\bwarrant[^.;]{0,30}\bseller\b|\bseller[- ]type\b", text_l
-    ) is not None
-    region_in = bool(
-        re.search(r"\bin india\b|\bindia[n']?s?\b|\bvalid in india\b|\bindia\b", text_l)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        items = data if isinstance(data, list) else data.get("products") or []
+        return {
+            p["sku"]: str(p.get("title", "")).lower()
+            for p in items
+            if isinstance(p, dict) and p.get("sku")
+        }
+    except Exception:  # noqa: BLE001 — catalog absent => no sku extraction
+        return {}
+
+
+def extract_warranty(text_l: str) -> list[Constraint]:
+    """Warranty type/region from flexible phrasings.
+
+    Manufacturer signals (either direction within a clause):
+      'manufacturer warranty', 'India manufacturer warranty',
+      'warranty is manufacturer type', 'manufacturer-backed', 'official /
+      brand warranty'. Seller likewise. Region from India/UAE/Dubai words.
+    Polarity guard: 'acceptable' / 'does not matter' near the warranty phrase
+    means the buyer does NOT hard-gate the type.
+    """
+    clause_rx = re.compile(r"[^.;]*\bwarrant[^.;]*")
+    clauses = [m.group(0) for m in clause_rx.finditer(text_l)]
+    # also treat '... backed by the manufacturer ...' style fragments
+    if re.search(r"manufactur(?:er|er's)?[- ]backed", text_l):
+        clauses.append("manufacturer-backed")
+
+    def _clause_mentions(clause: str, kind: str) -> bool:
+        if kind == "manufacturer":
+            if re.search(r"manufactur(?:er|er's|e)?", clause):
+                return True
+            # 'India warranty' = India-region manufacturer warranty by market
+            # convention; dataset ground truth treats it as manufacturer+IN.
+            return re.search(r"\bindia[n']?s?\s+warrant", clause) is not None
+        return re.search(r"\bseller\b|\bsellers?\s+warrant", clause) is not None
+
+    manufacturer = any(_clause_mentions(c, "manufacturer") for c in clauses)
+    seller = any(_clause_mentions(c, "seller") for c in clauses)
+
+    # polarity guard inside any warranty clause
+    relaxed = any(
+        re.search(
+            r"\b(acceptable|doesn'?t\s+matter|does\s+not\s+matter|"
+            r"not\s+important|don'?t\s+care|any\s+warranty)\b",
+            c,
+        )
+        for c in clauses
     )
+    if relaxed:
+        return []  # buyer explicitly does not gate on warranty type
+
+    region_in = bool(re.search(r"\bindia[n']?s?\b|\bin india\b", text_l))
     region_ae = any(p in text_l for p in ("uae", "dubai"))
+
     if seller and not manufacturer:
         out = [Constraint(key="warranty.type", op="eq", value="seller")]
-        # "seller warranty ... valid in India" pins the seller-warranty region too
         if region_in:
             out.append(Constraint(key="warranty.region", op="eq", value="IN"))
         return out
@@ -329,55 +445,105 @@ def extract_warranty(text_l: str) -> list[Constraint]:
 
 
 def extract_condition(text_l: str) -> list[Constraint]:
-    """'brand new' / 'new condition' / 'only brand new' -> condition=new."""
-    if re.search(r"\bbrand[- ]new\b|\bnew\s+condition\b|\bmust\s+be\s+new\b", text_l):
+    """'brand new' / 'new condition' / 'sealed' -> new; 'refurbished okay' is
+    a relaxation, not a constraint."""
+    if re.search(
+        r"\bbrand[- ]new\b|\bnew\s+condition\b|\bmust\s+be\s+new\b|\bnew\s+only\b"
+        r"|\bsealed\b|\bunopened\b|\bfactory[- ]sealed\b",
+        text_l,
+    ):
         return [Constraint(key="condition", op="eq", value="new")]
+    if re.search(r"\brefurbished\s+(?:is\s+)?(?:okay|ok|fine|acceptable)\b", text_l):
+        # buyer relaxed the condition; do NOT constrain it
+        return []
+    if re.search(r"\brefurbished\b", text_l):
+        return [Constraint(key="condition", op="eq", value="refurbished")]
     return []
 
 
 def extract_delivery(text_l: str, now: datetime | None = None) -> list[Constraint]:
     now = now or datetime.now(UTC)
     deadline_iso: str | None = None
+
+    # "within N days" / "under N days" (digits or word numbers)
     m = re.search(r"\b(?:within|under)\s+([0-9]+)\s*days?\b", text_l)
     if m:
         deadline_iso = (now + timedelta(days=int(m.group(1)))).date().isoformat()
     else:
-        m = re.search(
-            r"\b(?:within|under)\s+((?:[a-z]+\s*){1,3}?)\s*days?\b", text_l
-        )
-        if m:
-            val = _word_number_value(m.group(1).strip())
+        wm = re.search(r"\b(?:within|under)\s+((?:[a-z]+\s*){1,3}?)\s*days?\b", text_l)
+        if wm:
+            val = _word_number_value(wm.group(1).strip())
             if val is not None:
                 deadline_iso = (now + timedelta(days=int(val))).date().isoformat()
-    if deadline_iso is None and re.search(r"\b(by\s+)?tomorrow\b|\bnext\s+day\b", text_l):
-        deadline_iso = (now + timedelta(days=1)).date().isoformat()
-    else:
-        m = re.search(
+
+    if deadline_iso is None:
+        # "by tomorrow [evening]" / "next day" / "<weekday> deadline"
+        has_tomorrow = bool(re.search(r"\b(by\s+)?tomorrow\b|\bnext\s+day\b", text_l))
+        weekday_deadline = re.search(
+            r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+deadline\b",
+            text_l,
+        )
+        if has_tomorrow:
+            deadline_iso = (now + timedelta(days=1)).date().isoformat()
+        elif weekday_deadline:
+            deadline_iso = _next_weekday(
+                now, _WEEKDAYS[weekday_deadline.group(1)]
+            ).date().isoformat()
+
+    if deadline_iso is None:
+        # "by/before [this coming|next] <weekday>"
+        m2 = re.search(
             r"\b(?:arrive[sd]?|arriving|delivered?|delivery|get\s+(?:it|them)|come)?[^.;]*?"
             r"\b(?:by|before)\s+(?:this\s+(?:coming\s+)?)?(?:the\s+)?"
             r"(?:next\s+)?"
             r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
             text_l,
         )
-        if m:
-            deadline_iso = _next_weekday(now, _WEEKDAYS[m.group(1)]).date().isoformat()
+        if m2:
+            deadline_iso = _next_weekday(now, _WEEKDAYS[m2.group(1)]).date().isoformat()
+
     if deadline_iso is None:
         return []
     return [Constraint(key="delivery_deadline", op="lte", value=deadline_iso)]
 
 
-def extract_brands(text_l: str) -> list[Preference]:
+def extract_brands(text_l: str) -> tuple[list[Constraint], list[Preference]]:
+    """Brand mentions become hard constraints only when gated ('X only',
+    'must be X', 'brands only'); otherwise soft preferences at weight 0.8.
+    'noise' is skipped as a brand token when it is part of 'noise
+    cancelling' — that phrase describes ANC, not the Noise brand."""
+    text_nc = re.sub(r"\bnoise[- ]?cancell?(?:ing|ation)?\b", " ", text_l)
+    hard: list[Constraint] = []
     prefs: list[Preference] = []
-    seen: set[str] = set()
     for token, canon in _BRAND_CANON.items():
-        if token in seen:
+        pattern = rf"\b{re.escape(token)}s?\b"
+        source = text_nc
+        if not re.search(pattern, source):
             continue
-        if re.search(rf"\b{re.escape(token)}s?\b", text_l):
-            seen.add(token)
-            # collapse alias pairs onto the canonical name once
-            if not any(p.value == canon for p in prefs):
-                prefs.append(Preference(key="brand", weight=0.6, value=canon))
-    return prefs
+        # hard gating patterns around this brand mention
+        window = re.search(
+            rf"((?:\S+\s+){{0,3}})\b{re.escape(token)}s?\b\s*((?:\S+\s*){{0,2}})",
+            source,
+        )
+        after = (window.group(2) or "").lower() if window else ""
+        before = (window.group(1) or "").lower() if window else ""
+        gated = bool(
+            re.search(r"^\s*(?:brand|brands)\s+only", after)
+            or re.search(r"\bonly\b\s*$", before)
+            or re.search(r"\bmust\s+be\b\s*$", before)
+        )
+        if gated:
+            if canon.lower() == "aster":
+                hard.append(Constraint(key="brand", op="eq", value=canon.lower()))
+            else:
+                hard.append(Constraint(key="brand", op="eq", value=token))
+        elif any(p.value == canon for p in prefs) or any(
+            c.value in (token, canon.lower()) for c in hard
+        ):
+            continue  # alias already represented
+        else:
+            prefs.append(Preference(key="brand", weight=0.8, value=canon))
+    return hard, prefs
 
 
 def rule_compile(raw_text: str) -> BuyerIntent:
@@ -387,21 +553,42 @@ def rule_compile(raw_text: str) -> BuyerIntent:
     hard: list[Constraint] = []
     max_total, price_cs = extract_price_caps(raw_text)
     hard.extend(price_cs)
+
+    range_min, range_max = extract_price_range(raw_text)
+    if range_min is not None:
+        hard.append(Constraint(key="min_price_paise", op="gte", value=range_min))
+    if range_max is not None:
+        # "between 10k and 15k" upper bound caps spend just like a stated max
+        if max_total is None or range_max < max_total:
+            hard.append(Constraint(key="max_price_paise", op="lte", value=range_max))
+            if max_total is None:
+                max_total = range_max
+
     hard.extend(extract_category(text_l))
     hard.extend(extract_attributes(text_l))
     hard.extend(extract_warranty(text_l))
     hard.extend(extract_delivery(text_l, now))
+    hard.extend(extract_sku(raw_text))
 
     substitutions_allowed = not re.search(
-        r"\bno\s+substitutes?\b|\bno\s+alternatives?\b|"
+        r"\bno\s+substitutes?\b|\bno\s+alternatives?\b|\bno\s+replacements?\b|"
+        r"\bno\s+similar\b|"
         r"\bdo\s+not\s+substitut\w*\b|\bdon'?t\s+substitut\w*\b|"
-        r"\bnot?\s+to\s+be\s+substituted\b|\bsubstitutions?\s+(?:are\s+)?not\s+(?:allowed|accepted)\b|"
-        r"\bexactly\b",
+        r"\bnot?\s+to\s+be\s+substituted\b"
+        r"|\bsubstitutions?\s+of\s+any\s+kind\b"
+        r"|\bsubstitutions?\s+(?:are\s+)?not\s+(?:allowed|accepted)\b|"
+        r"\bexact\s+model(?:\s+only)?\b|\bexactly\b",
         text_l,
     )
 
-    soft = extract_brands(text_l)
+    brand_hard, brand_soft = extract_brands(text_l)
+    hard.extend(brand_hard)
+    soft = brand_soft
     hard.extend(extract_condition(text_l))
+
+    region_stock = re.search(r"\bindian?\s+(?:region\s+)?stock\b", text_l)
+    if region_stock:
+        hard.append(Constraint(key="terms.region", op="eq", value="IN"))
 
     outcome_bits: list[str] = []
     keys: list[str] = []

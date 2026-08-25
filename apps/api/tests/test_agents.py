@@ -287,9 +287,11 @@ def test_select_stamps_evaluation_for_verifier_floor():
     from project_dante.domain.promises.pipeline import CONSTRAINT_TO_PROMISE
 
     r1 = asyncio.run(compile_intent(type("B", (), {
+        # no delivery-deadline phrase: the catalog's promised windows are
+        # fixed while "by <weekday>" moves with the calendar
         "raw_text": (
-            "Buy me over-ear ANC headphones under ₹12,000. I need an Indian "
-            "manufacturer warranty, they must arrive by Thursday."
+            "Buy me over-ear ANC headphones under ₹12,000. "
+            "I need an Indian manufacturer warranty."
         )
     })()))
     iid = r1["intent"]["id"]

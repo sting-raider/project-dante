@@ -47,7 +47,7 @@
       "target_module": "project_dante.domain.money.policy.evaluate_money_action",
       "expected_outcome": "DENY; executor must not call Razorpay with negative amount",
       "status": "tested",
-      "result": "FAIL->K-01 xfail marker: refund_full under-amount ALLOWs (case-closure fraud)"
+      "result": "VERIFIED FIXED (K-01): refund_full now requires amount == captured; DENY FULL_REFUND_AMOUNT_MISMATCH at evaluate + executor mirror"
     },
     {
       "id": "AMT-03",
@@ -63,7 +63,7 @@
       "target_module": "project_dante.domain.money.policy.evaluate_money_action",
       "expected_outcome": "Pydantic ValidationError or DENY; string must not be silently coerced into a money action",
       "status": "tested",
-      "result": "FAIL->K-02: string amount coerced via int() instead of rejected (bounded)"
+      "result": "VERIFIED FIXED (K-02): non-int amounts DENIED with INVALID_AMOUNT_TYPE, un-coerced"
     },
     {
       "id": "AMT-05",
@@ -71,7 +71,7 @@
       "target_module": "project_dante.domain.money.policy.evaluate_money_action",
       "expected_outcome": "ValidationError or DENY; floats are forbidden as money amounts",
       "status": "tested",
-      "result": "FAIL->K-02: float truncated by int() coercion (bounded)"
+      "result": "VERIFIED FIXED (K-02): float amounts DENIED, no truncation"
     },
     {
       "id": "AMT-06",
@@ -159,7 +159,7 @@
       "target_module": "api/routes/webhooks.py",
       "expected_outcome": "Reconciles to PAID without crash; STATE_RECONCILED recorded; no corrupted state",
       "status": "tested",
-      "result": "PASS - orphan captured stored, reconciled event, no phantom PAID; NOTE K-03 OPEN: captured force-writes PAID for CANCELLED/FAILED/DRAFT contracts (webhooks.py:300) — see docs/handoffs/security_findings.md"
+      "result": "PASS - orphan captured stored, reconciled event, no phantom PAID; post-K-03-fix non-payable states get paid_withheld reconciliation"
     },
     {
       "id": "WHC-03",

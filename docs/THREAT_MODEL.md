@@ -212,27 +212,40 @@ Mitigations:
 
 ## 6. Red-team results
 
-Latest run (all Wave 1 modules merged): 
-`cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
-→ **66 passed / 1 failed / 3 xfailed(strict) / 0 skipped**.
+Latest run: `cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
+→ **72 passed / 0 failed / 0 skipped**. Full API tree: **303 passed**.
+
+Three vulnerabilities found during red-teaming were VERIFIED FIXED and are now
+covered by permanent regression tests:
+
+| ID | Severity | Vulnerability | Fix location | Regression test |
+|---|---|---|---|---|
+| K-01 | HIGH | `refund_full` under-amount auto-approved → case closed while buyer under-refunded | `domain/money/policy.py:385` (DENY unless `amount == captured`) + executor mirror at `policy.py:710` | `TestAmountManipulation::test_under_amount_not_allowed_silently` |
+| K-02 | MEDIUM | string/float/bool amounts coerced via `int()` instead of rejected | `policy.py:281` strict typing (`INVALID_AMOUNT_TYPE`) + mirror at `policy.py:699` | `TestAmountManipulation::test_string_amount_never_becomes_money`, `::test_float_rupee_confusion_never_becomes_money` |
+| K-03 | HIGH | signature-valid captured webhook force-wrote PAID onto CANCELLED/FAILED/DRAFT contracts, bypassing the state machine | `api/routes/webhooks.py`: `_walk_to_paid` legal-path walk + record-withhold fallback (`paid_withheld`) | `TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts` |
+
+Post-fix hardening also verified: the observed payment id is no longer grafted
+onto non-payable contracts (`webhooks.py:245` `payment_rel_ok` gate), and
+post-paid states never regress under late redelivery — both covered by new
+permanent attacks in the chaos suite.
+
+Full per-vector status:
 
 | Vector group | Cases | Result | Notes |
 |---|---|---|---|
 | STA state machine abuse | 23 (11 illegal + 12 legal) | PASS | all illegal pairs raise `InvalidTransition` |
-| SEC secrets hygiene | repo-wide scan | PASS | 0 offenders; 1 documented synthetic allowlist entry (`client.py` sandbox key) |
+| SEC secrets hygiene | repo-wide scan | PASS | 0 unexplained offenders; single documented inert allowlist entry (`client.py` synthetic sandbox key); owners replaced other secret-shaped literals with non-key-shaped placeholders |
 | Event-log idempotency primitive | 1 | PASS | duplicate `(aggregate,key)` suppressed |
-| AMT amount manipulation vs policy | 10 | PARTIAL | inflated/negative/zero/overflow → DENY; **K-01**: refund_full under-amount auto-ALLOWs (xfail marker); **K-02**: string/float coerced by `int()` (xfail markers) |
-| CCS cross-contract substitution | 2 | PASS | executor derives payment id from stored contract; final check refuses drift; unknown payment ⇒ no refund |
+| AMT amount manipulation vs policy | 10 | PASS | inflated/negative/zero/overflow/non-int all DENY; full-refund exactness enforced at evaluate AND execute |
+| CCS cross-contract substitution | 2 | PASS | executor derives payment id from stored contract; structural check refuses drift; unknown payment ⇒ no refund |
 | RRP refund replay (remedy + client level) | 8 | PASS | replay ×2/×3 ⇒ exactly one refund record, cached result returned |
 | WHF forged webhook signatures | 6 | PASS | garbage/wrong-secret/tampered/empty ⇒ False + 401 route + zero persistence; positive control verifies True |
-| WHC webhook chaos | 11 | PARTIAL | duplicates ×5, orphan, reorder, amount-mismatch capture all safe; **K-03 FAIL**: captured force-writes PAID onto CANCELLED/FAILED/DRAFT contracts (`webhooks.py:300`) |
-| PINJ injection corpus | 2 suites (20 inline vectors + Agent J corpus) | PASS | text never overrides structured truth; zero side effects |
+| WHC webhook chaos | 13 | PASS | duplicates ×5, orphan, reorder, amount-mismatch capture safe; non-payable states neither resurrected nor grafted; post-paid states no-regression |
+| PINJ injection corpus | 50-case Agent J corpus + 20 inline vectors | PASS | text never overrides structured truth; zero side effects |
 | PESC privilege escalation via prose | 3 | PASS | compile/policy treat escalation text as data; no limits inflated |
 | Client payment verification abuse | 3 | PASS | verify-client never mints PAID; forged sigs rejected; order swap rejected |
 | DEM demo guards (incl. simulate-event) | 5 endpoints | PASS | 403 with `demo_mode=False` |
 
-Confirmed vulnerabilities and full reproductions: `docs/handoffs/security_findings.md`.
-**K-03** (webhook resurrection of cancelled contracts) is OPEN with Agent B;
-**K-01/K-02** (policy under-amount ALLOW, type coercion) are OPEN with Agent E.
-All three carry regression markers in the suites: K-03 as a live failing test,
-K-01/K-02 as strict xfails that flip to hard failures once fixed.
+Vulnerability lifecycle (found → assigned → fixed → verified) is documented in
+`docs/handoffs/security_findings.md`. The suites remain permanent regression
+guards: any future change reintroducing these vectors fails CI.
