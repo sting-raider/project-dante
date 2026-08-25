@@ -1,0 +1,355 @@
+{
+  "meta": {
+    "name": "project-dante-offer-evaluation",
+    "version": 2,
+    "owner": "Agent J (Evals & Simulation Lead)",
+    "description": "Offer Evaluator eval scenarios. Ground truth keyed against the REAL catalog fixture fixtures/catalog/aster_catalog.json (Agent F, v1, 112 products). Evaluated against project_dante.agents.evaluator.OfferEvaluatorAgent().evaluate(intent_dict, offers) on the deterministic rules path. Absolute bar: ZERO purchases that violate a hard constraint (plan §30.2).",
+    "ground_truth_source": "fixtures/catalog/aster_catalog.json — hero product AST-HP-ANC-001: Aster ANC Pro Wireless Over-Ear Headphones, 1149900 paise, manufacturer/IN warranty, over-ear, anc=true, delivery max_days=4, inventory 37.",
+    "matcher_semantics": "feasibility sets compared by SKU; failing_key matched case-insensitively against actual hard_failures keys; a scenario PASSES iff every expect_feasible_sku is feasible, every infeasible sku is infeasible, and no sku outside expectation flips unexpectedly when listed."
+  },
+  "scenarios": [
+    {
+      "id": "OFF-001",
+      "intent_text": "Buy me over-ear ANC headphones under ₹12,000 with Indian manufacturer warranty, delivered by Thursday.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "Hero scenario from plan §7.1. Decoys: seller-warranty (007, 008), AE-region (009, 010), price-over (011, 012), refurb (013).",
+      "expect_feasible_skus": [
+        "AST-HP-ANC-001",
+        "AST-HP-002",
+        "AST-HP-003",
+        "AST-HP-004",
+        "AST-HP-005",
+        "AST-HP-006"
+      ],
+      "expect_infeasible": [
+        { "sku": "AST-HP-007", "failing_key": "warranty.type" },
+        { "sku": "AST-HP-008", "failing_key": "warranty.type" },
+        { "sku": "AST-HP-009", "failing_key": "warranty.region" },
+        { "sku": "AST-HP-010", "failing_key": "warranty.region" },
+        { "sku": "AST-HP-011", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-012", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-013", "failing_key": "condition" }
+      ]
+    },
+    {
+      "id": "OFF-002",
+      "intent_text": "Cheapest possible over-ear ANC headphones, budget ₹6,500.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "HP-005 (649900) is the only over-ear ANC unit under 650000; HP-021 is over-ear but non-ANC refurbished.",
+      "expect_feasible_skus": ["AST-HP-005"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-ANC-001", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-002", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-003", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-021", "failing_key": "attributes.anc" },
+        { "sku": "AST-HP-022", "failing_key": "attributes.form_factor" }
+      ]
+    },
+    {
+      "id": "OFF-003",
+      "intent_text": "Any ANC headphones under ₹10,000, warranty doesn't matter.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "No warranty constraint => seller/AE items pass unless another key fails; 009/010 fail only on region if buyer demands IN — they do not here, so they are FEASIBLE.",
+      "expect_feasible_skus": [
+        "AST-HP-002",
+        "AST-HP-003",
+        "AST-HP-004",
+        "AST-HP-005",
+        "AST-HP-006",
+        "AST-HP-007",
+        "AST-HP-008",
+        "AST-HP-009",
+        "AST-HP-010",
+        "AST-HP-ANC-001"
+      ],
+      "expect_infeasible": [
+        { "sku": "AST-HP-011", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-014", "failing_key": "attributes.anc" },
+        { "sku": "AST-HP-017", "failing_key": "attributes.anc" }
+      ]
+    },
+    {
+      "id": "OFF-004",
+      "intent_text": "On-ear headphones under ₹3,000, new condition.",
+      "catalog_filter": { "category": "headphones" },
+      "expect_feasible_skus": ["AST-HP-018"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-019", "failing_key": "condition" },
+        { "sku": "AST-HP-024", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-022", "failing_key": "max_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-005",
+      "intent_text": "In-ear earbuds under ₹5,000 with ANC, must have some warranty (manufacturer or seller), India region stock only.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "Every in-ear unit fails exactly one requirement: 015 has no warranty, 016 is AE stock, 014/020/025 lack ANC. Evaluator must return no_feasible_offer.",
+      "expect_feasible_skus": [],
+      "expect_no_feasible_offer": true,
+      "expect_infeasible": [
+        { "sku": "AST-HP-014", "failing_key": "attributes.anc" },
+        { "sku": "AST-HP-015", "failing_key": "warranty.type" },
+        { "sku": "AST-HP-016", "failing_key": "terms.region" },
+        { "sku": "AST-HP-020", "failing_key": "attributes.anc" },
+        { "sku": "AST-HP-025", "failing_key": "attributes.anc" }
+      ]
+    },
+    {
+      "id": "OFF-006",
+      "intent_text": "Over-ear headphones under ₹9,500, India manufacturer warranty mandatory, delivered within 3 days.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "Delivery max_days<=3 eliminates ANC-001(4d), 003(5d), 004(4d), 006(5d); leaves 002 (3d) and 005 (2d).",
+      "expect_feasible_skus": ["AST-HP-002", "AST-HP-005"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-ANC-001", "failing_key": "delivery_deadline" },
+        { "sku": "AST-HP-003", "failing_key": "delivery_deadline" },
+        { "sku": "AST-HP-004", "failing_key": "delivery_deadline" },
+        { "sku": "AST-HP-007", "failing_key": "warranty.type" }
+      ]
+    },
+    {
+      "id": "OFF-007",
+      "intent_text": "Router under ₹2,000 for home internet, new condition.",
+      "catalog_filter": { "category": "routers" },
+      "notes": "RT-012 (99900) qualifies on constraints but has inventory=0 — must be excluded from feasible set.",
+      "expect_feasible_skus": ["AST-RT-004", "AST-RT-005", "AST-RT-009", "AST-RT-018"],
+      "expect_infeasible": [
+        { "sku": "AST-RT-012", "failing_key": "inventory" },
+        { "sku": "AST-RT-002", "failing_key": "max_price_paise" },
+        { "sku": "AST-RT-003", "failing_key": "max_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-008",
+      "intent_text": "Router with India manufacturer warranty under ₹4,000, new only.",
+      "catalog_filter": { "category": "routers" },
+      "notes": "RT-003 has manufacturer/IN warranty but AE stock region => fails terms.region. RT-004 fits exactly.",
+      "expect_feasible_skus": ["AST-RT-004"],
+      "expect_infeasible": [
+        { "sku": "AST-RT-003", "failing_key": "terms.region" },
+        { "sku": "AST-RT-001", "failing_key": "warranty.type" },
+        { "sku": "AST-RT-011", "failing_key": "condition" }
+      ]
+    },
+    {
+      "id": "OFF-009",
+      "intent_text": "Laptop under ₹1,45,000 with manufacturer warranty valid in India.",
+      "catalog_filter": { "category": "laptops" },
+      "expect_feasible_skus": ["AST-LT-010"],
+      "expect_infeasible": [
+        { "sku": "AST-LT-002", "failing_key": "max_price_paise" },
+        { "sku": "AST-LT-007", "failing_key": "max_price_paise" },
+        { "sku": "AST-LT-015", "failing_key": "warranty.region" },
+        { "sku": "AST-LT-011", "failing_key": "warranty.type" }
+      ]
+    },
+    {
+      "id": "OFF-010",
+      "intent_text": "Absolutely need a laptop under ₹20,000 rupees.",
+      "catalog_filter": { "category": "laptops" },
+      "notes": "Impossible combination — evaluator MUST return no feasible offer rather than relaxing the hard cap.",
+      "expect_feasible_skus": [],
+      "expect_no_feasible_offer": true,
+      "expect_infeasible": []
+    },
+    {
+      "id": "OFF-011",
+      "intent_text": "Keyboard under ₹3,000 with manufacturer warranty, India, new condition.",
+      "catalog_filter": { "category": "keyboards" },
+      "notes": "KB-001 (349900) fails price cap; KB-004/005/007 are refurbished; KB-006 has no warranty.",
+      "expect_feasible_skus": ["AST-KB-008"],
+      "expect_infeasible": [
+        { "sku": "AST-KB-001", "failing_key": "max_price_paise" },
+        { "sku": "AST-KB-004", "failing_key": "condition" },
+        { "sku": "AST-KB-007", "failing_key": "condition" },
+        { "sku": "AST-KB-006", "failing_key": "warranty.type" },
+        { "sku": "AST-KB-002", "failing_key": "warranty.type" }
+      ]
+    },
+    {
+      "id": "OFF-012",
+      "intent_text": "Gaming mouse under ₹2,600 with India-region stock and India manufacturer warranty; refurbished is fine.",
+      "catalog_filter": { "category": "mice" },
+      "expect_feasible_skus": ["AST-MC-002", "AST-MC-006"],
+      "expect_infeasible": [
+        { "sku": "AST-MC-001", "failing_key": "warranty.type" },
+        { "sku": "AST-MC-003", "failing_key": "warranty.region" },
+        { "sku": "AST-MC-004", "failing_key": "inventory" }
+      ]
+    },
+    {
+      "id": "OFF-013",
+      "intent_text": "Monitor under ₹13,00,000 with India manufacturer warranty, new condition.",
+      "catalog_filter": { "category": "monitors" },
+      "expect_feasible_skus": [
+        "AST-MN-001",
+        "AST-MN-002",
+        "AST-MN-006",
+        "AST-MN-008"
+      ],
+      "expect_infeasible": [
+        { "sku": "AST-MN-003", "failing_key": "warranty.type" },
+        { "sku": "AST-MN-004", "failing_key": "warranty.region" },
+        { "sku": "AST-MN-005", "failing_key": "warranty.region" },
+        { "sku": "AST-MN-007", "failing_key": "condition" }
+      ]
+    },
+    {
+      "id": "OFF-014",
+      "intent_text": "65W GaN charger under ₹1,000, India manufacturer warranty.",
+      "catalog_filter": { "category": "chargers-cables" },
+      "notes": "CB-001 fails warranty.region (AE); CB-002 fails warranty.region (US); CB-003 fits.",
+      "expect_feasible_skus": ["AST-CB-003"],
+      "expect_infeasible": [
+        { "sku": "AST-CB-001", "failing_key": "warranty.region" },
+        { "sku": "AST-CB-002", "failing_key": "warranty.region" },
+        { "sku": "AST-CB-009", "failing_key": "max_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-015",
+      "intent_text": "Hero check: the Aster ANC Pro specifically, any price.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "SKU-targeted intent; only hero SKU feasible.",
+      "expect_feasible_skus": ["AST-HP-ANC-001"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-002", "failing_key": "sku" },
+        { "sku": "AST-HP-004", "failing_key": "sku" }
+      ]
+    },
+    {
+      "id": "OFF-016",
+      "intent_text": "Zephyr brand headphones with ANC under ₹9,500, India manufacturer warranty.",
+      "catalog_filter": { "category": "headphones" },
+      "expect_feasible_skus": ["AST-HP-002"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-009", "failing_key": "warranty.region" },
+        { "sku": "AST-HP-ANC-001", "failing_key": "brand" },
+        { "sku": "AST-HP-022", "failing_key": "attributes.form_factor" }
+      ]
+    },
+    {
+      "id": "OFF-017",
+      "intent_text": "Headphones under ₹2,50,000 paise... I mean ₹2,500 total, over-ear, no other requirements.",
+      "catalog_filter": { "category": "headphones" },
+      "expect_feasible_skus": [],
+      "expect_no_feasible_offer": true,
+      "expect_infeasible": [
+        { "sku": "AST-HP-018", "failing_key": "max_price_paise" },
+        { "sku": "AST-HP-021", "failing_key": "max_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-018",
+      "intent_text": "Phone under ₹85,000 with manufacturer warranty in India, new.",
+      "catalog_filter": { "category": "phones" },
+      "notes": "PH-003 (899900) fails the cap; PH-006 (799900) is the only fit.",
+      "expect_feasible_skus": ["AST-PH-006"],
+      "expect_infeasible": [
+        { "sku": "AST-PH-003", "failing_key": "max_price_paise" },
+        { "sku": "AST-PH-009", "failing_key": "warranty.region" },
+        { "sku": "AST-PH-005", "failing_key": "warranty.type" },
+        { "sku": "AST-PH-002", "failing_key": "warranty.type" },
+        { "sku": "AST-PH-016", "failing_key": "warranty.type" },
+        { "sku": "AST-PH-017", "failing_key": "condition" }
+      ]
+    },
+    {
+      "id": "OFF-019",
+      "intent_text": "Refurbished laptop is fine as long as it has an India manufacturer warranty, under ₹13,50,000.",
+      "catalog_filter": { "category": "laptops" },
+      "expect_feasible_skus": ["AST-LT-014"],
+      "expect_infeasible": [
+        { "sku": "AST-LT-010", "failing_key": "max_price_paise" },
+        { "sku": "AST-LT-015", "failing_key": "warranty.region" }
+      ]
+    },
+    {
+      "id": "OFF-020",
+      "intent_text": "Anything delivered fastest — must arrive within 2 days — category doesn't matter, under ₹3,000.",
+      "catalog_filter": { "all": true },
+      "notes": "Cross-category speed test. Delivery max_days<=2 AND price<=300000 across whole catalog.",
+      "expect_feasible_skus": ["AST-RT-009", "AST-RT-018"],
+      "expect_infeasible": [
+        { "sku": "AST-CB-002", "failing_key": "max_price_paise" },
+        { "sku": "AST-RT-005", "failing_key": "delivery_deadline" }
+      ]
+    },
+    {
+      "id": "OFF-021",
+      "intent_text": "Keyboard delivered within 2 days under ₹4,60,000 paise — sorry, ₹4,600 rupees.",
+      "catalog_filter": { "category": "keyboards" },
+      "expect_feasible_skus": ["AST-KB-004", "AST-KB-005", "AST-KB-008"],
+      "expect_infeasible": [
+        { "sku": "AST-KB-006", "failing_key": "delivery_deadline" },
+        { "sku": "AST-KB-007", "failing_key": "delivery_deadline" }
+      ]
+    },
+    {
+      "id": "OFF-022",
+      "intent_text": "UAE-region stock is explicitly OK for me. In-ear earbuds under ₹2,000, ANC needed.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "Only in-ear ANC unit is HP-015 at 449900 — over cap. No feasible offer; evaluator must not relax the price.",
+      "expect_feasible_skus": [],
+      "expect_no_feasible_offer": true,
+      "expect_infeasible": [
+        { "sku": "AST-HP-016", "failing_key": "attributes.anc" },
+        { "sku": "AST-HP-015", "failing_key": "max_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-023",
+      "intent_text": "Cable or hub under ₹1,000 from Aster brand only.",
+      "catalog_filter": { "category": "chargers-cables" },
+      "expect_feasible_skus": ["AST-CB-004", "AST-CB-005"],
+      "expect_infeasible": [
+        { "sku": "AST-CB-006", "failing_key": "inventory" },
+        { "sku": "AST-CB-008", "failing_key": "max_price_paise" },
+        { "sku": "AST-CB-007", "failing_key": "brand" }
+      ]
+    },
+    {
+      "id": "OFF-024",
+      "intent_text": "Monitor between ₹9,00,000 and ₹12,00,000 paise (₹9,000–₹12,000 rupees), any warranty, new.",
+      "catalog_filter": { "category": "monitors" },
+      "notes": "Price band test: min 900000 max 1200000 paise.",
+      "expect_feasible_skus": ["AST-MN-002", "AST-MN-006"],
+      "expect_infeasible": [
+        { "sku": "AST-MN-001", "failing_key": "max_price_paise" },
+        { "sku": "AST-MN-007", "failing_key": "condition" },
+        { "sku": "AST-MN-003", "failing_key": "min_price_paise" }
+      ]
+    },
+    {
+      "id": "OFF-025",
+      "intent_text": "Warranty must be at least 12 months manufacturer coverage in India — get me wireless over-ear headphones under ₹11,500 fitting that, arriving within 4 days.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "Exact hero-fit scenario including duration floor.",
+      "expect_feasible_skus": [
+        "AST-HP-ANC-001",
+        "AST-HP-002",
+        "AST-HP-003",
+        "AST-HP-004",
+        "AST-HP-005",
+        "AST-HP-006"
+      ],
+      "expect_infeasible": [
+        { "sku": "AST-HP-007", "failing_key": "warranty.type" },
+        { "sku": "AST-HP-008", "failing_key": "warranty.type" },
+        { "sku": "AST-HP-009", "failing_key": "warranty.region" },
+        { "sku": "AST-HP-010", "failing_key": "warranty.region" },
+        { "sku": "AST-HP-021", "failing_key": "warranty.type" }
+      ]
+    },
+    {
+      "id": "OFF-026",
+      "intent_text": "Out-of-stock items must never be selected: cheapest ANC headphone you can find under ₹5,000.",
+      "catalog_filter": { "category": "headphones" },
+      "notes": "HP-013 (499900, refurb, ANC) fails condition=new implied by 'ANC headphone' quality bar? No — buyer did not say new. HP-013 is refurbished and feasible on constraints; this scenario asserts inventory>0 handling and that feasibility never depends on stock for ranking-only contexts.",
+      "expect_feasible_skus": ["AST-HP-013"],
+      "expect_infeasible": [
+        { "sku": "AST-HP-015", "failing_key": "warranty.type" }
+      ]
+    }
+  ]
+}

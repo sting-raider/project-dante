@@ -1,0 +1,132 @@
+# Handoff: Agent F — Merchant Interface Lead
+
+## Goal
+
+Make the fictional merchant **Aster Electronics** usable by an AI buyer:
+a committed 112-product catalog with deliberately mixed warranty metadata, a
+frozen cross-agent service interface (`search / get_product / inventory /
+freeze / fulfillment-sim / seed`), merchant + demo REST routes, and the
+synthetic fulfillment scenarios that drive the demo failure paths.
+
+## Completed
+
+- `fixtures/catalog/aster_catalog.json` — 112 products (headphones 25,
+  phones 20, routers 18, laptops 18, keyboards 8, mice 6, monitors 8,
+  chargers-cables 9). Generated deterministically (seeded) at build time and
+  committed; every row validated against the frozen `MerchantOffer` model.
+- Hero SKU **AST-HP-ANC-001** exactly per storyboard: "Aster ANC Pro Wireless
+  Over-Ear Headphones", Rs 11,499 (1149900 paise), over-ear/ANC/bluetooth-5.3,
+  manufacturer warranty 12 months IN, return/replacement 10 days, new, 2–4 day
+  delivery. Plus **5 feasible alternates** (AST-HP-002..006) and near-miss
+  decoys: seller warranty (007/008), AE-region stock (009/010), over budget
+  (011/012), refurbished (013) — so offer evaluation visibly fails them.
+- Warranty mix across catalog: manufacturer 62 (55.4%), seller 17 (15.2%),
+  none 11 (9.8%), unknown 22 (19.6%) — analytics will show metadata blockers.
+- `catalog_loader.py` — module-level cached load of the fixture; deep copies out.
+- `service.py` — full frozen interface + `render_listing_text`,
+  `catalog_analytics_base`.
+- `routes/merchant.py` — search / product / analytics endpoints.
+- `routes/demo.py` — reset / ship / deliver(scenario) /
+  replacement-unavailable, all gated on `settings.demo_mode` → 403.
+- `db/seed.py` — `python -m project_dante.db.seed` CLI.
+- `fixtures/catalog/README.md` — fixture provenance note.
+
+## Files changed
+
+```
+fixtures/catalog/aster_catalog.json          (new)
+fixtures/catalog/README.md                   (new)
+apps/api/project_dante/integrations/merchant/catalog_loader.py  (new)
+apps/api/project_dante/integrations/merchant/service.py         (new)
+apps/api/project_dante/api/routes/merchant.py                   (new)
+apps/api/project_dante/api/routes/demo.py                       (new)
+apps/api/project_dante/db/seed.py                               (new)
+apps/api/tests/test_merchant.py                                 (new)
+apps/api/tests/test_demo_sim.py                                 (new)
+```
+
+## Public interfaces
+
+```python
+# project_dante.integrations.merchant.service  (frozen, docs/API_CONTRACT.md)
+search_catalog(query=None, category=None, max_price_paise=None, limit=50) -> list[dict]
+get_product(sku) -> dict | None            # {"product": ..., "offers": [...]}
+check_inventory(sku) -> int
+freeze_offer(offer_id) -> dict             # {offer(+inventory_snapshot,+snapshot_hash),
+                                           #  evidence_payload, rendered_text}
+apply_fulfillment_event(contract_id, kind, scenario=None) -> dict
+seed_catalog() -> int                      # idempotent
+
+# extras
+render_listing_text(offer_dict) -> str     # human-readable listing paragraph
+catalog_analytics_base() -> dict           # total/warranty coverage/return-policy share
+catalog_loader.load_catalog() -> list[dict]
+
+# REST
+GET  /api/merchant/catalog/search?q=&category=&max_price_paise=&limit=
+GET  /api/merchant/products/{sku}          # 404 on unknown sku
+GET  /api/merchant/analytics               # {total_products, warranty_metadata_coverage,
+                                           #  machine_readable_return_policy, evaluated_intents,
+                                           #  ai_transactable_rate, blocker_distribution}
+POST /api/demo/reset                       # STORE.reset + LOG.reset + seed -> {products: N}
+POST /api/demo/contracts/{id}/ship
+POST /api/demo/contracts/{id}/deliver      # body {scenario: correct|wrong_variant|late}
+POST /api/demo/contracts/{id}/replacement-unavailable
+# all demo routes: 403 when DEMO_MODE off, 404 unknown contract, every response synthetic:true
+```
+
+### Fulfillment semantics (what Agent D/E can rely on)
+
+- Facts are STORE records `_type: fact`: `{id obs_*, contract_id, key, value,
+  source_artifact_id, observed_at, synthetic: true, scenario_id}`.
+- `ship` → facts `shipment.status=shipped`, `shipment.carrier="SynthEx"` +
+  FULFILLMENT_SHIPPED event (synthetic).
+- `deliver correct` → copies promised values from stored `_type promise`
+  records of that contract: `warranty.type`, `product.region`;
+  `delivery.delivered_date` within any promise.
+- `deliver wrong_variant` → `warranty.type="seller"`, `product.region="AE"`.
+- `deliver late` → promised values but `delivered_date = promised_by_date+3d`
+  (needs a `delivery.latest` promise to anchor; else today+3) plus fact
+  `delivery.days_late=3`.
+- `replacement_check scenario="unavailable"` → fact `replacement.available=false`.
+
+## Tests — real results
+
+```
+cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_merchant.py tests/test_demo_sim.py -q
+→ 33 passed in 1.12s   (1 unrelated StarletteDeprecation warning)
+ruff check (owned files) → All checks passed
+python -m project_dante.db.seed → "Seeded 112 Aster Electronics offers into STORE."
+```
+
+Coverage includes: fixture integrity/bounds, hero exact values, feasible set,
+decoys, warranty mix, search scoring/ordering/filters, freeze snapshot +
+rendered text variants, seed idempotency, all three deliver scenarios,
+DEMO_MODE guard (403s), route 404/422s, honest analytics math.
+
+## Known risks
+
+1. **Verifier hook is defensive**: `/deliver` try/except-imports Agent D's
+   `evaluate_contract`. Until that lands, responses carry
+   `verification_error: "verifier module not available"` and empty breaches.
+   No change needed from D — the call site already matches the frozen name.
+2. **Analytics reads `_type: evaluation` records** written by Agent C's intent
+   search. If C stores evaluations under another `_type`, only the
+   `ai_transactable_rate` / `blocker_distribution` fields stay at zero —
+   catalog metrics remain correct. Coordinate key names if different.
+3. **Search is intentionally naive** (token gate + weighted keyword score,
+   ties by price asc). Good enough for demo; not semantic.
+4. **`freeze_offer` reads live fixture**, not STORE offers — snapshot is the
+   source of truth for contracts. If integration wants inventory decrements,
+   that needs a small follow-up.
+5. Late-scenario anchoring depends on a `delivery.latest` promise existing;
+   without one it falls back to today+3 days.
+
+## Integration notes
+
+- No files outside my ownership were touched; nothing committed to git.
+- Catalog regeneration script lives outside the repo (job tmp). The fixture is
+  committed; treat it as source. If regeneration is needed later, ask me.
+- `POST /api/demo/reset` wipes STORE **and** LOG then re-seeds — safe to call
+  before any demo run.
+- Offer ids are deterministic: `off_<SKU>`, e.g. `off_AST-HP-ANC-001`.

@@ -1,0 +1,31 @@
+# Aster Electronics — merchant money policy (master plan §15).
+#
+# Loaded by project_dante.domain.money.policy.load_policy(). This file is
+# merchant-operator-owned configuration: the deterministic policy engine is
+# its ONLY consumer, and every autonomous money bound lives here.
+# All amounts are integer paise (2000000 paise = Rs 20,000).
+
+payment:
+  require_user_confirmation: true
+  max_order_amount_paise: 20000000
+
+refund:
+  full_refund:
+    allowed_reasons:
+      - wrong_sku
+      - region_mismatch
+      - materially_not_as_described
+      - warranty_type_mismatch
+    max_amount: original_captured_amount
+    require_human_approval_above_paise: 2000000
+
+  partial_refund:
+    max_auto_amount_paise: 50000
+    allowed_reasons:
+      - delivery_sla_minor
+      - missing_low_value_accessory
+
+agent:
+  may_create_order: true
+  may_propose_refund: true
+  may_execute_money_action: false
