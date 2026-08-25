@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -38,7 +38,10 @@ def _stamp_delivery_dates(products: list[dict]) -> None:
     promise pipeline a freezable, verifiable deadline (baseline-material key
     `delivery.promised_by_date`) so post-purchase SLA verification works.
     """
-    today = date.today()
+    # UTC anchor so quoted dates match the compiler/verifier clock (a local
+    # date can already be tomorrow while UTC is still today, shifting every
+    # delivery comparison by a day).
+    today = datetime.now(UTC).date()
     for product in products:
         dp = product.get("delivery_promise") or {}
         if not dp.get("promised_by_date") and isinstance(dp.get("max_days"), int):

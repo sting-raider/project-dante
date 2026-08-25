@@ -233,6 +233,56 @@ class PolicyDenyTests(unittest.TestCase):
         self.assertIn("POLICY_DENIED", {e["event_type"] for e in LOG.all()})
 
 
+class IdempotencyKeyGateTests(unittest.TestCase):
+    """MSF-019 / plan §9.5: no idempotency key, no money action."""
+
+    def setUp(self):
+        STORE.reset()
+        LOG.reset()
+        _mk_contract()
+
+    def test_empty_string_key_denied(self):
+        d = evaluate_money_action(_proposal(idempotency_key=""))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("MISSING_IDEMPOTENCY_KEY", d["reason_codes"])
+        self.assertIn("P-SAFETY-01", d["policy_ids"])
+
+    def test_none_key_denied(self):
+        d = evaluate_money_action(_proposal(idempotency_key=None))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("MISSING_IDEMPOTENCY_KEY", d["reason_codes"])
+
+    def test_whitespace_key_denied(self):
+        d = evaluate_money_action(_proposal(idempotency_key="   "))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("MISSING_IDEMPOTENCY_KEY", d["reason_codes"])
+        # No money may move for a keyless proposal.
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
+
+    def test_missing_field_entirely_denied(self):
+        prop = _proposal()
+        del prop["idempotency_key"]
+        STORE.update(prop["id"], idempotency_key=None)
+        d = evaluate_money_action(STORE.get(prop["id"]))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("MISSING_IDEMPOTENCY_KEY", d["reason_codes"])
+
+    def test_valid_key_behavior_unchanged(self):
+        d = evaluate_money_action(
+            _proposal(idempotency_key="project-dante:con_pol_1:abc:v1")
+        )
+        self.assertEqual(d["decision"], "ALLOW")
+
+    def test_keyless_proposal_denied_before_other_checks(self):
+        """The gate fires first: even an invalid contract + bad reason still
+        reports MISSING_IDEMPOTENCY_KEY, not the downstream codes."""
+        prop = _proposal(contract_id="con_ghost", reason_code="buyer_remorse")
+        STORE.update(prop["id"], idempotency_key="")
+        d = evaluate_money_action(STORE.get(prop["id"]))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertEqual(d["reason_codes"], ["MISSING_IDEMPOTENCY_KEY"])
+
+
 class PolicyReasonAliasTests(unittest.TestCase):
     def test_upstream_breach_codes_normalize_into_policy_vocabulary(self):
         cases = {

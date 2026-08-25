@@ -61,6 +61,13 @@ def _check_numeric(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
     return ok, actual
 
 
+_CATEGORY_EQUIV = {
+    # catalog stores plural category values; compiler may emit either form
+    "mouse": "mice",
+    "mice": "mice",
+}
+
+
 def _check_scalar(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
     """Scalar comparison with case-insensitive fallbacks."""
     if op == "eq":
@@ -68,6 +75,11 @@ def _check_scalar(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
             return False, actual
         al, el = _lower(actual), _lower(expected)
         if al == el:
+            return True, actual
+        # singular/plural equivalence for category values ('mouse' vs 'mice')
+        if _CATEGORY_EQUIV.get(al) is not None and _CATEGORY_EQUIV.get(al) == el:
+            return True, actual
+        if _CATEGORY_EQUIV.get(el) is not None and _CATEGORY_EQUIV.get(el) == al:
             return True, actual
         # contains-style tolerance for free-text fields like category/title
         if isinstance(al, str) and el and el in al:
@@ -96,9 +108,16 @@ def _actual_for_key(offer: dict[str, Any], key: str) -> Any:
     attrs = offer.get("attributes") or {}
     variant = offer.get("variant") or {}
     terms = offer.get("terms") or {}
+    category = offer.get("category")
+    if not category:
+        category = offer.get("title")
+    elif str(category).strip().lower() == "mice":
+        # catalog stores plural 'mice'; the buyer-facing value is 'mouse'
+        category = "mouse"
     mapping: dict[str, Any] = {
         "max_price_paise": offer.get("unit_amount_paise"),
-        "category": offer.get("category") or offer.get("title"),
+        "min_price_paise": offer.get("unit_amount_paise"),
+        "category": category,
         "brand": offer.get("brand"),
         "attributes.form_factor": attrs.get("form_factor"),
         "attributes.anc": attrs.get("anc"),
@@ -272,6 +291,17 @@ class OfferEvaluatorAgent:
                             "actual": amount,
                         }
                     )
+            # Out-of-stock offers cannot be selected, whatever else matches.
+            inventory = offer.get("inventory")
+            if isinstance(inventory, (int, float)) and inventory <= 0:
+                failures.append(
+                    {
+                        "key": "inventory",
+                        "op": "gt",
+                        "expected": 0,
+                        "actual": inventory,
+                    }
+                )
 
             feasible = len(failures) == 0
             scores = soft_scores_for_offer(intent_dict, offer, offers, now)

@@ -88,6 +88,16 @@ edit on).
 
 ## Security fixes (Agent K findings — patched post-handoff)
 
+- **MSF-019 hardening (team-lead eval case)**: a MoneyActionProposal with an
+  empty/whitespace/None `idempotency_key` previously evaluated to ALLOW.
+  Now DENYed first-thing in `evaluate_money_action` with reason code
+  `MISSING_IDEMPOTENCY_KEY`, policy id `P-SAFETY-01` (plan §9 invariant 5:
+  replay safety requires every money action to carry the key). Mirrored in
+  `_executor_structural_check` so any caller-supplied keyless record also dies
+  at the executor. Covered by `IdempotencyKeyGateTests`
+  (empty/None/whitespace/missing-field => DENY, valid key unchanged, gate
+  fires before all other checks).
+
 - **K-01 HIGH — under-amount full refund** (`FULL_REFUND_AMOUNT_MISMATCH`):
   `refund_full` now requires amount == captured amount EXACTLY. A half-amount
   "full" refund previously auto-approved and closed the case while the buyer

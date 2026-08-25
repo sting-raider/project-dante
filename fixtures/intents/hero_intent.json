@@ -1,0 +1,8 @@
+{
+  "id": "hero_intent",
+  "synthetic": true,
+  "scenario_id": "demo_hero",
+  "raw_text": "Buy me over-ear ANC headphones under Rs.12,000. I need an Indian manufacturer warranty and they must arrive by Thursday.",
+  "source_case": "INT-001",
+  "notes": "Canonical hero intent (plan §7.1). Drives the five-minute demo."
+}

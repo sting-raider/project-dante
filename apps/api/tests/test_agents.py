@@ -180,6 +180,60 @@ def test_soft_scores_present_with_notes():
     assert scores and all("key" in s and "weight" in s and "score" in s for s in scores)
 
 
+def test_mice_category_matches_mouse_constraint():
+    """Catalog stores category='mice'; buyer says 'mouse'. Must be equivalent."""
+    intent = _intent(
+        hard_constraints=[{"key": "category", "op": "eq", "value": "mouse"}],
+        soft_preferences=[],
+        max_total_amount_paise=None,
+    )
+    offer = _offer(category="mice", title="Ergo Vertical Mouse")
+    ev = OfferEvaluatorAgent().evaluate(intent, [offer])[0]["evaluation"]
+    assert ev["feasible"] is True
+
+
+def test_zero_inventory_offer_is_infeasible():
+    intent = _intent(hard_constraints=[], soft_preferences=[], max_total_amount_paise=None)
+    offer = _offer(inventory=0)
+    ev = OfferEvaluatorAgent().evaluate(intent, [offer])[0]["evaluation"]
+    assert ev["feasible"] is False
+    keys = {f["key"] for f in ev["hard_failures"]}
+    assert "inventory" in keys
+
+
+def test_loader_and_compiler_clock_agree():
+    """Cross-module clock-skew guard (Agent J's OFF-001/006/020/021/025 flaky
+    window): catalog stamping and deadline compilation must derive dates from
+    the SAME clock, or 'within N days' intents flip feasible<->infeasible at
+    local-vs-UTC midnight."""
+    from pathlib import Path
+
+    import project_dante.integrations.merchant.catalog_loader as loader
+
+    src = Path(loader.__file__).read_text(encoding="utf-8")
+    # the loader must not use a local naive clock anywhere
+    assert "date.today()" not in src.replace("datetime.now(UTC).date()", ""), (
+        "catalog_loader uses local date.today(); compiler/evaluator use UTC — "
+        "stamp delivery dates with datetime.now(UTC).date() instead"
+    )
+    # and the whole pipeline must agree right now: a same-day window offer
+    # must satisfy an equal-day deadline
+    now = datetime.now(UTC)
+    intent = _intent(
+        hard_constraints=[
+            {"key": "delivery_deadline", "op": "lte",
+             "value": (now + timedelta(days=3)).date().isoformat()}
+        ],
+        soft_preferences=[],
+        max_total_amount_paise=None,
+    )
+    offer = _offer()
+    offer["delivery_promise"] = {"min_days": 1, "max_days": 3,
+                                 "promised_by_date": None}
+    ev = OfferEvaluatorAgent().evaluate(intent, [offer])[0]["evaluation"]
+    assert ev["feasible"] is True
+
+
 # ---------------------------------------------------------------- routes
 
 

@@ -292,12 +292,22 @@ def test_eval_condition_brand_new():
 
 
 def test_eval_catalog_brands():
+    # gated mention ('Zephyr brand') is a hard constraint per dataset ground truth
     intent = rule_compile("Zephyr brand over-ear headphones")
-    vals = {p.value for p in intent.soft_preferences}
-    assert "Zephyr" in vals
+    hard = [(c.key, c.value) for c in intent.hard_constraints]
+    assert ("brand", "zephyr") in hard
+    # multi-brand 'brands only' reduces to first-stated brand (INT-055 rule)
     intent2 = rule_compile("Orbio or Soniq brands only, any headphone")
-    vals2 = {p.value for p in intent2.soft_preferences}
-    assert {"Orbio", "Soniq"} <= vals2
+    brand_cs = [c for c in intent2.hard_constraints if c.key == "brand"]
+    assert len(brand_cs) == 1 and brand_cs[0].op == "in"
+    assert brand_cs[0].value == ["orbio"]
+
+
+def test_ungated_brand_is_soft_preference():
+    intent = rule_compile("I like sony over-ear headphones")
+    vals = {p.value for p in intent.soft_preferences if p.key == "brand"}
+    assert vals == {"Sony"}
+    assert not [c for c in intent.hard_constraints if c.key == "brand"]
 
 
 def test_eval_bare_over_ears_implies_headphones():

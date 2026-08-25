@@ -167,7 +167,13 @@ def constraint_satisfied(actual_constraints: list[dict[str, Any]], expected: dic
             continue
         av, ev = c.get("value"), exp_value
         if exp_op == "in":
-            # expected value may be a list of acceptable values; match any
+            # expected value may be a list of acceptable values; match any.
+            # If the ACTUAL value is itself a list (e.g. brand sets), overlap counts.
+            if isinstance(av, (list, tuple)) and isinstance(ev, (list, tuple)):
+                a_norm = {normalize_scalar(x) for x in av}
+                e_norm = {normalize_scalar(x) for x in ev}
+                if a_norm & e_norm:
+                    return True
             ev_list = ev if isinstance(ev, list) else [ev]
             if any(_cat_equivalent(av, x) or scalars_equal(av, x) for x in ev_list):
                 return True
