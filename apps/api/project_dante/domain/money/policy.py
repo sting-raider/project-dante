@@ -196,6 +196,10 @@ def _persist_and_link(
         "money_action_id": mid,
         "contract_id": contract_id,
         "remedy_proposal_id": proposal.get("remedy_proposal_id"),
+        # Approval-gate binding fields: /approve may only execute when a
+        # REQUIRE_APPROVAL decision exists for THIS exact action+amount.
+        "idempotency_key": proposal.get("idempotency_key"),
+        "amount_paise": proposal.get("amount_paise"),
         **decision,
     }
     STORE.put(rec)
@@ -843,16 +847,58 @@ def approve_remedy(proposal_id: str) -> dict[str, Any]:
     if ma.get("status") == "denied":
         raise ValueError("a denied money action cannot be approved")
 
-    # The human approval IS the gate for the earlier REQUIRE_APPROVAL verdict;
-    # re-evaluation here would just re-derive the same threshold breach. We
-    # still refuse to run anything structurally invalid or drifted.
-    from project_dante.domain.state_machine import validate_transition
+    # APPROVAL GATE (review finding: fabricated HUMAN_APPROVED): a human may
+    # only approve a money action for which the policy engine actually
+    # returned REQUIRE_APPROVAL. The recorded decision must match this
+    # proposal's idempotency key, carry decision=REQUIRE_APPROVAL, and bind
+    # the SAME amount being executed. Without that record, /approve is a
+    # no-op — callers must go through evaluate_money_action first.
+    decisions = [
+        d
+        for d in STORE.find("policy_decision", idempotency_key=idem)
+        if d.get("decision") == "REQUIRE_APPROVAL"
+    ]
+    if not decisions:
+        raise ValueError(
+            "no pending REQUIRE_APPROVAL policy decision for this proposal; "
+            "run POST /api/remedies/{id}/policy first"
+        )
+    # The LATEST recorded verdict for this action is authoritative: a forged,
+    # stale, or superseded approval must never authorize execution.
+    latest = max(
+        STORE.find("policy_decision", idempotency_key=idem),
+        key=lambda d: d.get("evaluated_at") or "",
+    )
+    if latest.get("decision") != "REQUIRE_APPROVAL" or latest["id"] not in {
+        d["id"] for d in decisions
+    }:
+        raise ValueError(
+            "the latest policy verdict for this action is no longer "
+            "REQUIRE_APPROVAL; re-evaluate and request approval again"
+        )
+    if int(latest.get("amount_paise") or -1) != int(ma.get("amount_paise") or -2):
+        raise ValueError(
+            "recorded approval decision amount does not match the proposed "
+            "amount; re-evaluate policy and request approval again"
+        )
+
+    # Re-evaluate policy NOW: if policy state changed since REQUIRE_APPROVAL
+    # was issued (contract mutated, threshold config edited), the stale
+    # approval must not execute.
+    recheck = evaluate_money_action({**ma, "idempotency_key": idem})
+    if recheck["decision"] == "DENY":
+        raise ValueError(
+            f"policy now denies this action ({','.join(recheck['reason_codes'])}); "
+            "approval voided"
+        )
 
     contract = STORE.get(ma["contract_id"])
     if contract is None:
         raise KeyError(f"contract {ma['contract_id']} not found")
     if not contract.get("razorpay_payment_id"):
         raise ValueError("contract has no captured razorpay_payment_id")
+
+    from project_dante.domain.state_machine import validate_transition
 
     ok, why = _executor_structural_check(ma)
     if not ok:

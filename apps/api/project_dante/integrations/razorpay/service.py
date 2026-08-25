@@ -69,11 +69,42 @@ def verify_checkout_signature(order_id: str, payment_id: str, signature: str) ->
     return hmac_equal(expected, signature)
 
 
+_DEFAULT_WEBHOOK_SECRET = "dante-dev-webhook-secret"
+
+
+def _webhook_secret() -> str:
+    """Effective webhook secret; fails CLOSED in live-test mode.
+
+    Review finding: the repo-default secret stayed armed when operators
+    dropped in real test keys, letting anyone who read the public repo forge
+    payment.captured webhooks that grant PAID. In live-test mode a default
+    secret is treated as unconfigured -> verification always fails.
+    """
+    settings = get_settings()
+    secret = settings.razorpay_webhook_secret
+    if settings.razorpay_live_test_mode and (
+        not secret or secret == _DEFAULT_WEBHOOK_SECRET
+    ):
+        raise WebhookSecretUnconfigured(
+            "RAZORPAY_WEBHOOK_SECRET must be set to your dashboard webhook "
+            "secret before live Test Mode webhooks can be verified"
+        )
+    return secret
+
+
+class WebhookSecretUnconfigured(RuntimeError):
+    """Live-test mode active but the webhook secret is still the default."""
+
+
 def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
     """HMAC-SHA256 hex of the RAW webhook body under the webhook secret."""
     if not raw_body or not signature:
         return False
-    expected = compute_webhook_signature(raw_body, get_settings().razorpay_webhook_secret)
+    try:
+        secret = _webhook_secret()
+    except WebhookSecretUnconfigured:
+        return False  # fail closed: no verification without a real secret
+    expected = compute_webhook_signature(raw_body, secret)
     return hmac_equal(expected, signature)
 
 

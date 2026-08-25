@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Repo root — settings.py lives at <root>/apps/api/project_dante/settings.py,
+# so resolve .env locations absolutely instead of relative to the CWD.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Env files are merged in listed order: later entries override earlier
+    # ones (pydantic-settings semantics), and real environment variables
+    # still take precedence over every file. Missing files are skipped, so
+    # a root .env, an apps/api/.env, both, or neither all work regardless
+    # of where the server is launched from.
+    model_config = SettingsConfigDict(
+        env_file=[
+            _REPO_ROOT / ".env",            # general (overridden by…)
+            _REPO_ROOT / "apps/api/.env",   # …app-specific values
+        ],
+        extra="ignore",
+    )
 
     app_env: str = "development"
     demo_mode: bool = True
