@@ -101,3 +101,55 @@ rejects all illegal transitions tested.
 ## Commit
 
 Not committed per instructions (no git commits by Agent K).
+
+## Docs remediation (2026-08-26, docs-remediation agent)
+
+Fresh-engineer review findings, each fixed and verified against the live repo:
+
+1. **README verify-e2e path** — `.venv/Scripts/python.exe ../scripts/verify_e2e.py`
+   from `apps/api` resolved to nonexistent `apps/scripts/`. Fixed to
+   `../../scripts/verify_e2e.py`; verified `scripts/verify_e2e.py` is repo-root.
+   Also implemented as `make e2e`.
+2. **`uv sync --extra-dev` invalid flag** — confirmed via `uv sync --help`
+   (`--extra <EXTRA>`). Fixed the one bad occurrence (README backend quickstart).
+   README:145, CI (`uv sync --extra dev`) and Dockerfile.api (plain
+   `uv pip install .`, no flag) were already correct; grep confirms no other
+   `extra-dev` remains.
+3. **Root .env not honored** — settings.py used CWD-relative `env_file=".env"`,
+   so README's `cp ../../.env.example ../../.env` produced a file the server
+   never read. Code fix in `project_dante/settings.py`: absolute env_file list
+   `[<repo_root>/.env, <repo_root>/apps/api/.env]` resolved via
+   `Path(__file__).resolve().parents[3]`. Verified pydantic-settings merge order:
+   files merge in listed order, later entries override earlier (apps/api/.env wins),
+   real environment variables override both files — proven with a temp-file A/B test.
+   README updated to state root .env works. docs/RAZORPAY.md's existing
+   "In apps/api/.env" instruction stays valid under both semantics — unchanged.
+4. **Makefile defects** — added `setup` target (`uv sync --extra dev` + `npm install`);
+   `test`, `lint`, `typecheck` now depend on it. Removed phantom `worker` target
+   (apps/worker holds only an empty src/; ARQ worker already listed as future work in
+   docs/FUTURE.md). Replaced silent no-op `npx next lint || true` (no eslint config in
+   apps/web) with `npx tsc --noEmit`, the gate CI actually runs. Added missing `e2e`
+   target recipe. `make -n lint` dry-run verifies correct expansion.
+5. **Fixed rights-graph node count** — "(22-node graph)" reworded to a dynamic span
+   ("spanning promises, entitlements, evidence, breaches, and remedies").
+6. **Repository structure listing** — packages/contracts annotated "(reserved; empty)";
+   docs enumeration now includes API_CONTRACT.md and injection corpus under fixtures.
+7. **EVALS.md case-count misattribution** — datasets/*.json hold 147 cases
+   (68 intent + 26 offer + 25 breach + 28 money-safety), not 197; the other 50 payloads
+   are fixtures/adversarial/injection_corpus.json. Sentence rewritten with per-dataset
+   counts (verified against the JSON files and evals/reports/summary.json).
+8. **Stale test count** — suite now collects more than the documented 320 (remediation
+   wave added tests); replaced fixed counts in README with "full suite" wording so the
+   number can't rot again.
+
+Verification: full pytest run green after the settings change (322→324 passed across
+reruns as concurrent remediation landed); one transient failure
+(test_stale_approval_voided_when_amount_changes) reproduced under BOTH old and new
+settings and vanished on rerun — unrelated to these changes, attributed to concurrent
+edits. Server boot-tested on port 8001: `/api/health` returned OK JSON
+(sandbox-adapter, deterministic-fallback), then killed cleanly. README eval command
+executed verbatim: all five suites PASS. No git commits made.
+
+Flagged for owners (outside this task's file scope): docs/DEMO_SCRIPT.md pre-flight
+step 4 says `python scripts/verify_e2e.py` without stating the cwd must be repo root —
+same relative-path hazard class as finding 1.

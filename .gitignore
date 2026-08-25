@@ -36,3 +36,7 @@ logs/
 .claude/settings.local.json
 evals/reports/*.json
 !evals/reports/.gitkeep
+.dante-live-store.json
+.dante-redteam-store.json
+.dante-evalstore.json
+.dante-debug*.json

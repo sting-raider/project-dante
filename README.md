@@ -202,13 +202,14 @@ cd apps/api
 ### Tests + evals
 
 ```bash
-cd apps/api && .venv/Scripts/python.exe -m pytest tests/ -q          # 320 tests
+cd apps/api && .venv/Scripts/python.exe -m pytest tests/ -q
 cd apps/api && DANTE_STORE_PATH=/tmp/e.json .venv/Scripts/python.exe ../../evals/runners/run_all.py
 ```
 
 ### Go live on real Razorpay Test Mode
 
 1. Dashboard → Settings → API Keys → **Test** keys → put in `.env`
+   (repo root or `apps/api/.env` — see backend section above)
 2. Dashboard → Settings → Webhooks → add `https://your-domain/api/webhooks/razorpay`,
    event `payment.captured`, `refund.processed`; set secret as `RAZORPAY_WEBHOOK_SECRET`
 3. Restart — health endpoint flips to `"razorpay": "live-test-mode"`, UI badges change
@@ -229,7 +230,7 @@ apps/
       domain/           types, state machine, events, hashing, promises, rights, remedies, money
       integrations/     razorpay (dual adapter), merchant (catalog + fulfillment sim)
       db/               store (JSON-persisted, Postgres-swappable interface), seed
-    tests/              320 tests incl. red-team + webhook chaos
+    tests/              full suite incl. red-team + webhook chaos
   web/                 Next.js 15 App Router frontend (editorial design system)
 packages/contracts/    shared schemas (reserved; empty)
 evals/                 datasets, runners, reports
