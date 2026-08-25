@@ -11,7 +11,6 @@ import hashlib
 import hmac
 
 import pytest
-
 from project_dante.db.store import STORE
 from project_dante.domain.events import LOG
 from project_dante.integrations.razorpay import service
@@ -107,9 +106,6 @@ def test_checkout_signature_empty_inputs_fail_closed(sandbox_env):
 
 def test_checkout_signature_math_matches_razorpay_recipe():
     """Pure-function check independent of adapters/settings."""
-    sig = service.compute_checkout_signature.__wrapped__ if hasattr(
-        service.compute_checkout_signature, "__wrapped__"
-    ) else None
     from project_dante.integrations.razorpay.client import compute_checkout_signature
 
     got = compute_checkout_signature("order_ABC", "pay_XYZ", secret="k")

@@ -367,14 +367,18 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
     promises = _contract_promises(contract_id)
     promised_warranty = _promise_value(promises, "warranty.type", "unknown")
     promised_region = _promise_value(promises, "product.region", "IN")
-    promised_by_date = _promise_value(promises, "delivery.latest")
+    promised_warranty_region = _promise_value(promises, "warranty.region", "IN")
+    promised_condition = _promise_value(promises, "condition", "new")
+    promised_by_date = _promise_value(promises, "delivery.promised_by_date")
 
     delivered_warranty = promised_warranty
     delivered_region = promised_region
+    delivered_warranty_region = promised_warranty_region
     delay_days = 0
     if scenario == "wrong_variant":
         delivered_warranty = "seller"
         delivered_region = "AE"
+        delivered_warranty_region = "AE"
     elif scenario == "late":
         delay_days = 3
 
@@ -405,9 +409,20 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
     else:
         delivered_date = base_delivery
 
+    # Price/condition observed values: the contract record is truth for what
+    # was actually paid; condition follows the promised value on all
+    # scenarios (wrong_variant swaps warranty/region only).
+    contract = STORE.get(contract_id) or {}
+    paid_amount = contract.get("amount_paise")
+    if paid_amount is None:
+        paid_amount = _promise_value(promises, "price.amount_paise")
+
     facts = [
         _fact(contract_id, "warranty.type", delivered_warranty, artifact_id, scenario_id),
+        _fact(contract_id, "warranty.region", delivered_warranty_region, artifact_id, scenario_id),
         _fact(contract_id, "product.region", delivered_region, artifact_id, scenario_id),
+        _fact(contract_id, "condition", promised_condition, artifact_id, scenario_id),
+        _fact(contract_id, "price.amount_paise", paid_amount, artifact_id, scenario_id),
         _fact(
             contract_id,
             "delivery.delivered_date",

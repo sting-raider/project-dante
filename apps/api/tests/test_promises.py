@@ -266,6 +266,31 @@ def test_non_critical_constraint_alone_not_material_without_baseline():
     assert cond["material_to_intent"] is False
 
 
+def test_dotted_attribute_constraint_keys_map():
+    """Agent C finding 1: compiler emits dotted keys attributes.form_factor /
+    attributes.anc — both bare and dotted constraint keys must map."""
+    from project_dante.domain.promises.pipeline import CONSTRAINT_TO_PROMISE
+
+    assert CONSTRAINT_TO_PROMISE["attributes.form_factor"] == "attributes.form_factor"
+    assert CONSTRAINT_TO_PROMISE["attributes.anc"] == "attributes.anc"
+    # bare aliases retained for backward compatibility
+    assert CONSTRAINT_TO_PROMISE["form_factor"] == "attributes.form_factor"
+    assert CONSTRAINT_TO_PROMISE["anc"] == "attributes.anc"
+
+    intent = {
+        "hard_constraints": [
+            {"key": "attributes.form_factor", "op": "eq", "value": "over-ear", "critical": True},
+            {"key": "attributes.anc", "op": "eq", "value": True, "critical": True},
+        ]
+    }
+    offer = _offer()
+    ev = build_evidence("checkout_offer", {"offer": offer}, "structured_verified")
+    promises = link_materiality(extract_promises(offer, ev), intent)
+    by_key = {p["key"]: p for p in promises}
+    assert by_key["attributes.form_factor"]["material_to_intent"] is True
+    assert by_key["attributes.anc"]["material_to_intent"] is True
+
+
 def test_unverified_claims_never_material():
     promises = [
         {

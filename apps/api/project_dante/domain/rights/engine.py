@@ -130,7 +130,9 @@ def _eval_predicate(pred: dict[str, Any], ctx: dict[str, Any]) -> bool:
         return False
 
 
-def resolve_ctx(contract_id: str, promises: list[dict], facts: list[dict], breaches: list[dict]) -> dict[str, Any]:
+def resolve_ctx(
+    contract_id: str, promises: list[dict], facts: list[dict], breaches: list[dict]
+) -> dict[str, Any]:
     """Flat dotted-key context for predicate evaluation.
 
     Layers: promise values (what was promised) < observed facts (reality) <
@@ -342,7 +344,9 @@ def derive_entitlements(contract_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def _has_required_evidence(ent: dict[str, Any], evidence: list[dict[str, Any]]) -> tuple[bool, list[str]]:
+def _has_required_evidence(
+    ent: dict[str, Any], evidence: list[dict[str, Any]]
+) -> tuple[bool, list[str]]:
     have = {e.get("source_type") for e in evidence}
     missing = [t for t in ent.get("required_evidence_types") or [] if t not in have]
     return (not missing), missing
@@ -646,7 +650,8 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
             status=r.get("status"),
         )
         if r.get("breach_id"):
-            edge(rid, f"breach:{r['breach_id']}", "REMEDIATES" if r.get("rejected_reason") is None else "PROPOSED_FOR")
+            kind = "REMEDIATES" if r.get("rejected_reason") is None else "PROPOSED_FOR"
+            edge(rid, f"breach:{r['breach_id']}", kind)
         if r.get("entitlement_id"):
             edge(f"entitlement:{r['entitlement_id']}", rid, "REMEDIES")
 

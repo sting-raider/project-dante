@@ -19,7 +19,6 @@ from __future__ import annotations
 import hmac
 from typing import Any
 
-from project_dante.db.store import STORE
 from project_dante.integrations.razorpay.client import (
     SANDBOX_KEY_ID,
     SANDBOX_KEY_SECRET,

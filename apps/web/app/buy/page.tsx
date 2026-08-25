@@ -42,27 +42,33 @@ export default function BuyPage() {
 
   const busy = flow.isBusy || pendingSelect;
 
-  async function handleSelect(offerId: string) {
+  /** Radio choose — no side effects. */
+  function handleChoose(offerId: string) {
+    flow.chooseOffer(offerId);
+  }
+
+  /** Freeze + navigate. */
+  async function handleConfirm(offerId: string) {
     setPendingSelect(true);
     const result = flow.results.find((r) => r.offer.id === offerId);
-    if (result) {
-      rememberBuyerBrief(brief);
-    }
+    rememberBuyerBrief(brief);
     const contractId = await flow.selectOffer(offerId);
-    if (contractId && result) {
-      rememberOfferSelection(contractId, {
-        offer: result.offer,
-        explanation: result.evaluation.explanation,
-        softScores: result.evaluation.soft_scores,
-      });
-      router.push(`/contract/${contractId}`);
-    } else if (contractId) {
+    if (contractId) {
+      if (result) {
+        rememberOfferSelection(contractId, {
+          offer: result.offer,
+          explanation: result.evaluation.explanation,
+          softScores: result.evaluation.soft_scores,
+        });
+      }
       router.push(`/contract/${contractId}`);
     } else {
       setPendingSelect(false);
     }
   }
 
+  // NOTE for integration: when Agent G's components/editorial + commerce land,
+  // swap ./_components/atoms imports for components/editorial + components/commerce.
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-5 pb-24 pt-10 md:px-10">
       {/* masthead */}
@@ -153,7 +159,8 @@ export default function BuyPage() {
               <OfferSpread
                 results={flow.results}
                 selectedOfferId={flow.selectedOfferId}
-                onSelect={handleSelect}
+                onSelect={handleChoose}
+                onConfirm={handleConfirm}
                 submitting={pendingSelect}
               />
             </div>
@@ -170,7 +177,5 @@ export default function BuyPage() {
         </Panel>
       )}
     </main>
-    // NOTE for integration: when Agent G's components/editorial + commerce land,
-    // swap ./_components/atoms imports for components/editorial + components/commerce.
   );
 }

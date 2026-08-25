@@ -216,6 +216,117 @@ def test_no_substitutes_disallows_substitution():
     assert intent.substitutions_allowed is False
 
 
+# ------------------------------------------------- eval round 1 gaps (Agent J)
+
+
+def test_eval_budget_trailing_max():
+    intent = rule_compile("headphones, budget 150k max")
+    assert intent.max_total_amount_paise == 15_000_000
+
+
+def test_eval_cap_at():
+    intent = rule_compile("router, cap at 12k")
+    assert intent.max_total_amount_paise == 1_200_000
+
+
+def test_eval_budget_leading_sentence():
+    intent = rule_compile("Budget 10k. wireless earbuds please")
+    assert intent.max_total_amount_paise == 1_000_000
+
+
+def test_eval_under_word_numbers():
+    intent = rule_compile("monitor under fifteen thousand")
+    assert intent.max_total_amount_paise == 1_500_000
+
+
+def test_eval_bucks_tops():
+    intent = rule_compile("charger, 500 bucks tops")
+    assert intent.max_total_amount_paise == 50_000
+
+
+def test_eval_willing_to_go_to():
+    intent = rule_compile("keyboard, willing to go to 13k")
+    assert intent.max_total_amount_paise == 1_300_000
+
+
+def test_eval_number_then_budget_word():
+    intent = rule_compile("12k budget for headphones")
+    assert intent.max_total_amount_paise == 1_200_000
+
+
+def test_eval_word_number_duration_not_money():
+    """'under three days' is a delivery window, not a price cap."""
+    intent = rule_compile("mouse delivered under three days")
+    assert intent.max_total_amount_paise is None
+    assert _cons(intent, "delivery_deadline")
+
+
+def test_eval_warranty_manufacturer_india_order_variant():
+    intent = rule_compile("headphones with Manufacturer India warranty")
+    assert _val(intent, "warranty.type") == "manufacturer"
+    assert _val(intent, "warranty.region") == "IN"
+
+
+def test_eval_warranty_from_the_manufacturer_in_india():
+    intent = rule_compile("warranty from the manufacturer in India required, router")
+    assert _val(intent, "warranty.type") == "manufacturer"
+    assert _val(intent, "warranty.region") == "IN"
+
+
+def test_eval_warranty_must_be_manufacturer_type_valid_in_india():
+    intent = rule_compile("warranty must be manufacturer type valid in India, monitor")
+    assert _val(intent, "warranty.type") == "manufacturer"
+    assert _val(intent, "warranty.region") == "IN"
+
+
+def test_eval_manufacturer_backed_and_valid_in_india():
+    intent = rule_compile("manufacturer-backed AND valid in India warranty, keyboard")
+    assert _val(intent, "warranty.type") == "manufacturer"
+    assert _val(intent, "warranty.region") == "IN"
+
+
+def test_eval_condition_brand_new():
+    for text in ("brand new earbuds", "new condition keyboard", "Only brand new. mouse"):
+        c = _val(rule_compile(text), "condition")
+        assert c == "new", text
+
+
+def test_eval_catalog_brands():
+    intent = rule_compile("Zephyr brand over-ear headphones")
+    vals = {p.value for p in intent.soft_preferences}
+    assert "Zephyr" in vals
+    intent2 = rule_compile("Orbio or Soniq brands only, any headphone")
+    vals2 = {p.value for p in intent2.soft_preferences}
+    assert {"Orbio", "Soniq"} <= vals2
+
+
+def test_eval_bare_over_ears_implies_headphones():
+    intent = rule_compile("ANC over-ears under 10k")
+    assert _val(intent, "category") == "headphones"
+    assert _val(intent, "attributes.form_factor") == "over-ear"
+    intent2 = rule_compile("over-ear cans with anc")
+    assert _val(intent2, "category") == "headphones"
+
+
+def test_eval_delivery_before_this_coming_thursday():
+    intent = rule_compile("laptop arriving before this coming Thursday")
+    days_ahead = (3 - TODAY.weekday()) % 7 or 7
+    want = (TODAY + timedelta(days=days_ahead)).date().isoformat()
+    assert _val(intent, "delivery_deadline") == want
+
+
+def test_eval_delivery_arriving_before_next_friday():
+    intent = rule_compile("arriving before next Friday, need a monitor")
+    days_ahead = (4 - TODAY.weekday()) % 7 or 7
+    want = (TODAY + timedelta(days=days_ahead)).date().isoformat()
+    assert _val(intent, "delivery_deadline") == want
+
+
+def test_eval_do_not_substitute():
+    intent = rule_compile("Do NOT substitute alternatives, sony headphones")
+    assert intent.substitutions_allowed is False
+
+
 def test_plain_request_allows_substitution():
     intent = rule_compile("any decent jbl headphone")
     assert intent.substitutions_allowed is True

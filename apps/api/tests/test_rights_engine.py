@@ -100,7 +100,13 @@ def _mk_evidence(cid, source_type):
     return STORE.put(rec)
 
 
-def _mk_breach(cid, promise_id, fact_id, reason_code="MATERIAL_VARIANT_MISMATCH", severity="material"):
+def _mk_breach(
+    cid,
+    promise_id,
+    fact_id,
+    reason_code="MATERIAL_VARIANT_MISMATCH",
+    severity="material",
+):
     rec = {
         "_type": "breach",
         "id": f"br_{cid}_main",
@@ -319,7 +325,7 @@ class RightsGraphTests(unittest.TestCase):
             self.assertIn(kind, kinds, f"missing edge kind {kind}")
 
         # purchase root exists and entitlements hang off it
-        purchase = next(n for n in nodes if n["type"] == "purchase")
+        assert any(n["type"] == "purchase" for n in nodes)
         ent_nodes = [n for n in nodes if n["type"] == "entitlement"]
         self.assertEqual(len(ent_nodes), 5)
         for n in ent_nodes:

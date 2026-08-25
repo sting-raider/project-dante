@@ -264,6 +264,14 @@ class TestSecretsHygiene:
             "apps/api/project_dante/integrations/razorpay/client.py",
             _SANDBOX_KEY_PREFIX,
         ),
+        # Deliberate dummy env fixture in Agent B's webhook guard test
+        # (tests/test_webhooks.py): simulates live-keys-present mode. Obvious
+        # placeholder value, verified inert. Owner was asked to prefer a
+        # non-key-shaped literal; allowlisted until then.
+        (
+            "apps/api/tests/test_webhooks.py",
+            "rzp_test_" + "LiveKey" + "12345678",
+        ),
     }
 
     @pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -338,17 +346,9 @@ class TestAmountManipulation:
         status, detail = self._evaluate(policy, _proposal(amount_paise=1149901))
         assert status == "DENY", f"one-paise inflation got {status}"
 
-    @pytest.mark.xfail(
-        reason=(
-            "K-01 CONFIRMED VULNERABILITY: evaluate_money_action allows refund_full "
-            "for ANY amount 0 < amount <= captured (policy.py only checks "
-            "amount > captured). A half-amount 'full' refund auto-approves and the "
-            "executor then marks the contract REMEDIATED — closing the case while "
-            "the buyer is under-refunded, bypassing the partial-refund reason list "
-            "and its max_auto_amount cap. See docs/handoffs/security_findings.md."
-        ),
-        strict=True,
-    )
+    # K-01 was a confirmed vulnerability (refund_full below captured amount
+    # auto-approved); fixed in domain/money/policy.py during integration.
+    # Test kept as regression guard.
     def test_under_amount_not_allowed_silently(self, policy, world):
         # Under-refund is legitimate ONLY via refund_partial with its own reason
         # list + cap; a refund_full below captured must not be ALLOWed as-is.
@@ -367,23 +367,14 @@ class TestAmountManipulation:
         assert status == "DENY", f"zero amount got {status} {detail or ''}"
         assert STORE.count("razorpay_refund") == 0
 
-    @pytest.mark.xfail(
-        reason=(
-            "K-02 HARDENING GAP: int(proposal.get('amount_paise')) coerces "
-            "'11499' -> 11499, 114.99 -> 114 (truncation), True -> 1 instead of "
-            "rejecting non-int money types (plan §19: never coerce malformed "
-            "financial values). Bounded by captured ceiling so not an over-refund "
-            "path today; strict typing still required. "
-            "See docs/handoffs/security_findings.md."
-        ),
-        strict=True,
-    )
+    # K-02 was a hardening gap (string/float/bool amounts coerced via int());
+    # fixed in domain/money/policy.py during integration — non-int money is
+    # rejected per plan §19. Tests kept as regression guards.
     def test_string_amount_never_becomes_money(self, policy, world):
         status, detail = self._evaluate(policy, _proposal(amount_paise="11499"))
         assert status in {"DENY", "raised"}, f"string amount got {status} {detail or ''}"
         assert STORE.count("razorpay_refund") == 0
 
-    @pytest.mark.xfail(reason="K-02 same coercion path as string amounts", strict=True)
     def test_float_rupee_confusion_never_becomes_money(self, policy, world):
         status, detail = self._evaluate(policy, _proposal(amount_paise=114.99))
         assert status in {"DENY", "raised"}, f"float amount got {status} {detail or ''}"

@@ -13,6 +13,7 @@ contract to PAYMENT_PENDING. Only the signature-verified webhook grants PAID.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -21,10 +22,10 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
-from project_dante.db.store import STORE
-from project_dante.domain.events import append_event, now_iso
-from project_dante.domain.hashing import sha256_hex
 from project_dante.api.routes.webhooks import handle_webhook_bytes
+from project_dante.db.store import STORE
+from project_dante.domain.events import append_event
+from project_dante.domain.hashing import sha256_hex
 from project_dante.domain.state_machine import InvalidTransition, validate_transition
 from project_dante.integrations.razorpay import service
 
@@ -62,11 +63,12 @@ def _recompute_contract_hash(contract: dict) -> str | None:
     return None
 
 
-def _transition(contract_id: str, current: str, target: str) -> dict:
+def _transition(contract_id: str, current: str, target: str) -> None:
     try:
         validate_transition(current, target)
     except InvalidTransition as exc:
-        raise HTTPException(status_code=409, detail=f"invalid_transition:{current}->{target}") from exc
+        detail = f"invalid_transition:{current}->{target}"
+        raise HTTPException(status_code=409, detail=detail) from exc
     STORE.update(contract_id, status=target)
 
 
@@ -116,7 +118,9 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
             )
 
     if status != "AWAITING_BUYER_AUTH":
-        raise HTTPException(status_code=409, detail=f"invalid_transition:{status}->PAYMENT_ORDER_CREATED")
+        raise HTTPException(
+            status_code=409, detail=f"invalid_transition:{status}->PAYMENT_ORDER_CREATED"
+        )
 
     # ---- amount gate -------------------------------------------------------
     amount_paise = contract.get("amount_paise")
@@ -156,11 +160,14 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
     try:
         order = service.create_order(amount_paise, receipt=receipt, notes=notes)
     except service.RazorpayError as exc:
-        logger.error("razorpay order creation failed contract=%s status=%s", contract_id, exc.status_code)
+        logger.error(
+            "razorpay order creation failed contract=%s status=%s", contract_id, exc.status_code
+        )
         raise HTTPException(status_code=502, detail="razorpay_order_failed") from exc
 
     # ---- persist + transition + audit --------------------------------------
-    STORE.update(contract_id, razorpay_order_id=order["id"], sandbox_mode=(service.mode() == "sandbox"))
+    is_sandbox = service.mode() == "sandbox"
+    STORE.update(contract_id, razorpay_order_id=order["id"], sandbox_mode=is_sandbox)
     STORE.put(
         {
             "_type": "razorpay_order",
@@ -255,7 +262,8 @@ async def verify_client_payment(req: VerifyClientRequest) -> dict[str, Any]:
     try:
         validate_transition(current, "PAYMENT_PENDING")
     except InvalidTransition as exc:
-        raise HTTPException(status_code=409, detail=f"invalid_transition:{current}->PAYMENT_PENDING") from exc
+        detail = f"invalid_transition:{current}->PAYMENT_PENDING"
+        raise HTTPException(status_code=409, detail=detail) from exc
 
     STORE.update(req.contract_id, **updates)
     append_event(
@@ -271,7 +279,9 @@ async def verify_client_payment(req: VerifyClientRequest) -> dict[str, Any]:
         event_type="PAYMENT_VERIFIED_SERVER",
         payload={"payment_id": req.razorpay_payment_id},
     )
-    logger.info("client payment verified contract=%s payment=%s", req.contract_id, req.razorpay_payment_id)
+    logger.info(
+        "client payment verified contract=%s payment=%s", req.contract_id, req.razorpay_payment_id
+    )
 
     return {"status": "client_confirmed", "contract_status": "PAYMENT_PENDING"}
 
@@ -313,11 +323,16 @@ async def demo_simulate_event(req: SimulateEventRequest = Body(...)) -> dict[str
     except service.RazorpayError as exc:
         raise HTTPException(status_code=404, detail="sandbox_order_not_found") from exc
 
-    # Build the exact envelope Razorpay sends, sign it with the REAL HMAC
-    # machinery, then hand it to the production intake (verification included).
+    # Build the exact envelope Razorpay sends. The event id is DERIVED from
+    # (event_type, order_id, payment_id) so re-simulating the same capture is
+    # treated as a redelivery by the intake's dedupe — mirroring real
+    # Razorpay behaviour where the same gateway event keeps its identity.
+    derived_event_id = "evt_demo_" + hashlib.sha1(
+        f"{req.event_type}|{req.order_id}|{payment['id']}".encode()
+    ).hexdigest()[:16]
     payload = {
         "event": "payment.captured",
-        "id": f"evt_demo_{int(time.time() * 1000)}",
+        "id": derived_event_id,
         "created_at": int(time.time()),
         "payload": {
             "payment": {

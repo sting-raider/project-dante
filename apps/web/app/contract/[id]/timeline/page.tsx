@@ -243,8 +243,6 @@ export default function TimelinePage() {
                   )}
                 </div>
               </div>
-              {/* full-bleed rule between entries */}
-              <div aria-hidden={true} />
             </li>
           ))}
         </ol>

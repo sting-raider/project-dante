@@ -13,28 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-
-// ---------------------------------------------------------------- API base
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
-
-async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
+import { apiGet, apiPost, ApiError } from "@/lib/api";
 
 // ---------------------------------------------------------------- domain types
 // Mirrors project_dante.domain.types — keep in sync; additive only.
@@ -132,6 +111,7 @@ export type AuthorityEnvelope = {
   currency: "INR";
   authorized_at?: string | null;
   authorized_by: string;
+  scope?: "single_purchase";
   contract_hash_at_authorization?: string | null;
 };
 
@@ -214,28 +194,42 @@ export type RazorpayHandlerResponse = {
   razorpay_signature: string;
 };
 
+/** Standard Checkout options we pass (subset of Razorpay's full shape). */
+export type RazorpayCheckoutOptions = {
+  key_id: string;
+  order_id: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description?: string;
+  prefill?: Record<string, string>;
+  theme?: { color?: string };
+  handler: (response: RazorpayHandlerResponse) => void;
+  modal?: { ondismiss?: () => void };
+};
+
 declare global {
   interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
+    Razorpay?: new (options: RazorpayCheckoutOptions) => { open: () => void };
   }
 }
 
 // ---------------------------------------------------------------- flow states
 
 export type FlowPhase =
-  // /buy pipeline
+  // /buy pipeline (§28)
   | "idle"
   | "compiling"
   | "searching"
-  | "shortlist" // results shown, awaiting buyer selection
-  | "selecting"
-  | "navigating"
+  | "shortlist" // results rendered; buyer is choosing
+  | "awaiting_selection" // radio chosen, freeze button armed
+  | "freezing" // select-offer in flight → navigate to dossier
   // contract pipeline
   | "awaiting_authorization"
-  | "creating_order"
-  | "checkout_ready" // live-test-mode: Razorpay JS open / awaiting user
+  | "opening_checkout" // authorize + payment-order in flight
+  | "checkout_ready" // live-test-mode: Razorpay window open/available
   | "sandbox_ready" // sandbox: awaiting simulated capture
-  | "payment_pending" // window closed / verify sent; waiting on server truth
+  | "payment_pending" // verify sent / capture delivered; waiting on webhook truth
   | "paid"
   // error states carry retry via `retry`
   | "error_compile"
@@ -251,15 +245,15 @@ export type FlowPhase =
 export const PHASE_TICKER: Partial<Record<FlowPhase, string>> = {
   compiling: "Compiling intent…",
   searching: "Searching merchant…",
-  selecting: "Evaluating offers…",
-  shortlist: "Offers evaluated — select one to freeze its promises.",
-  navigating: "Freezing promises…",
+  shortlist: "Offers evaluated — choose one to freeze its promises.",
+  awaiting_selection: "Offer chosen — freeze it into a contract.",
+  freezing: "Freezing promises…",
   awaiting_authorization: "Contract frozen. Awaiting your authorization.",
-  creating_order: "Creating Razorpay order…",
+  opening_checkout: "Opening checkout…",
   checkout_ready: "Checkout open — complete the test payment.",
-  sandbox_ready: "SANDBOX adapter active — simulate the capture below.",
-  payment_pending: "Payment submitted — confirming against server truth…",
-  paid: "PAID — verified by server-side webhook truth.",
+  sandbox_ready: "SANDBOX MODE — no Razorpay keys configured. Simulate below.",
+  payment_pending: "Confirming against server-side webhook truth…",
+  paid: "PAID — verified by webhook truth.",
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -297,7 +291,13 @@ export function useContractFlow() {
   const fail = useCallback((p: FlowPhase, e: unknown) => {
     if (!mountedRef.current) return;
     setPhase(p);
-    setError(e instanceof Error ? e.message : String(e));
+    setError(
+      e instanceof ApiError
+        ? `${e.status ? `HTTP ${e.status}: ` : ""}${e.message}`
+        : e instanceof Error
+          ? e.message
+          : String(e),
+    );
   }, []);
 
   const resetError = useCallback(() => setError(null), []);
@@ -324,7 +324,13 @@ export function useContractFlow() {
       } catch (e) {
         if (mountedRef.current) {
           setPhase("error_poll");
-          setError(e instanceof Error ? e.message : String(e));
+          setError(
+            e instanceof ApiError
+              ? `${e.status ? `HTTP ${e.status}: ` : ""}${e.message}`
+              : e instanceof Error
+                ? e.message
+                : String(e),
+          );
         }
         return null;
       }
@@ -418,12 +424,19 @@ export function useContractFlow() {
     [fail],
   );
 
+  /** Radio choose — records the selection locally; no network side effects. */
+  const chooseOffer = useCallback((offerId: string) => {
+    setError(null);
+    setSelectedOfferId(offerId);
+    setPhase("awaiting_selection");
+  }, []);
+
   const selectOffer = useCallback(
     async (offerId: string): Promise<string | null> => {
       if (!intent) return null;
       setError(null);
       setSelectedOfferId(offerId);
-      setPhase("selecting");
+      setPhase("freezing");
       try {
         const r = await apiPost<{
           contract: DanteContract;
@@ -431,7 +444,6 @@ export function useContractFlow() {
           evidence: EvidenceArtifact[];
         }>(`/api/intents/${intent.id}/select-offer`, { offer_id: offerId });
         if (!mountedRef.current) return null;
-        setPhase("navigating");
         return r.contract.id;
       } catch (e) {
         fail("error_select", e);
@@ -464,7 +476,7 @@ export function useContractFlow() {
   const createPaymentOrder = useCallback(
     async (id: string): Promise<PaymentOrderResponse | null> => {
       setError(null);
-      setPhase("creating_order");
+      setPhase("opening_checkout");
       try {
         const order = await apiPost<PaymentOrderResponse>(
           `/api/contracts/${id}/payment-order`,
@@ -525,7 +537,6 @@ export function useContractFlow() {
         await apiPost("/api/demo/razorpay/simulate-event", {
           event_type: "payment.captured",
           order_id: orderId,
-          payment_id: `pay_sim_${orderId.slice(-8)}`,
         });
         if (!mountedRef.current) return true;
         setVerifyNote("sandbox capture delivered as signed webhook");
@@ -540,6 +551,15 @@ export function useContractFlow() {
     [startPollingUntilResolved, fail],
   );
 
+  /** Sandbox button target: simulate capture for the current contract/order. */
+  const simulateSandboxPayment = useCallback(async (): Promise<boolean> => {
+    const id = contract?.id ?? null;
+    const orderId =
+      orderInfo?.checkout_config.order_id ?? contract?.razorpay_order_id ?? null;
+    if (!id || !orderId) return false;
+    return simulateSandboxCapture(id, String(orderId));
+  }, [contract, orderInfo, simulateSandboxCapture]);
+
   /** Manual re-check button (window-closed fallback). */
   const recheckStatus = useCallback(
     async (id: string) => {
@@ -550,6 +570,31 @@ export function useContractFlow() {
       }
     },
     [refreshContract, stopPolling],
+  );
+
+  /**
+   * §52 gate, full sequence: POST authorize → POST payment-order → hand the
+   * order to the caller's checkout opener (Razorpay JS for live-test-mode;
+   * nothing to open for sandbox). The opener is injected because the hook is
+   * DOM-free; it receives mode + checkout_config.
+   */
+  const authorizeAndOpenCheckout = useCallback(
+    async (
+      id: string,
+      openCheckout: (order: PaymentOrderResponse) => void,
+    ): Promise<void> => {
+      setError(null);
+      setPhase("opening_checkout");
+      const ok = await authorize(id);
+      if (!ok) return; // authorize() set error_authorize
+      const order = await createPaymentOrder(id);
+      if (!order) return; // createPaymentOrder() set error_order
+      if (order.mode === "sandbox") {
+        return; // sandbox_ready already set by createPaymentOrder
+      }
+      openCheckout(order); // live path: page opens Razorpay Standard Checkout
+    },
+    [authorize, createPaymentOrder],
   );
 
   /**
@@ -580,18 +625,21 @@ export function useContractFlow() {
     orderInfo,
     verifyNote,
     // derived
-    isBusy: ["compiling", "searching", "selecting", "creating_order"].includes(phase),
+    isBusy: ["compiling", "searching", "freezing", "opening_checkout"].includes(phase),
     // /buy
     compileAndSearch,
+    chooseOffer,
     selectOffer,
     resetError,
     // contract
     loadContract,
     refreshContract,
     authorize,
+    authorizeAndOpenCheckout,
     createPaymentOrder,
     verifyClient,
     simulateSandboxCapture,
+    simulateSandboxPayment,
     recheckStatus,
     pollUntilResolved,
     pollingActive,

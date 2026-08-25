@@ -43,9 +43,12 @@ def _seed_contract(store, contract_id="con_test01"):
     ids = {}
     for key, value in [
         ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
         ("product.region", "IN"),
+        ("condition", "new"),
+        ("price.amount_paise", 1149900),
         ("warranty.duration_months", 12),
-        ("delivery.latest", None),
+        ("delivery.promised_by_date", None),
     ]:
         pid = f"pr_{key.replace('.', '_')}_{contract_id[-4:]}"
         ids[key] = pid
@@ -89,6 +92,10 @@ def test_deliver_wrong_variant_facts(isolated_env):
     by_key = {f["key"]: f for f in result["facts"]}
     assert by_key["warranty.type"]["value"] == "seller"
     assert by_key["product.region"]["value"] == "AE"
+    assert by_key["warranty.region"]["value"] == "AE"
+    # price + condition observed even on the failure path
+    assert by_key["price.amount_paise"]["value"] == 1149900
+    assert by_key["condition"]["value"] == "new"
     for fact in result["facts"]:
         assert fact["synthetic"] is True
         assert fact["scenario_id"] == "scenario_wrong_variant"
@@ -103,7 +110,7 @@ def test_deliver_late_after_promised_date(isolated_env):
     store = isolated_env["store"]
     ids = _seed_contract(store)
     promised = str(date.today() - timedelta(days=1))  # promised yesterday
-    store.update(ids["delivery.latest"], value=promised)
+    store.update(ids["delivery.promised_by_date"], value=promised)
 
     result = service.apply_fulfillment_event("con_test01", "deliver", scenario="late")
     by_key = {f["key"]: f for f in result["facts"]}
@@ -112,6 +119,7 @@ def test_deliver_late_after_promised_date(isolated_env):
     # correct warranty/region values on late scenario — only timing slipped
     assert by_key["warranty.type"]["value"] == "manufacturer"
     assert by_key["product.region"]["value"] == "IN"
+    assert by_key["warranty.region"]["value"] == "IN"
     days_late_fact = by_key.get("delivery.days_late")
     assert days_late_fact and days_late_fact["value"] == 3
 
@@ -122,8 +130,26 @@ def test_deliver_correct_copies_promise_values(isolated_env):
     result = service.apply_fulfillment_event("con_test01", "deliver", scenario="correct")
     by_key = {f["key"]: f for f in result["facts"]}
     assert by_key["warranty.type"]["value"] == "manufacturer"
+    assert by_key["warranty.region"]["value"] == "IN"
     assert by_key["product.region"]["value"] == "IN"
+    assert by_key["condition"]["value"] == "new"
+    assert by_key["price.amount_paise"]["value"] == 1149900
     assert by_key["delivery.delivered_date"]["synthetic"] is True
+
+
+def test_deliver_price_fact_prefers_contract_amount(isolated_env):
+    """Contract amount_paise wins over the promise value when both exist."""
+    from datetime import date, timedelta
+
+    store = isolated_env["store"]
+    ids = _seed_contract(store)
+    store.update(
+        ids["delivery.promised_by_date"],
+        value=str(date.today() - timedelta(days=1)),
+    )
+    service.apply_fulfillment_event("con_test01", "deliver", scenario="late")
+    stored = [r for r in store.list("fact") if r.get("key") == "price.amount_paise"]
+    assert stored and stored[0]["value"] == 1149900
 
 
 # ------------------------------------------------------------------ replacement

@@ -1,6 +1,6 @@
 # UI SYSTEM HANDOFF — Agent G (Frontend Design System)
 
-Status: **COMPLETE — all owned files written; tsc clean on owned paths; build verified for design-system scope** (see Tests section for the parallel-agent caveat).
+Status: **COMPLETE — tsc 0 errors app-wide, `next build` GREEN (all routes generated).**
 
 ---
 
@@ -38,7 +38,7 @@ page (§28 `/`).
 | `app/layout.tsx` | next/font loading (vars: --font-instrument-serif/--font-inter/--font-plex-mono), metadata |
 | `app/page.tsx` | landing page per plan §28 |
 | `lib/design.ts` | palette consts, statusTone(status), MOTION consts |
-| `lib/format.ts` | formatINR(paise), formatINRExact, formatDateTime, formatDate, formatTime, shortHash(10 chars), formatPct |
+| `lib/format.ts` | formatINR(paise), formatINRExact, formatDateTime, formatDate, formatTime, shortHash(10 chars), formatPct, prettyJson, payloadSummary |
 | `lib/api.ts` | API const, ApiError{status,message,url}, apiGet<T>, apiPost<T>, apiTry<T> (null-on-failure) |
 | `lib/types.ts` | ContractStatus, BuyerIntent, MerchantOffer, DanteContract, DomainEvent, TIMELINE_CATEGORIES |
 | `components/editorial/*` | Rule, SectionLabel, Folio, PullQuote, Dateline, StatNumeral, MarginNote |
@@ -124,6 +124,8 @@ formatINR(paise)            // ₹11,499 (maximumFractionDigits 0)
 formatINRExact(paise)       // ₹11,499.00 for audit surfaces
 formatDateTime(iso)         // "25 Aug 2026, 4:32 pm"
 shortHash(h)                // first 10 chars, "—" if falsy
+prettyJson(v)               // indented JSON for audit viewers; "—" when empty
+payloadSummary(payload)     // one-line "k=v, k=v" event summary
 apiGet<T>(path), apiPost<T>(path, body?)   // throw ApiError{status,message,url} on failure
 apiTry<T>(path)             // resolves null instead of throwing — use for stat strips
 API                         // base URL from NEXT_PUBLIC_API_URL ?? http://localhost:8000
@@ -149,22 +151,21 @@ palette                     // raw hex consts for SVG/canvas work
 
 ## Tests / build results
 
-- `npx tsc --noEmit`: **0 errors in owned files** (app/page, app/layout,
-  app/globals via CSS build, lib/*, components/editorial, components/commerce,
-  components/ui). Remaining tsc errors at handoff time are in Agent H's
-  in-progress files (`app/buy/_components/*`, `app/contract/[id]/_components/*`
-  importing a not-yet-written `./atoms` barrel, one `warranty_type` narrowing
-  slip in OfferSpread.tsx lines 39–40, missing `shortHash` import in
-  AuthorizationCard.tsx line 103, `scope` field reference at line 93 —
-  AuthorityEnvelope has no `scope` in the frozen types; it does in the backend
-  model, so H likely wants to add it to their local type).
-- `npx next build`: design-system scope compiles (globals.css @theme/@utility
-  parse clean after fixing one nested-@utility issue). Full-page build was
-  blocked only by H's missing `_components/atoms.tsx`; re-run once H lands it.
+- `npx tsc --noEmit`: **0 errors across the entire apps/web tree** (final run,
+  after H/I landed their in-flight fixes). Owned files were clean throughout;
+  I additionally unblocked Agent I's timeline page by adding the two helpers it
+  imports from lib/format (`prettyJson`, `payloadSummary`).
+- `npx next build`: **GREEN** — compiled + type-checked + static generation of
+  all 7 pages succeeded. Route sizes: / 1.96 kB (108 kB first load),
+  /buy 4.47 kB, /merchant 7.96 kB, dynamic contract/audit routes as listed.
 - Not run: dev server (per instructions).
 
 ## Known risks
 
+0. **`palette` in lib/design.ts is a cross-agent contract** — Agent I's
+   `components/rights-graph/RightsGraph.tsx` imports `{ palette }` and reads its
+   keys (`paper`, `ink`, `rule`, `signal`, `success`, `warning`, `danger`,
+   ...). Keys are FROZEN; additive-only changes, never renames.
 1. **Agent H's local atoms barrel duplicates this kit** (`app/buy/_components/atoms.tsx`
    re-exports Rule/Badge/etc. locally). If both survive, there will be two sources
    of truth for primitives. Recommend integration keeps `components/**` as canon

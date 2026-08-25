@@ -94,6 +94,16 @@ _BRAND_CANON = {
     "mercusys": "Mercusys",
     "anker": "Anker",
     "belkin": "Belkin",
+    # Aster Electronics catalog brands (Agent J eval finding #4)
+    "zephyr": "Zephyr",
+    "orbio": "Orbio",
+    "soniq": "Soniq",
+    "kaira": "Kaira",
+    "voltaq": "Voltaq",
+    "hexon": "Hexon",
+    "lumenx": "LumenX",
+    "quanta": "Quanta",
+    "nucleon": "Nucleon",
 }
 
 _CATEGORIES = [
@@ -112,9 +122,74 @@ _CATEGORIES = [
 _RUPEE_AMOUNT = r"(?:₹|rs\.?|inr)\s*([0-9][0-9,]*(?:\.[0-9]+)?)"
 _AMOUNT_UNIT = r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(k|thousand|lakh|lac)?"
 _UNDER_WORDS = (
-    r"(?:under|below|less\s+than|<=?|at\s+most|up\s+to|"
-    r"not\s+(?:over|above|exceeding)|max(?:imum)?(?:\s+of)?)"
+    r"(?:under|below|less\s+than|<=?|at\s+most|up\s+to|max(?:imum)?(?:\s+(?:of|out))?"
+    r"|not\s+(?:over|above|exceeding)|budget(?:ary)?\s+(?:cap|limit)?\s*(?:of|at|is)?\s*"
+    r"|capped?\s+at|cap(?:ped)?\s+at|tops?\s+(?:out\s+)?at|willing\s+to\s+go\s+to"
+    r"|spend\s+(?:up\s+)?to|go\s+(?:up\s+)?to)"
 )
+_TRAILING_CAP_WORDS = (
+    r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(k|thousand|lakh|lac)?\s*"
+    r"(?:max|maximum|tops?|budget|ceiling|upper\s+limit|at\s+(?:the\s+)?most|"
+    r"or\s+(?:less|under|below)|and\s+no\s+more)\b"
+)
+_WORD_NUMBERS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+}
+_BUCKS = r"\b([0-9][0-9,]*)\s*(?:bucks?|rupees)\b"
+
+
+def _word_number_value(words: str) -> float | None:
+    """'fifteen thousand' -> 15000; 'twenty five k' handled by caller units."""
+    parts = words.lower().split()
+    total = 0.0
+    current = 0.0
+    saw_any = False
+    for p in parts:
+        if p in _WORD_NUMBERS:
+            v = _WORD_NUMBERS[p]
+            if v == 100:
+                current = max(current, 1) * 100
+            else:
+                current += v
+            saw_any = True
+        elif p in ("thousand", "k"):
+            total += (current or 1) * 1000
+            current = 0.0
+        elif p in ("lakh", "lac"):
+            total += (current or 1) * 100_000
+            current = 0.0
+        else:
+            return None
+    total += current
+    return total if saw_any else None
 
 
 def _to_paise(number_str: str, unit: str | None = None) -> int:
@@ -151,9 +226,30 @@ def extract_price_caps(text: str) -> tuple[int | None, list[Constraint]]:
         flags=re.IGNORECASE,
     ):
         caps.append(_to_paise(m.group(1), m.group(2)))
-    # bare "<=12k" style already covered; also "12000 rupees"
-    for m in re.finditer(r"\b([0-9][0-9,]*)\s*rupees\b", text, flags=re.IGNORECASE):
+    # trailing cap style: "150k max", "12k budget", "500 bucks tops", "13k or less"
+    for m in re.finditer(_TRAILING_CAP_WORDS, text, flags=re.IGNORECASE):
+        caps.append(_to_paise(m.group(1), m.group(2)))
+    # "500 bucks" / "12000 rupees" without any lead/trail word
+    for m in re.finditer(_BUCKS, text, flags=re.IGNORECASE):
         caps.append(_to_paise(m.group(1)))
+    # word numbers: "under fifteen thousand", "budget ten thousand"
+    for m in re.finditer(
+        _UNDER_WORDS + r"\s+((?:[a-z]+\s*){1,4})", text, flags=re.IGNORECASE
+    ):
+        phrase = m.group(1).strip()
+        # durations like "under three days" are not money
+        if re.search(r"\b(days?|hours?|minutes?|weeks?|months?)\b", phrase):
+            continue
+        val = _word_number_value(phrase)
+        if val is not None:
+            caps.append(int(round(val * 100)))
+    # leading "12k budget," style: number followed by the word budget
+    for m in re.finditer(
+        r"\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*(k|thousand|lakh|lac)?\s+budget\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        caps.append(_to_paise(m.group(1), m.group(2)))
     if not caps:
         return None, []
     constraints = [
@@ -166,14 +262,17 @@ def extract_category(text_l: str) -> list[Constraint]:
     for token, category in _CATEGORIES:
         if re.search(rf"\b{token}s?\b", text_l):
             return [Constraint(key="category", op="eq", value=category)]
+    # bare "over-ears" / "over-ear cans" imply headphones without saying it
+    if re.search(r"\bover[- ]?ears?\b|\bover[- ]?ear\s+(?:cans|headsets?)\b", text_l):
+        return [Constraint(key="category", op="eq", value="headphones")]
     return []
 
 
 def extract_attributes(text_l: str) -> list[Constraint]:
     out: list[Constraint] = []
-    if re.search(r"\bover[- ]?ear\b", text_l):
+    if re.search(r"\bover[- ]?ears?(?:\s+(?:cans|headphones|headsets?))?\b", text_l):
         out.append(Constraint(key="attributes.form_factor", op="eq", value="over-ear"))
-    elif re.search(r"\bon[- ]?ear\b", text_l):
+    elif re.search(r"\bon[- ]?ears?\b", text_l):
         out.append(Constraint(key="attributes.form_factor", op="eq", value="on-ear"))
     elif re.search(r"\bearbuds?\b", text_l):
         out.append(Constraint(key="attributes.form_factor", op="eq", value="earbuds"))
@@ -197,17 +296,31 @@ def extract_warranty(text_l: str) -> list[Constraint]:
         p in text_l
         for p in (
             "manufacturer warranty",
-            "india manufacturer warranty",
+            "warranty from the manufacturer",
+            "manufacturer-backed",
+            "manufacturer backed",
+            "warranty must be manufacturer",
             "official warranty",
             "brand warranty",
             "indian manufacturer",
+            "india manufacturer",
         )
+    ) or re.search(r"\bmanufactur(?:er|er's)?\b[^.;]{0,40}\bwarrant", text_l) is not None
+    seller = "seller warranty" in text_l or re.search(
+        r"\bwarrant[^.;]{0,30}\bseller\b|\bseller[- ]type\b", text_l
+    ) is not None
+    region_in = bool(
+        re.search(r"\bin india\b|\bindia[n']?s?\b|\bvalid in india\b|\bindia\b", text_l)
     )
-    seller = "seller warranty" in text_l
+    region_ae = any(p in text_l for p in ("uae", "dubai"))
     if seller and not manufacturer:
-        return [Constraint(key="warranty.type", op="eq", value="seller")]
+        out = [Constraint(key="warranty.type", op="eq", value="seller")]
+        # "seller warranty ... valid in India" pins the seller-warranty region too
+        if region_in:
+            out.append(Constraint(key="warranty.region", op="eq", value="IN"))
+        return out
     if manufacturer:
-        region = "AE" if any(p in text_l for p in ("uae", "dubai")) else "IN"
+        region = "AE" if region_ae else "IN"
         return [
             Constraint(key="warranty.type", op="eq", value="manufacturer"),
             Constraint(key="warranty.region", op="eq", value=region),
@@ -215,18 +328,34 @@ def extract_warranty(text_l: str) -> list[Constraint]:
     return []
 
 
+def extract_condition(text_l: str) -> list[Constraint]:
+    """'brand new' / 'new condition' / 'only brand new' -> condition=new."""
+    if re.search(r"\bbrand[- ]new\b|\bnew\s+condition\b|\bmust\s+be\s+new\b", text_l):
+        return [Constraint(key="condition", op="eq", value="new")]
+    return []
+
+
 def extract_delivery(text_l: str, now: datetime | None = None) -> list[Constraint]:
     now = now or datetime.now(UTC)
     deadline_iso: str | None = None
-    m = re.search(r"\bwithin\s+([0-9]+)\s*days?\b", text_l)
+    m = re.search(r"\b(?:within|under)\s+([0-9]+)\s*days?\b", text_l)
     if m:
         deadline_iso = (now + timedelta(days=int(m.group(1)))).date().isoformat()
-    elif re.search(r"\b(by\s+)?tomorrow\b|\bnext\s+day\b", text_l):
+    else:
+        m = re.search(
+            r"\b(?:within|under)\s+((?:[a-z]+\s*){1,3}?)\s*days?\b", text_l
+        )
+        if m:
+            val = _word_number_value(m.group(1).strip())
+            if val is not None:
+                deadline_iso = (now + timedelta(days=int(val))).date().isoformat()
+    if deadline_iso is None and re.search(r"\b(by\s+)?tomorrow\b|\bnext\s+day\b", text_l):
         deadline_iso = (now + timedelta(days=1)).date().isoformat()
     else:
         m = re.search(
-            r"\b(?:arrive|arrives|delivered?|delivery|get\s+(?:it|them))?[^.;]*?"
-            r"\b(?:by|before)\s+"
+            r"\b(?:arrive[sd]?|arriving|delivered?|delivery|get\s+(?:it|them)|come)?[^.;]*?"
+            r"\b(?:by|before)\s+(?:this\s+(?:coming\s+)?)?(?:the\s+)?"
+            r"(?:next\s+)?"
             r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
             text_l,
         )
@@ -243,7 +372,7 @@ def extract_brands(text_l: str) -> list[Preference]:
     for token, canon in _BRAND_CANON.items():
         if token in seen:
             continue
-        if re.search(rf"\b{re.escape(token)}\b", text_l):
+        if re.search(rf"\b{re.escape(token)}s?\b", text_l):
             seen.add(token)
             # collapse alias pairs onto the canonical name once
             if not any(p.value == canon for p in prefs):
@@ -264,10 +393,15 @@ def rule_compile(raw_text: str) -> BuyerIntent:
     hard.extend(extract_delivery(text_l, now))
 
     substitutions_allowed = not re.search(
-        r"\bno\s+substitutes?\b|\bno\s+alternatives?\b|\bexactly\b", text_l
+        r"\bno\s+substitutes?\b|\bno\s+alternatives?\b|"
+        r"\bdo\s+not\s+substitut\w*\b|\bdon'?t\s+substitut\w*\b|"
+        r"\bnot?\s+to\s+be\s+substituted\b|\bsubstitutions?\s+(?:are\s+)?not\s+(?:allowed|accepted)\b|"
+        r"\bexactly\b",
+        text_l,
     )
 
     soft = extract_brands(text_l)
+    hard.extend(extract_condition(text_l))
 
     outcome_bits: list[str] = []
     keys: list[str] = []

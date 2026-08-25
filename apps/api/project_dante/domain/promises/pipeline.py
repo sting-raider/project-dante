@@ -30,12 +30,15 @@ BASELINE_MATERIAL_KEYS = {
     "delivery.promised_by_date",
 }
 
-# Intent constraint key -> promise key it directly satisfies.
+# Intent constraint key -> promise key it directly satisfies. Accepts both
+# the compiler's bare keys and dotted attribute keys.
 CONSTRAINT_TO_PROMISE = {
     "max_price_paise": "price.amount_paise",
     "category": "category",
     "form_factor": "attributes.form_factor",
+    "attributes.form_factor": "attributes.form_factor",
     "anc": "attributes.anc",
+    "attributes.anc": "attributes.anc",
     "warranty.type": "warranty.type",
     "warranty.region": "warranty.region",
     "delivery_deadline": "delivery.promised_by_date",
