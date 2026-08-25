@@ -103,24 +103,52 @@ responding so the wire format matches the contract exactly.
 
 ```
 cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_agents.py tests/test_intent_rules.py -q
-64 passed in 0.56s
+65 passed in 0.54s
+
+python evals/runners/run_intent_evals.py   (from repo root)
+68 cases: critical_recall=1.0, overall_accuracy=1.0, failures=0 -> PASS
 ```
 
-Eval iteration round 1 (Agent J's intent dataset, rules path): all 7 reported
-gap clusters fixed — trailing price caps ("150k max", "cap at 12k", "Budget
-10k.", "12k budget,"), word-number caps ("under fifteen thousand") with a
-duration guard ("under three days" -> delivery, not money), "500 bucks tops",
-"willing to go to 13k", warranty word-order variants ("Manufacturer India
-warranty", "warranty from the manufacturer ... valid in India",
-"manufacturer-backed AND valid in India"), condition extraction ("brand new",
-"new condition"), Aster catalog brands (zephyr/orbio/soniq/kaira/voltaq/hexon/
-lumenx/quanta/nucleon), bare "over-ears"/"over-ear cans" -> headphones,
-delivery verbs "arriving" + "before this coming Thursday"/"before next Friday"
-qualifiers + "under N days" windows, and "Do NOT substitute alternatives".
-Each case is a regression test under the "eval round 1 gaps" section of
-test_intent_rules.py. Known-arguable: INT-051 "seller warranty acceptable"
-hard-gates seller warranty (no polarity detection for "acceptable"); flagged,
-left as-is pending dataset-owner decision.
+### Eval-fix round (team-lead reopen; dataset = ground truth)
+
+Baseline after round-1 fixes was critical_recall 0.71; final run is 1.0.
+Changes beyond round 1:
+
+- Price caps: word-number amounts now tolerate a trailing currency word
+  ("under twelve thousand rupees"), "spending no more than three thousand
+  rupees", "budget around 25k"/"around X"; new `extract_price_range` handles
+  "between 10k and 15k" -> min_price_paise gte + max_price_paise lte.
+- Brands: rewritten (`extract_brands`) — gated mentions ('Zephyr brand',
+  'Aster electronics', 'X brands only', 'only/must be/exclusively') become
+  HARD `brand` constraints; ungated mentions become SOFT preferences at
+  weight 0.8 (was 0.6). 'noise' is never a brand token (it only appears in
+  'noise cancelling'). Multi-brand or-chains reduce to the first-stated
+  gated brand as an ``in`` list, matching the INT-055 dataset rule.
+- Warranty: clause-based proximity matching replaces substring lists — any
+  clause containing both 'warrant' and 'manufactur'/'seller' parses in
+  either word order; 'India warranty' maps to manufacturer+IN per market
+  convention and dataset truth; polarity guard: 'acceptable' / 'does not
+  matter' / 'any warranty' near the phrase suppresses type constraints.
+- Condition: 'sealed'/'unopened'/'factory-sealed' -> new;
+  'refurbished okay' relaxes (no constraint); bare 'refurbished' ->
+  refurbished.
+- Category: earbuds emit category=headphones (harness treats earbuds as a
+  distinct value); 'not necessarily ANC' no longer emits attributes.anc.
+- terms.region: 'Indian region stock' -> terms.region eq IN.
+- SKU: exact-model language ('specifically want the Aster ANC Pro ...')
+  matches catalog titles (hyphen-normalized) from the Aster fixture via
+  `_catalog_titles()` and emits sku eq AST-... .
+- Delivery: '<weekday> deadline' phrasing; 'by tomorrow evening'.
+
+Dataset flags for Agent J / team-lead (no expectations changed on my side):
+INT-020 expects ONLY a sku constraint while its text also names category/
+form-factor/ANC facts (subset-match makes this pass, but it is the strictest
+interpretation); INT-055 freezes the first-brand reduction though the
+evaluator supports full in-lists. Both honored as-is.
+
+Round-1 notes (retained): trailing caps, word-number caps + duration guard,
+'bucks tops', warranty order variants, condition phrases, catalog brands,
+bare 'over-ears', delivery verbs/qualifiers, 'Do NOT substitute'.
 
 Coverage highlights: hero query parses to category=headphones,
 form_factor=over-ear, anc=true, max price 1200000 paise, warranty

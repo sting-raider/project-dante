@@ -79,6 +79,7 @@ P_REFUND_FULL = "P-REFUND-01"  # full-refund reason allow-list
 P_REFUND_FULL_AUTO = "P-REFUND-03"  # autonomous full-refund threshold
 P_REFUND_PARTIAL = "P-REFUND-04"  # partial-refund reasons + auto ceiling
 P_GENERIC = "P-GENERIC-01"  # structural validity (type/currency/contract)
+P_SAFETY = "P-SAFETY-01"  # replay safety: mandatory idempotency key
 
 
 @lru_cache(maxsize=1)
@@ -260,6 +261,22 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
     contract_id = proposal.get("contract_id") or ""
 
     # --- structural gates -------------------------------------------------
+    # Replay-safety gate (plan §9 invariant 5): every money action MUST carry
+    # an idempotency key. Checked first — without it no external effect can
+    # ever be made replay-safe, whatever the rest of the proposal says.
+    idem_key = proposal.get("idempotency_key")
+    if not isinstance(idem_key, str) or not idem_key.strip():
+        return _finish(proposal, contract_id, _make_decision(
+            decision="DENY",
+            policy_ids=[P_SAFETY],
+            reason_codes=["MISSING_IDEMPOTENCY_KEY"],
+            explanation=(
+                "Money action is missing a non-empty idempotency_key; replay "
+                "safety (plan §9.5) requires every money action to carry one, "
+                "so this proposal is denied before any other check."
+            ),
+        ))
+
     if action_type not in {"create_order", "refund_full", "refund_partial"}:
         return _finish(proposal, contract_id, _make_decision(
             decision="DENY",
@@ -688,6 +705,9 @@ _BREACH_FAMILY_STATUSES = {
 
 def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
     """Amount/payment/policy-drift validation shared by both executor paths."""
+    idem = ma.get("idempotency_key")
+    if not isinstance(idem, str) or not idem.strip():
+        return False, "money action has no non-empty idempotency_key (replay safety)"
     contract = STORE.get(ma["contract_id"])
     if contract is None:
         return False, "contract vanished between evaluation and execution"

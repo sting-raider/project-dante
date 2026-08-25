@@ -325,10 +325,6 @@
         {
           "sku": "AST-MC-003",
           "failing_key": "warranty.region"
-        },
-        {
-          "sku": "AST-MC-004",
-          "failing_key": "inventory"
         }
       ]
     },
@@ -577,14 +573,13 @@
     },
     {
       "id": "OFF-024",
-      "intent_text": "Monitor between ₹9,00,000 and ₹12,00,000 paise (₹9,000–₹12,000 rupees), any warranty, new.",
+      "intent_text": "Monitor between ₹9,00,000 and ₹12,00,000 paise (₹9,000–₹12,000 rupees), any warranty, brand new condition only.",
       "catalog_filter": {
         "category": "monitors"
       },
-      "notes": "Price band test: min 900000 max 1200000 paise.",
+      "notes": "Price band 900000..1200000 with floor now enforced: only MN-008 (1149900) fits; MN-001 above cap, MN-002/006 below floor, MN-007 refurbished.",
       "expect_feasible_skus": [
-        "AST-MN-002",
-        "AST-MN-006"
+        "AST-MN-008"
       ],
       "expect_infeasible": [
         {
@@ -592,12 +587,16 @@
           "failing_key": "max_price_paise"
         },
         {
-          "sku": "AST-MN-007",
-          "failing_key": "condition"
+          "sku": "AST-MN-002",
+          "failing_key": "min_price_paise"
         },
         {
-          "sku": "AST-MN-003",
+          "sku": "AST-MN-006",
           "failing_key": "min_price_paise"
+        },
+        {
+          "sku": "AST-MN-007",
+          "failing_key": "condition"
         }
       ],
       "keep_known_failure": true

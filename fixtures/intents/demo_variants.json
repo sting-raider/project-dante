@@ -1,0 +1,36 @@
+{
+  "id": "demo_variant_intents",
+  "synthetic": true,
+  "intents": [
+    {
+      "id": "var_happy",
+      "scenario_id": "demo_correct_delivery",
+      "raw_text": "ANC over-ear headphones under ₹12,000, India manufacturer warranty, arrive by Thursday, and do not spend over ₹12,000 total including shipping.",
+      "source_case": "INT-019"
+    },
+    {
+      "id": "var_late",
+      "scenario_id": "demo_late_delivery",
+      "raw_text": "12k budget, ANC over-ears, Thursday deadline non-negotiable.",
+      "source_case": "INT-034"
+    },
+    {
+      "id": "var_wrong_variant",
+      "scenario_id": "demo_wrong_region",
+      "raw_text": "Do not exceed 11,499 rupees for over-ear ANC headphones. Manufacturer India warranty. Here by Thursday without fail.",
+      "source_case": "INT-063"
+    },
+    {
+      "id": "var_contradictory",
+      "scenario_id": "demo_impossible",
+      "raw_text": "I said UNDER 2000 for the laptop. Why is this so hard. Maximum two thousand rupees. Laptop.",
+      "source_case": "INT-066"
+    },
+    {
+      "id": "var_ambiguous",
+      "scenario_id": "demo_no_constraints",
+      "raw_text": "buy me some headphones",
+      "source_case": "INT-025"
+    }
+  ]
+}

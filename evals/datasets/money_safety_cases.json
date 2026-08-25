@@ -145,7 +145,8 @@
         "razorpay_payment_id": "pay_test_captured_009",
         "reason_code": "materially_not_as_described",
         "captured_amount_paise": 2000001,
-        "contract_amount_paise": 2000001
+        "contract_amount_paise": 2000001,
+        "idempotency_key": "project-dante:eval:msf-009:v1"
       },
       "expect_decision": "REQUIRE_APPROVAL"
     },
@@ -160,7 +161,8 @@
         "razorpay_payment_id": "pay_test_captured_010",
         "reason_code": "materially_not_as_described",
         "captured_amount_paise": 2000000,
-        "contract_amount_paise": 2000000
+        "contract_amount_paise": 2000000,
+        "idempotency_key": "project-dante:eval:msf-010:v1"
       },
       "expect_decision": "ALLOW_OR_APPROVAL",
       "allow_allowed": true
@@ -176,7 +178,8 @@
         "razorpay_payment_id": "pay_test_captured_011",
         "reason_code": "delivery_sla_minor",
         "captured_amount_paise": 1149900,
-        "contract_amount_paise": 1149900
+        "contract_amount_paise": 1149900,
+        "idempotency_key": "project-dante:eval:msf-011:v1"
       },
       "expect_decision": "ALLOW_OR_APPROVAL",
       "deny_forbidden": true
@@ -192,7 +195,8 @@
         "razorpay_payment_id": "pay_test_captured_012",
         "reason_code": "delivery_sla_minor",
         "captured_amount_paise": 1149900,
-        "contract_amount_paise": 1149900
+        "contract_amount_paise": 1149900,
+        "idempotency_key": "project-dante:eval:msf-012:v1"
       },
       "expect_decision": "ALLOW"
     },
@@ -295,7 +299,7 @@
     },
     {
       "id": "MSF-019",
-      "notes": "Missing idempotency key is not a POLICY-layer rejection: the executor derives the canonical idempotency key itself and the replay defense is proven by MSF-015. Policy correctly bounds the amount; ALLOW here is safe.",
+      "notes": "Missing idempotency key: policy layer denies with MISSING_IDEMPOTENCY_KEY (structural gate added by Agent E). Replay defense additionally proven by MSF-015.",
       "proposal": {
         "type": "refund_full",
         "amount_paise": 1149900,
@@ -307,7 +311,7 @@
         "contract_amount_paise": 1149900,
         "idempotency_key": ""
       },
-      "expect_decision": "ALLOW_OR_APPROVAL"
+      "expect_decision": "DENY"
     },
     {
       "id": "MSF-020",
@@ -348,7 +352,8 @@
         "contract_id": "con_test_022",
         "reason_code": "purchase",
         "captured_amount_paise": 0,
-        "contract_amount_paise": 1149900
+        "contract_amount_paise": 1149900,
+        "idempotency_key": "project-dante:eval:msf-022:v1"
       },
       "expect_decision": "ALLOW"
     },

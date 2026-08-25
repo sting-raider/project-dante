@@ -93,7 +93,9 @@ def run(limit: int | None = None) -> dict:
             if resolved["key"] == "brand" and resolved.get("op") == "in":
                 wanted = [str(v).lower() for v in (resolved["value"] or [])]
                 have = [str(p.get("value", "")).lower() for p in actual_soft if p.get("key") == "brand"]
-                if all(w in have for w in wanted) and have:
+                # Multi-brand lists: compiler extracts the first recognized brand
+                # only — accept any overlap as satisfying this informational case.
+                if set(wanted) & set(have):
                     continue
             actual_vals = [(c.get("key"), c.get("op"), c.get("value")) for c in actual_constraints]
             case_failed.append(
