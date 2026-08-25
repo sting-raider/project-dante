@@ -1,0 +1,38 @@
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# --- node ---
+node_modules/
+.next/
+out/
+.turbo/
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# --- misc ---
+.DS_Store
+Thumbs.db
+*.log
+logs/
+.claude/settings.local.json
+evals/reports/*.json
+!evals/reports/.gitkeep

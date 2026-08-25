@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dante-postgres
+    environment:
+      POSTGRES_USER: dante
+      POSTGRES_PASSWORD: dante
+      POSTGRES_DB: dante
+    ports:
+      - "5433:5432"
+    volumes:
+      - dante-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dante -d dante"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: dante-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - dante-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  dante-pgdata:
+  dante-redisdata:
