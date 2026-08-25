@@ -55,11 +55,11 @@ def _recompute_contract_hash(contract: dict) -> str | None:
     # like-for-like with what select-offer froze (volatile keys stripped from
     # the offer view; set hash over sorted normalized key/value pairs).
     try:
+        from project_dante.domain.hashing import canonical_json
         from project_dante.domain.promises.pipeline import (
             VOLATILE_OFFER_KEYS,
             compute_contract_hash,
         )
-        from project_dante.domain.hashing import canonical_json
 
         stable = {k: v for k, v in offer.items() if k not in VOLATILE_OFFER_KEYS and k != "_type"}
         promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract["id"]]

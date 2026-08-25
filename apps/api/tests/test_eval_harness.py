@@ -107,8 +107,8 @@ def test_injection_corpus_all_treated_as_data():
 
 def test_injection_structured_data_outranks_text_claims():
     """Direct: a text claim contradicting structured terms can't win."""
-    from project_dante.domain.promises.pipeline import extract_promises
     from project_dante.db.store import STORE
+    from project_dante.domain.promises.pipeline import extract_promises
 
     STORE.reset()
     offer = {

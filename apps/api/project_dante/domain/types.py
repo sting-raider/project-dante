@@ -341,9 +341,15 @@ class MoneyActionProposal(DanteModel):
     policy_snapshot_hash: str = ""
     idempotency_key: str
 
-    status: Literal["proposed", "allowed", "approval_required", "denied", "executing", "executed", "failed"] = (
-        "proposed"
-    )
+    status: Literal[
+        "proposed",
+        "allowed",
+        "approval_required",
+        "denied",
+        "executing",
+        "executed",
+        "failed",
+    ] = "proposed"
     result_ref: str | None = None  # razorpay refund/order id once executed
 
 
