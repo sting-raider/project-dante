@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync deps
+        run: uv sync --extra dev
+      - name: Lint
+        run: uv run ruff check project_dante tests
+      - name: Tests
+        run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
