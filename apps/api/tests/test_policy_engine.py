@@ -358,3 +358,54 @@ class PolicySnapshotTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RefundStackingGuardTests(unittest.TestCase):
+    """Review finding: refunds were bounded by captured amount, not remaining
+    balance — full+partial stacks could exceed what was captured."""
+
+    def setUp(self):
+        STORE.reset()
+        LOG.reset()
+        contract = _mk_contract(cid="con_stack_1", amount=1_000_000)
+        payment_id = "pay_stack_1"
+        STORE.update(contract["id"], razorpay_payment_id=payment_id)
+        STORE.put({
+            "_type": "razorpay_payment", "id": payment_id,
+            "entity": "payment", "order_id": "order_stack_1",
+            "amount": 1_000_000, "amount_refunded": 0,
+            "currency": "INR", "status": "captured", "sandbox": True,
+        })
+        STORE.put({
+            "_type": "breach", "id": "br_stack", "contract_id": contract["id"],
+            "promise_id": "pr_x", "observed_fact_id": "obs_x",
+            "severity": "material", "reason_code": "MATERIAL_VARIANT_MISMATCH",
+        })
+        STORE.put({
+            "_type": "remedy", "id": "rem_stack", "contract_id": contract["id"],
+            "breach_id": "br_stack", "remedy_type": "refund_partial",
+            "amount_paise": 400_000, "status": "proposed",
+        })
+
+    def test_refunds_cannot_exceed_remaining_balance(self):
+        from project_dante.domain.money.policy import execute_remedy
+
+        # 700k already refunded on this payment; a further 400k would exceed.
+        pay = STORE.get("pay_stack_1")
+        pay["amount_refunded"] = 700_000
+        STORE.put(pay)
+
+        out = execute_remedy("rem_stack")
+        self.assertEqual(out["decision"]["decision"], "DENY")
+        self.assertFalse(out.get("executed", False))
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
+
+    def test_fully_refunded_payment_refuses_more(self):
+        from project_dante.domain.money.policy import execute_remedy
+
+        pay = STORE.get("pay_stack_1")
+        pay["amount_refunded"] = 1_000_000
+        STORE.put(pay)
+
+        out = execute_remedy("rem_stack")
+        self.assertEqual(out["decision"]["decision"], "DENY")
+        self.assertEqual(STORE.count("razorpay_refund"), 0)

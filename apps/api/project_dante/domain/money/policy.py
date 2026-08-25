@@ -184,6 +184,27 @@ def _captured_amount_paise(contract: dict[str, Any]) -> int | None:
     return None
 
 
+def _refunded_so_far_paise(payment_id: str | None) -> int:
+    """Total paise already refunded against a payment (0 when unknown).
+
+    Prefers the gateway payment record's ``amount_refunded``; falls back to
+    summing stored successful refund records for the payment.
+    """
+    if not payment_id:
+        return 0
+    pay = STORE.get(payment_id) or STORE.find_one("razorpay_payment", payment_id=payment_id)
+    if pay and isinstance(pay.get("amount_refunded"), int) and pay["amount_refunded"] >= 0:
+        return pay["amount_refunded"]
+    total = 0
+    for r in STORE.find("razorpay_refund", payment_id=payment_id):
+        amt = r.get("amount")
+        if isinstance(amt, int):
+            total += amt
+        elif isinstance(r.get("amount_paise"), int):
+            total += r["amount_paise"]
+    return total
+
+
 def _persist_and_link(
     proposal: dict[str, Any], decision: dict[str, Any], contract_id: str
 ) -> dict[str, Any]:
@@ -729,6 +750,21 @@ def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
         return False, "no captured amount on record for this contract"
     if amount > captured:
         return False, f"amount {amount} exceeds captured amount {captured}"
+    # Refund-stacking guard (review finding): bound every refund by the
+    # REMAINING refundable balance — prior refunds on this payment count
+    # against the ceiling, so full+partial stacks can never exceed captured.
+    refunded = _refunded_so_far_paise(ma.get("razorpay_payment_id"))
+    remaining = captured - refunded
+    if remaining <= 0:
+        return False, (
+            f"payment already fully refunded ({refunded}/{captured} paise); "
+            "no refundable balance remains"
+        )
+    if amount > remaining:
+        return False, (
+            f"amount {amount} exceeds remaining refundable balance {remaining} "
+            f"(captured {captured}, already refunded {refunded})"
+        )
     # K-01 executor mirror: a full refund must still be FULL at call time —
     # a downward tamper after evaluation must not close the case short.
     if ma.get("type") == "refund_full" and amount != captured:
