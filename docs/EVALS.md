@@ -8,7 +8,9 @@ verifier is designed to consume.
 
 - How to run: [`evals/README.md`](../evals/README.md)
 - Machine-readable: `evals/reports/summary.json` + per-suite `.json`/`.md`
-- Datasets: `evals/datasets/*.json` (197 cases total)
+- Datasets: `evals/datasets/*.json` — 147 cases total (68 intent, 26 offer,
+  25 breach, 28 money-safety); the prompt-injection suite's 50 payloads live
+  separately in `fixtures/adversarial/injection_corpus.json`
 
 ## Current results
 

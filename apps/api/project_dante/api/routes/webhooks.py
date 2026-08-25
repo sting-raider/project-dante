@@ -73,13 +73,24 @@ def _extract_entity(payload: dict[str, Any], kind: str) -> dict[str, Any] | None
 
 def _contract_for_order(order_id: str | None, notes: dict[str, Any] | None) -> dict | None:
     """Resolve the owning contract from the order id (primary) or the
-    contract_id we embedded in order notes at creation (fallback)."""
+    contract_id we embedded in order notes at creation (fallback).
+
+    Review finding: a foreign order id could claim any contract via the
+    notes fallback when the primary lookup missed. The fallback now only
+    fires when the resolved contract actually owns this order id — i.e. its
+    razorpay_order_id matches or it has none yet (pre-binding walk)."""
     if order_id:
         rec = STORE.find_one("contract", razorpay_order_id=order_id)
         if rec is not None:
             return rec
     if notes and notes.get("contract_id"):
-        return STORE.get(str(notes["contract_id"]))
+        cand = STORE.get(str(notes["contract_id"]))
+        if cand is not None:
+            bound = cand.get("razorpay_order_id")
+            # Accept only if unbound (about to be walked) or genuinely ours.
+            if not bound or str(bound) == str(order_id):
+                return cand
+        return None
     return None
 
 

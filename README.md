@@ -37,7 +37,8 @@ Buyer intent (natural language)
   → Webhook-confirmed payment (raw-body HMAC, idempotent, out-of-order safe)
   → Synthetic fulfillment (clearly labeled) → observed facts
   → Promise verification → MATERIAL BREACH detection
-  → Purchase Rights Graph (22-node graph of rights, evidence, fallbacks)
+  → Purchase Rights Graph spanning promises, entitlements, evidence, breaches,
+    and remedies (node count varies by purchase)
   → Deterministic remedy planner (replacement tried first, then refund)
   → Financial policy engine (ALLOW / REQUIRE_APPROVAL / DENY)
   → Real idempotent refund through Razorpay (test mode / sandbox adapter)
@@ -172,11 +173,16 @@ escalation attempts, demo-mode guards, repo-wide secrets scan, state-machine abu
 ```bash
 git clone https://github.com/sting-raider/project-dante.git
 cd project-dante/apps/api
-uv sync --extra-dev            # creates .venv
+uv sync --extra dev            # creates .venv
 cp ../../.env.example ../../.env   # optional; defaults work sandboxed
 .venv/Scripts/python.exe -m uvicorn project_dante.api.app:app --port 8000
 # health: http://localhost:8000/api/health
 ```
+
+The server reads `.env` from the repo root **or** `apps/api/.env` (the latter
+wins if both exist), regardless of working directory — real environment
+variables override both. Commands above are POSIX (Git Bash); PowerShell users
+set env vars with `$env:DANTE_STORE_PATH = ...` instead of the inline prefix.
 
 ### Frontend
 
@@ -190,7 +196,7 @@ npm run dev                    # http://localhost:3000
 
 ```bash
 cd apps/api
-.venv/Scripts/python.exe ../scripts/verify_e2e.py     # note path: scripts/ is repo-root
+.venv/Scripts/python.exe ../../scripts/verify_e2e.py   # scripts/ lives at repo root
 ```
 
 ### Tests + evals
@@ -225,10 +231,11 @@ apps/
       db/               store (JSON-persisted, Postgres-swappable interface), seed
     tests/              320 tests incl. red-team + webhook chaos
   web/                 Next.js 15 App Router frontend (editorial design system)
-packages/contracts/    (reserved)
+packages/contracts/    shared schemas (reserved; empty)
 evals/                 datasets, runners, reports
-fixtures/              catalog, adversarial corpora, demo intents
-docs/                  ARCHITECTURE THREAT_MODEL RAZORPAY EVALS DEMO_SCRIPT EXECUTION_STATUS FUTURE handoffs/
+fixtures/              catalog, adversarial corpora, injection corpus, demo intents
+docs/                  API_CONTRACT ARCHITECTURE THREAT_MODEL RAZORPAY EVALS DEMO_SCRIPT
+                       EXECUTION_STATUS FUTURE handoffs/
 infra/docker/          API + web images
 scripts/verify_e2e.py  full hero-flow verifier
 ```
