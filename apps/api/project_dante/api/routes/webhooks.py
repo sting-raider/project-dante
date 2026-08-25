@@ -103,10 +103,31 @@ _CAPTURE_WALK: dict[str, list[str]] = {
 
 
 def _walk_to_paid(contract_id: str, current: str) -> bool:
-    """Advance along the legal payment path as far as the machine allows."""
+    """Advance along the legal payment path as far as the machine allows.
+
+    Recovery semantics (webhook-chaos review finding): a walk interrupted
+    mid-way by an operational fault strands the contract at an intermediate
+    status with buyer money captured. Razorpay redelivers webhooks, so the
+    recovery path is to let a REDELIVERED capture resume the walk from
+    wherever the contract now sits — including intermediate statuses. The
+    dedupe layer keys on event id, so a *new* delivery id carrying the same
+    payload resumes cleanly instead of being swallowed as a duplicate.
+    """
     path = _CAPTURE_WALK.get(current)
     if not path:
-        return False
+        # Mid-walk stranding recovery: contract sits at an intermediate hop
+        # (e.g. PAYMENT_ORDER_CREATED after a crash) and a fresh capture
+        # arrives. Build the remaining path from that status.
+        path = _CAPTURE_WALK.get(
+            current,
+            next(
+                (v[i:] for k, v in _CAPTURE_WALK.items() if current in v
+                 for i, hop in enumerate(v) if hop == current),
+                None,
+            ),
+        )
+        if not path:
+            return False
     from_status = current
     for target in path:
         if not _safe_transition(contract_id, from_status, target):
