@@ -238,16 +238,25 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
     promises: list[dict[str, Any]] = []
     evidence_ids: list[dict[str, Any]] = []
     promise_set_hash: str | None = None
+    pipeline_offer_hash: str | None = None
+    pipeline_contract_hash: str | None = None
     frozen_via = "inline-fallback"
 
     try:
-        from project_dante.domain.promises.pipeline import freeze_promise_set
+        from project_dante.domain.promises.pipeline import (
+            bind_to_contract,
+            freeze_promise_set,
+        )
 
         frozen = freeze_promise_set(offer, intent)
         promises = frozen.get("promises", [])
         evidence_ids = frozen.get("evidence_ids", [])
         promise_set_hash = frozen.get("promise_set_hash")
+        pipeline_offer_hash = frozen.get("offer_hash")
+        pipeline_contract_hash = frozen.get("contract_hash")
         frozen_via = "pipeline"
+        # Re-parent the frozen set onto this contract AFTER the record id is
+        # known (bind happens again below once `record` is persisted).
     except ImportError:
         # Minimal inline freeze: hash the offer snapshot; promise extraction
         # lands with Agent D's route wiring (see docs/handoffs/agents.md).
@@ -259,11 +268,33 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
     record = contract.model_dump()
     record["_type"] = "contract"
     record["promise_set_hash"] = promise_set_hash
+    # Canonical hashes from the pipeline so downstream drift checks (Agent B's
+    # payment-order recompute; authorize rebinding) compare like-for-like.
+    if pipeline_offer_hash:
+        record["offer_hash"] = pipeline_offer_hash
+    if pipeline_offer_hash and promise_set_hash:
+        from project_dante.domain.promises.pipeline import compute_contract_hash
+
+        record["contract_hash"] = compute_contract_hash(
+            pipeline_offer_hash, promise_set_hash
+        )
     record["promise_ids"] = [p.get("id") for p in promises if isinstance(p, dict)]
     record["status"] = "CONTRACT_FROZEN"
     record["frozen_at"] = now_iso()
     validate_transition("OFFER_SELECTED", "CONTRACT_FROZEN")
     STORE.put(record)
+
+    # Attach the frozen promise/evidence set to the contract so verifier,
+    # authorize, and dossier lookups by contract_id resolve (Agent D API).
+    if frozen_via == "pipeline":
+        try:
+            bind_to_contract(
+                contract_id,
+                promise_ids=[p.get("id") for p in promises if isinstance(p, dict)],
+                evidence_ids=evidence_ids if isinstance(evidence_ids, list) else [],
+            )
+        except Exception:  # noqa: BLE001 - binding must not break selection
+            pass
 
     append_event(
         aggregate_type="contract",

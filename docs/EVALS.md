@@ -18,39 +18,33 @@ its output, transcribed.
 | Suite | Cases | Status | Headline metrics |
 |---|---|---|---|
 | Intent compilation | 68 | **PASS** | critical-constraint recall **1.0**, overall accuracy **1.0** |
-| Offer evaluation | 26 scenarios / 116 SKU checks | FAIL | hard-constraint violation rate **0.86%** (1 violation), scenario accuracy 96.2% |
-| Breach verification | 25 | **PASS** | F1 **0.75** all keys / **1.0** on supported keys, precision 1.0, FP 0 |
-| Money-action safety | 28 | **PASS** | unauthorized money actions **0** |
+| Offer evaluation | 26 scenarios / 116 SKU checks | **PASS** | hard-constraint violation rate **0.0**, scenario accuracy **1.0** |
+| Breach verification | 25 | **PASS** | F1 **1.0** on supported keys / 0.75 all-keys, precision 1.0, FP 0 |
+| Money-action safety | 28 | **PASS** | unauthorized money actions **0**, case accuracy 1.0 |
 | Prompt-injection defense | 50 payloads | **PASS** | violations **0**, treated_as_data rate **1.0** |
 
 ### Intent compilation — PASS
 
 68 natural-language buying requests through
 `project_dante.agents.compiler.rule_compile`. Coverage: price-cap formats
-(₹12,000 / Rs.12000 / 12k / "under fifteen thousand" word numbers / lakh
-notation), categories, over-ear/on-ear form factor, ANC, manufacturer-vs-seller
-warranty with region, weekday and relative delivery deadlines, brands,
-contradictory intents ("₹2,000 laptop"), no-substitution phrasing, ambiguous
-texts (must produce zero constraints), adversarial text ("ignore merchant
-refund policy") that must yield only genuine shopping constraints, and empty
-input. Critical-recall gate: **100%**.
+(₹12,000 / Rs.12000 / 12k / "under fifteen thousand" word numbers / lakh and
+paise-suffixed notation), price bands with floors (`min_price_paise`), currency-
+symbol ranges, categories, over-ear/on-ear form factor, ANC, manufacturer-vs-
+seller warranty with region, weekday and relative delivery deadlines, gated vs
+ungated brand mentions, contradictory intents ("₹2,000 laptop"),
+no-substitution phrasing, ambiguous texts (must produce zero constraints),
+adversarial text ("ignore merchant refund policy") that must yield only genuine
+shopping constraints, polarity guards ("seller warranty acceptable" emits no
+warranty constraint), and empty input. Critical-recall gate: **100%**.
 
-### Offer evaluation — FAIL (single known cause)
+### Offer evaluation — PASS
 
 26 scenarios keyed to the real catalog fixture (`fixtures/catalog/
-aster_catalog.json`, 112 products). The absolute bar from plan §30.2 is zero
-hard-constraint-violating selections. Current run: **1 violation in 116
-feasibility checks (0.86%)**, 0 false-negative SKUs, scenario accuracy 96.2%.
-The one open gap:
-
-1. **No price-floor support** (`OFF-024`). "between ₹9,000 and ₹12,000"
-   compiles to four `max_price_paise` caps; the ₹9,000 floor is dropped, so a
-   ₹6,499 monitor below the band is judged feasible.
-
-(A second gap — local-vs-UTC clock skew between the compiler's relative
-deadlines and the catalog loader's promised-by dates — was found by these evals
-and has since been fixed by the module owners; all five deadline scenarios now
-pass with 0 false negatives.)
+aster_catalog.json`, 112 products). The absolute bar from plan §30.2 — zero
+hard-constraint-violating selections — is met: **0 violations across 116
+feasibility checks**, scenario accuracy 1.0. The evaluator now also treats
+zero/negative inventory as a hard failure, so out-of-stock SKUs can never be
+selected.
 
 ### Breach verification — PASS
 
@@ -59,23 +53,23 @@ pass with 0 false negatives.)
 (IN→AE) and warranty flips → material `MATERIAL_VARIANT_MISMATCH`; ~2h late →
 minor vs ~25h late → material `DELIVERY_SLA_MISS`; condition downgrade →
 critical; identical/cosmetic/early/improved values → no breach (10 true
-negatives, **0 false positives**). All six misses are keys outside the
-verifier's observable set (`sku`, `brand`, `attributes.anc`,
-`warranty.duration_months`, `returns.window_days`, `accessories.included`) —
-reported as an explicit coverage backlog rather than hidden: F1 is 1.0 within
-the supported surface, 0.75 counting unobservable keys as misses.
+negatives, **0 false positives**). Within the verifier's observable surface
+F1 is **1.0**; six cases exercise keys outside that surface (`sku`, `brand`,
+`attributes.anc`, `warranty.duration_months`, `returns.window_days`,
+`accessories.included`) and are reported as an explicit coverage backlog rather
+than hidden — all-keys F1 counting them as misses is 0.75.
 
 ### Money-action safety — PASS
 
 28 adversarial proposals through the REAL policy engine and gated executor:
 negative/zero amounts, refund > captured (incl. one-paise-over), float and
 string amounts (`INVALID_AMOUNT_TYPE`), int64 overflow, non-INR currency,
-disallowed/injected reason codes (SQL-ish strings are inertly denied),
-approval threshold boundary (2000001 paise → `REQUIRE_APPROVAL`; exactly
-2000000 → autonomous `ALLOW` per strict-above semantics), cross-contract
-payment substitution → executor refuses (0 refunds), unknown payment → 0
-refunds, and 10× replay of the same idempotency key → exactly one refund
-effect. **Unauthorized money actions: 0.**
+disallowed/injected reason codes (SQL-ish strings are inertly denied), missing
+idempotency key (`MISSING_IDEMPOTENCY_KEY`), approval threshold boundary
+(2000001 paise → `REQUIRE_APPROVAL`; exactly 2000000 → autonomous `ALLOW` per
+strict-above semantics), cross-contract payment substitution → executor refuses
+(0 refunds), unknown payment → 0 refunds, and 10× replay of the same idempotency
+key → exactly one refund effect. **Unauthorized money actions: 0.**
 
 ### Prompt injection — PASS
 
@@ -87,19 +81,38 @@ emitted, structured `warranty.type` never changes, contradicting text claims
 are recorded unverified and non-material, and no money/order/policy records
 are ever created.
 
-## Known failures
+## Known limitations
 
-Honest list of what does NOT pass today:
+Honest boundaries that remain (none currently fail a gate):
 
-1. **Offer suite fails its zero-violation gate** due to missing price-floor
-   parsing (OFF-024, 1 under-band selection). No other violation class remains;
-   the earlier clock-skew false negatives are fixed.
-2. **Breach verifier coverage backlog**: delivered-SKU, brand, ANC-feature,
+1. **Breach verifier coverage backlog**: delivered-SKU, brand, ANC-feature,
    warranty-duration, return-window, and accessory observations are not
    compared because those keys have no fact→promise mapping yet.
-3. **Rules compiler boundaries** (documented, not gated off): no SKU/product-
-   name resolution (INT-020 scoped to the substitution flag); 'Aster' merchant-
-   name brand preference not extracted (INT-017 informational).
+2. **Multi-brand or-chains** reduce to the first-stated brand in the rules
+   compiler; full list parsing would need an evaluator-side multi-value match
+   to matter (it already supports `in` lists).
+3. **Calendar-sensitive demo deadlines**: weekday phrases resolve at run time;
+   a hero query said on the wrong day can legitimately yield zero feasible
+   offers (fail-closed evaluator behavior, not a bug).
+
+## Bugs this harness found and drove to fix
+
+The eval loop caught and tracked real integration bugs during the build:
+
+1. **Local-vs-UTC clock skew**: the compiler resolved relative deadlines from
+   UTC while the catalog loader stamped promised-by dates from local
+   `date.today()` — offers were mis-judged by a day during every UTC↔local
+   midnight window. Fixed by Agent F (loader uses UTC); Agent C added a
+   regression guard (`test_loader_and_compiler_clock_agree`).
+2. **mouse/mice category mismatch** in the evaluator's contains-match —
+   every mouse offer was hard-failed. Fixed via normalization.
+3. **Price-band floors dropped** ("between ₹9,000 and ₹12,000" produced only
+   max caps) and paise-suffixed amounts double-multiplied. Both fixed; OFF-024
+   went violation → pass.
+4. **Refurbished units passing new-only intents** when the condition phrase was
+   bare trailing ", new". Fixed.
+5. **Inventory ignored** by the evaluator — out-of-stock SKUs could be selected.
+   Now a hard failure `{inventory, gt, 0}`.
 
 ## Method notes
 
@@ -109,3 +122,5 @@ Honest list of what does NOT pass today:
   module changes behavior, expectations are updated only when the change is
   semantically correct (e.g. brands as soft preferences per §12.1), never to
   mask bugs.
+- Run pytest before `run_all.py` if you want the reports to hold full-suite
+  numbers: the wrapper runs subsets and rewrites the same report files.

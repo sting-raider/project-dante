@@ -573,7 +573,7 @@
     },
     {
       "id": "OFF-024",
-      "intent_text": "Monitor between ₹9,00,000 and ₹12,00,000 paise (₹9,000–₹12,000 rupees), any warranty, brand new condition only.",
+      "intent_text": "Monitor between ₹9,00,000 and ₹12,00,000 paise (₹9,000–₹12,000 rupees), any warranty, new.",
       "catalog_filter": {
         "category": "monitors"
       },

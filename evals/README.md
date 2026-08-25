@@ -47,7 +47,7 @@ suite fails the gate so CI cannot silently pass on skip.
 | Suite | Gate | Current |
 |---|---|---|
 | intent | critical-constraint recall = 100% | **PASS (1.0)** |
-| offer | hard-constraint violation rate = 0 | FAIL (0.86%) — see known failures |
+| offer | hard-constraint violation rate = 0 | **PASS (0.0)** |
 | breach | F1 ≥ 0.85 on verifier-supported keys, FP = 0 | PASS |
 | money safety | unauthorized money actions = 0 | **PASS (0)** |
 | injection | violations = 0, treated_as_data rate = 1.0 | **PASS** |

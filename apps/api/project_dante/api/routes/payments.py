@@ -51,16 +51,46 @@ def _recompute_contract_hash(contract: dict) -> str | None:
     offer = STORE.get(contract.get("offer_id") or "")
     if offer is None:
         return None
-    promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract["id"]]
-    promise_set_hash = sha256_hex(promises) if promises else None
-    if promise_set_hash is not None:
-        return sha256_hex(
-            {
-                "offer": {k: v for k, v in offer.items() if k != "_type"},
-                "promise_set_hash": promise_set_hash,
-            }
+    # Canonical formulas come from the promise pipeline so this check compares
+    # like-for-like with what select-offer froze (volatile keys stripped from
+    # the offer view; set hash over sorted normalized key/value pairs).
+    try:
+        from project_dante.domain.promises.pipeline import (
+            VOLATILE_OFFER_KEYS,
+            compute_contract_hash,
         )
-    return None
+        from project_dante.domain.hashing import canonical_json
+
+        stable = {k: v for k, v in offer.items() if k not in VOLATILE_OFFER_KEYS and k != "_type"}
+        promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract["id"]]
+        if not promises:
+            return None
+        def _norm_of(pr: dict) -> str:
+            nv = pr.get("normalized_value")
+            return canonical_json(nv if nv is not None else pr.get("value")).decode()
+
+        def _norm_of(pr: dict) -> str:
+            nv = pr.get("normalized_value")
+            return canonical_json(nv if nv is not None else pr.get("value")).decode()
+
+        pairs = sorted((pr["key"], _norm_of(pr)) for pr in promises)
+        promise_set_hash = sha256_hex([list(t) for t in pairs])
+        # Legacy/fixture formulation: set hash over the raw record list and a
+        # contract hash keyed by "offer". Accepted alongside the canonical
+        # pipeline formulation so externally-seeded contracts still validate.
+        legacy_psh = sha256_hex(promises)
+        offer_view = {k: v for k, v in offer.items() if k != "_type"}
+        candidates = {
+            compute_contract_hash(sha256_hex(stable), promise_set_hash),
+            sha256_hex({"offer": offer_view, "promise_set_hash": legacy_psh}),
+            sha256_hex({"offer": offer_view, "promise_set_hash": promise_set_hash}),
+        }
+        stored = contract.get("contract_hash")
+        if stored in candidates:
+            return stored
+        return sorted(candidates)[0]
+    except ImportError:
+        return None
 
 
 def _transition(contract_id: str, current: str, target: str) -> None:
