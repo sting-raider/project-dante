@@ -147,7 +147,10 @@ async def contract_timeline(
         or e.get("correlation_id") in chain
         or e.get("causation_id") in chain
         # freeze-time promise/evidence events re-parented onto the offer
-        or (e.get("aggregate_type") == "offer" and e.get("aggregate_id") == contract_rec.get("offer_id"))
+        or (
+            e.get("aggregate_type") == "offer"
+            and e.get("aggregate_id") == contract_rec.get("offer_id")
+        )
     ]
     seen_ids = set()
     deduped = []
