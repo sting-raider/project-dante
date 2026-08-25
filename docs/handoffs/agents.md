@@ -150,6 +150,25 @@ Round-1 notes (retained): trailing caps, word-number caps + duration guard,
 'bucks tops', warranty order variants, condition phrases, catalog brands,
 bare 'over-ears', delivery verbs/qualifiers, 'Do NOT substitute'.
 
+### Offer-eval round (Agent J cross-module findings)
+
+- Clock skew: compiler/evaluator use UTC; F's catalog_loader stamped
+  promised_by_date with local date.today(), flipping weekday/within-N-days
+  scenarios feasible<->infeasible during the local-vs-UTC midnight window
+  (5.5h daily at UTC+5:30). F fixed the loader to datetime.now(UTC).date();
+  a regression guard (`test_loader_and_compiler_clock_agree`) in
+  test_agents.py asserts the loader source stays on UTC and the pipeline
+  agrees end-to-end.
+- Evaluator: category 'mice' (catalog plural) now normalizes to 'mouse' when
+  checked against buyer constraints; zero/negative inventory is a hard
+  failure ({key: inventory, op: gt}) so out-of-stock offers can never be
+  selected.
+- Compiler: paise-suffixed amounts ('₹9,00,000 paise') are taken as-is
+  instead of x100; currency-symbol ranges ('₹9,000–₹12,000') parse as
+  min/max band; bare trailing ', new' / '(new)' now yields condition=new.
+- Final offer evals: scenario_accuracy=1.0, violation_rate=0.0 across 26
+  scenarios / 116 feasibility checks -> PASS; intent evals hold at 1.0.
+
 Coverage highlights: hero query parses to category=headphones,
 form_factor=over-ear, anc=true, max price 1200000 paise, warranty
 manufacturer+IN, delivery deadline = next Thursday; unknown-warranty offer

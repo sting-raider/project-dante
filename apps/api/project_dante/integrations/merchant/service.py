@@ -319,6 +319,50 @@ def _store_fact(fact: dict) -> dict:
     return fact
 
 
+def _materialize_evidence(
+    contract_id: str,
+    source_type: str,
+    artifact_id: str,
+    scenario_id: str,
+    payload: dict,
+) -> None:
+    """Create the REAL evidence artifact the facts/events reference.
+
+    Rights eligibility matches on evidence.source_type, so synthetic
+    shipment/delivery observations must be materialized as evidence records
+    (trusted_level=synthetic), not just referenced by id.
+    """
+    try:
+        from project_dante.domain.promises.pipeline import build_evidence
+
+        rec = build_evidence(
+            source_type=source_type,
+            payload=payload,
+            trusted_level="synthetic",
+            synthetic=True,
+            scenario_id=scenario_id,
+            contract_id=contract_id,
+        )
+        rec["id"] = artifact_id
+        STORE.put(rec)
+    except Exception:  # noqa: BLE001 - demo sim must not crash on pipeline drift
+        STORE.put(
+            {
+                "id": artifact_id,
+                "_type": "evidence",
+                "contract_id": contract_id,
+                "source_type": source_type,
+                "raw_payload_ref": f"store://{artifact_id}",
+                "sha256": "",
+                "observed_at": now_iso(),
+                "trusted_level": "synthetic",
+                "synthetic": True,
+                "scenario_id": scenario_id,
+                "payload": payload,
+            }
+        )
+
+
 def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = None) -> dict:
     """Inject a synthetic fulfillment observation for a demo contract.
 
@@ -330,6 +374,13 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
 
     if kind == "ship":
         artifact_id = new_id("ev")
+        _materialize_evidence(
+            contract_id,
+            "shipment_event",
+            artifact_id,
+            scenario_id,
+            {"carrier": "SynthEx", "status": "shipped", "synthetic": True},
+        )
         append_event(
             aggregate_type="contract",
             aggregate_id=contract_id,
@@ -352,6 +403,13 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
     if kind == "replacement_check":
         available = scenario != "unavailable"
         artifact_id = new_id("ev")
+        _materialize_evidence(
+            contract_id,
+            "merchant_api",
+            artifact_id,
+            scenario_id,
+            {"query": "replacement.inventory", "available": available, "synthetic": True},
+        )
         facts = [
             _fact(contract_id, "replacement.available", available, artifact_id, scenario_id)
         ]
@@ -383,6 +441,20 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
         delay_days = 3
 
     artifact_id = new_id("ev")
+    _materialize_evidence(
+        contract_id,
+        "delivery_event",
+        artifact_id,
+        scenario_id,
+        {
+            "scenario": scenario or "correct",
+            "carrier": "SynthEx",
+            "delivered_warranty": delivered_warranty,
+            "delivered_region": delivered_region,
+            "delay_days": delay_days,
+            "synthetic": True,
+        },
+    )
     append_event(
         aggregate_type="contract",
         aggregate_id=contract_id,

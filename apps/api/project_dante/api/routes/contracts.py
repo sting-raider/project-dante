@@ -127,13 +127,35 @@ async def contract_timeline(
     category: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """Append-only event trace for one contract, oldest first."""
-    _get_contract_or_404(contract_id)
+    contract_rec = _get_contract_or_404(contract_id)
     if category is not None and category not in _TIMELINE_CATEGORIES:
         raise HTTPException(
             status_code=422,
             detail=f"category must be one of {sorted(_TIMELINE_CATEGORIES)}",
         )
-    events = LOG.for_aggregate(contract_id)
+    # The canonical audit trail spans the whole causal chain: the intent that
+    # seeded this contract, the contract's own events, and everything that
+    # correlates to either (money actions, remedies, breaches, webhooks).
+    chain = {contract_id}
+    if contract_rec.get("intent_id"):
+        chain.add(contract_rec["intent_id"])
+    all_events = LOG.all()
+    events = [
+        e
+        for e in all_events
+        if e.get("aggregate_id") in chain
+        or e.get("correlation_id") in chain
+        or e.get("causation_id") in chain
+        # freeze-time promise/evidence events re-parented onto the offer
+        or (e.get("aggregate_type") == "offer" and e.get("aggregate_id") == contract_rec.get("offer_id"))
+    ]
+    seen_ids = set()
+    deduped = []
+    for e in sorted(events, key=lambda x: x.get("created_at") or ""):
+        if e["id"] not in seen_ids:
+            seen_ids.add(e["id"])
+            deduped.append(e)
+    events = deduped
     if category is not None:
         events = [e for e in events if e.get("category") == category]
     events.sort(key=lambda e: e.get("created_at") or "")
