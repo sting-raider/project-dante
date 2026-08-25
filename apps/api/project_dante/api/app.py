@@ -1,9 +1,13 @@
 """Project Dante API — FastAPI application assembly.
 
-Route modules register themselves here; each specialist owns their router.
+Route modules live in project_dante/api/routes/*, each exporting `router`.
+They are auto-registered here so specialists never need to edit this file.
 """
 
 from __future__ import annotations
+
+import importlib
+import pkgutil
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +29,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _register_routes() -> None:
+    import project_dante.api.routes as routes_pkg
+
+    for mod_info in pkgutil.iter_modules(routes_pkg.__path__):
+        mod = importlib.import_module(f"project_dante.api.routes.{mod_info.name}")
+        router = getattr(mod, "router", None)
+        if router is not None:
+            app.include_router(router, prefix="/api")
+
+
+_register_routes()
 
 
 @app.get("/api/health")
