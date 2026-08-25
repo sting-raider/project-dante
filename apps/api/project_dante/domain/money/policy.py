@@ -608,25 +608,45 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
 # ------------------------------------------------------- state transitions
 
 
+# Remedy execution legitimately walks the breach->remedy family only. A
+# general BFS over the whole machine would happily route an unauthorized
+# contract through PAYMENT_PENDING/PAID to reach REMEDIATED — teleporting
+# unpaid purchases through the payment spine (review finding).
+_REMEDY_WALK_STATES = {
+    "BREACH_DETECTED",
+    "REMEDY_PLANNING",
+    "AWAITING_REMEDY_APPROVAL",
+    "REMEDY_EXECUTING",
+}
+
+
 def _walk_path(current: str, target: str) -> list[str]:
-    """BFS the frozen state machine for the shortest legal transition path."""
-    from project_dante.domain.state_machine import TRANSITIONS
+    """Shortest legal path RESTRICTED to the remedy lifecycle subgraph.
+
+    The walker never crosses payment-spine states (PAID and its legal
+    predecessors). If current/target live outside the remedy family, the
+    caller must use plain validate_transition instead.
+    """
+    from project_dante.domain.state_machine import TRANSITIONS, InvalidTransition
 
     if current == target:
         return []
+    allowed = _REMEDY_WALK_STATES | {target} if target == "REMEDIATED" else _REMEDY_WALK_STATES
+    if current not in allowed or target not in allowed:
+        raise InvalidTransition(current, target)
     q: deque[list[str]] = deque([[current]])
     seen = {current}
     while q:
         path = q.popleft()
         for nxt in TRANSITIONS.get(path[-1], set()):
+            if nxt not in allowed:
+                continue
             npath = path + [nxt]
             if nxt == target:
                 return npath[1:]
             if nxt not in seen:
                 seen.add(nxt)
                 q.append(npath)
-    from project_dante.domain.state_machine import InvalidTransition
-
     raise InvalidTransition(current, target)
 
 

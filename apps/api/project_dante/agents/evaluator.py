@@ -7,7 +7,10 @@ cannot satisfy a buyer requirement. No code path may mark an offer feasible
 with a failing hard constraint.
 
 The optional LLM pass ONLY rephrases explanation text when a provider is
-configured; it can never change feasibility, failures, or ranking.
+configured; it can never change feasibility, failures, or ranking. Rephrases
+must pass a hygiene gate (length cap, no markup/URLs/tool-call shapes, no
+digits the deterministic evaluation never stated) or the grounded
+deterministic text is kept.
 """
 
 from __future__ import annotations
@@ -44,12 +47,44 @@ def _as_date(v: Any) -> date | None:
 # ---------------------------------------------------------------- checks
 
 
+def _as_int_money(v: Any) -> int | None:
+    """Strict integer-paise coercion for OFFER-side money fields.
+
+    Merchant data is untrusted: only true ints (bool excluded) count as money.
+    Anything else returns None so the caller can FAIL CLOSED — a non-integer
+    price must never be compared via float()/int() coercion, which would let
+    '12,000', 11499.5, or {"amount": 1} masquerade as a comparable amount.
+    """
+    if isinstance(v, bool) or not isinstance(v, int):
+        return None
+    return v
+
+
+def _expected_as_number(expected: Any) -> float | None:
+    """INTENT-side threshold to float. Buyer intent is compiled by us; accept
+    int/float (bool rejected), plus digit-only strings defensively."""
+    if isinstance(expected, bool):
+        return None
+    if isinstance(expected, (int, float)):
+        return float(expected)
+    if isinstance(expected, str):
+        s = expected.strip().replace(",", "")
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
+
+
 def _check_numeric(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
-    """Numeric comparison; returns (passed, comparable_actual)."""
-    try:
-        a = int(actual) if isinstance(actual, str) and actual.isdigit() else float(actual)
-        e = float(expected)
-    except (TypeError, ValueError):
+    """Numeric comparison; returns (passed, comparable_actual).
+
+    Fail-closed on junk: a non-coercible ACTUAL value fails the check instead of
+    raising, so one malformed merchant offer cannot 500 the whole search route.
+    """
+    e = _expected_as_number(expected)
+    a = _actual_as_number(actual)
+    if e is None or a is None:
         return False, actual
     ok = {
         "lte": a <= e,
@@ -61,28 +96,93 @@ def _check_numeric(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
     return ok, actual
 
 
+def _actual_as_number(actual: Any) -> float | None:
+    """Coerce a constraint ACTUAL value for numeric ops, fail-closed to None.
+
+    Money keys are strict (see _as_int_money): string/float/None-ish junk in an
+    offer's unit_amount_paise is NOT coerced into comparable money. Other keys
+    keep a narrow digit-string tolerance for legacy structured data.
+    """
+    if isinstance(actual, bool):
+        return None
+    if isinstance(actual, int):
+        return float(actual)
+    if isinstance(actual, float):
+        return actual
+    if isinstance(actual, str):
+        s = actual.strip().replace(",", "")
+        try:
+            f = float(s)
+        except ValueError:
+            return None
+        return f if f == int(f) else None
+    return None
+
+
+_MONEY_KEYS = frozenset({"max_price_paise", "min_price_paise", "unit_amount_paise"})
+
+
 _CATEGORY_EQUIV = {
-    # catalog stores plural category values; compiler may emit either form
-    "mouse": "mice",
-    "mice": "mice",
+    # Closed catalog-vocabulary equivalence map (hard gates). The compiler emits
+    # singular buyer-facing values; the Aster catalog stores these exact plural /
+    # compound values. Only listed pairs match — there is deliberately NO
+    # substring fallback, so 'headphone-stands' can never satisfy 'headphones'.
+    "mouse": {"mice"},
+    "mice": {"mice"},
+    "headphone": {"headphones"},
+    "earbud": {"headphones", "earbuds"},
+    "router": {"routers"},
+    "laptop": {"laptops"},
+    "charger": {"chargers-cables", "chargers", "cables", "charger"},
+    "cable": {"chargers-cables", "chargers", "cables", "cable"},
+    "keyboard": {"keyboards"},
+    "monitor": {"monitors"},
+    "phone": {"phones"},
 }
 
 
-def _check_scalar(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
-    """Scalar comparison with case-insensitive fallbacks."""
+def _category_equivalent(al: str | None, el: str | None) -> bool:
+    """True when both normalized values denote the same catalog category."""
+    if not al or not el:
+        return False
+    return el in _CATEGORY_EQUIV.get(al, set()) or al in _CATEGORY_EQUIV.get(el, set())
+
+
+def _check_scalar(
+    actual: Any, op: str, expected: Any, *, key: str | None = None
+) -> tuple[bool, Any]:
+    """Scalar comparison for HARD constraints.
+
+    ``eq`` is exact case-insensitive equality, plus two documented equivalences:
+
+    - the closed category vocabulary above (singular vs stored catalog form);
+    - category-vs-title fallback ONLY when the offer has no category field at
+      all (_actual_for_key substitutes title): a title containing the whole
+      category word as a word-boundary token passes. This is the single
+      intentional substring case — it exists because titles are free text and
+      the fallback already degraded resolution quality.
+
+    Everything else must match exactly; near-miss strings ('not-sony',
+    'sony-compatible') fail. Non-int money on numeric comparisons fails closed
+    (never raises) so hostile merchant data cannot break evaluation.
+    """
     if op == "eq":
         if actual is None:
             return False, actual
         al, el = _lower(actual), _lower(expected)
         if al == el:
             return True, actual
-        # singular/plural equivalence for category values ('mouse' vs 'mice')
-        if _CATEGORY_EQUIV.get(al) is not None and _CATEGORY_EQUIV.get(al) == el:
+        if _category_equivalent(al, el):
             return True, actual
-        if _CATEGORY_EQUIV.get(el) is not None and _CATEGORY_EQUIV.get(el) == al:
-            return True, actual
-        # contains-style tolerance for free-text fields like category/title
-        if isinstance(al, str) and el and el in al:
+        # Narrow documented substring case: title standing in for a missing
+        # category field. Word-boundary containment of the full expected token.
+        if (
+            key == "category"
+            and isinstance(al, str)
+            and isinstance(el, str)
+            and el
+            and re.search(rf"\b{re.escape(el)}\b", al) is not None
+        ):
             return True, actual
         return False, actual
     if op == "contains":
@@ -91,6 +191,11 @@ def _check_scalar(actual: Any, op: str, expected: Any) -> tuple[bool, Any]:
     if op == "in":
         vals = [_lower(x) for x in expected] if isinstance(expected, (list, tuple)) else []
         return (_lower(actual) in vals), actual
+    if op in ("lte", "lt", "gte", "gt"):
+        if key in _MONEY_KEYS and _as_int_money(actual) is None:
+            # Non-integer money in an offer: constraint FAILS CLOSED.
+            return False, actual
+        return _check_numeric(actual, op, expected)
     return _check_numeric(actual, op, expected)
 
 
