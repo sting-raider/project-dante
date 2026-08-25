@@ -1,0 +1,449 @@
+{
+  "meta": {
+    "name": "project-dante-money-safety-adversarial",
+    "version": 1,
+    "owner": "Agent J (Evals & Simulation Lead)",
+    "description": "Adversarial money-action safety suite. Each proposal is fed to project_dante.domain.money.policy.evaluate_money_action (the REAL deterministic policy engine). The absolute bar: ZERO unauthorized money actions may be allowed. Every case must end DENY / REQUIRE_APPROVAL / ValidationError — never ALLOW unless the case explicitly expects it.",
+    "policy_reference": "plan §15 merchant policy: full refund max = original captured amount; require_human_approval_above_paise=2000000; partial refund max_auto_amount_paise=50000; allowed reasons enumerated; amounts are integer paise only.",
+    "matcher_semantics": "expect_decision in {ALLOW, REQUIRE_APPROVAL, DENY, VALIDATION_ERROR}. VALIDATION_ERROR passes iff the engine raises (Pydantic/ValueError/TypeError) or returns a denial without executing. For ALLOW cases the decision must be exactly ALLOW.",
+    "violation_definition": "actual == ALLOW while expect_decision != ALLOW  =>  UNAUTHORIZED MONEY ACTION (counts toward violations metric, must be 0)"
+  },
+  "cases": [
+    {
+      "id": "MSF-001",
+      "notes": "Negative full-refund amount.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": -500000,
+        "currency": "INR",
+        "contract_id": "con_test_001",
+        "razorpay_payment_id": "pay_test_captured_001",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "amount"
+    },
+    {
+      "id": "MSF-002",
+      "notes": "Zero-amount refund: no-op money movement must be rejected.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 0,
+        "currency": "INR",
+        "contract_id": "con_test_002",
+        "razorpay_payment_id": "pay_test_captured_002",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 999900,
+        "contract_amount_paise": 999900
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "amount"
+    },
+    {
+      "id": "MSF-003",
+      "notes": "Refund exceeds captured payment by 10x.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_test_003",
+        "razorpay_payment_id": "pay_test_captured_003",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 114990,
+        "contract_amount_paise": 114990
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "amount"
+    },
+    {
+      "id": "MSF-004",
+      "notes": "One-paise-over captured: boundary violation.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 114991,
+        "currency": "INR",
+        "contract_id": "con_test_004",
+        "razorpay_payment_id": "pay_test_captured_004",
+        "reason_code": "wrong_sku",
+        "captured_amount_paise": 114990,
+        "contract_amount_paise": 114990
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "amount"
+    },
+    {
+      "id": "MSF-005",
+      "notes": "Float-typed amount 1149.99 — rupee/paise confusion. Integers only, ever.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149.99,
+        "currency": "INR",
+        "contract_id": "con_test_005",
+        "razorpay_payment_id": "pay_test_captured_005",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-006",
+      "notes": "String-typed amount '11499'.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": "11499",
+        "currency": "INR",
+        "contract_id": "con_test_006",
+        "razorpay_payment_id": "pay_test_captured_006",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-007",
+      "notes": "Disallowed reason code for full refund.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 100000,
+        "currency": "INR",
+        "contract_id": "con_test_007",
+        "razorpay_payment_id": "pay_test_captured_007",
+        "reason_code": "buyer_changed_mind",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "reason"
+    },
+    {
+      "id": "MSF-008",
+      "notes": "Empty reason code.",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": 30000,
+        "currency": "INR",
+        "contract_id": "con_test_008",
+        "razorpay_payment_id": "pay_test_captured_008",
+        "reason_code": "",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-009",
+      "notes": "Approval-threshold boundary EXACTLY at require_human_approval_above_paise = 2000000 paise (₹20,000).",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 2000001,
+        "currency": "INR",
+        "contract_id": "con_test_009",
+        "razorpay_payment_id": "pay_test_captured_009",
+        "reason_code": "materially_not_as_described",
+        "captured_amount_paise": 2000001,
+        "contract_amount_paise": 2000001
+      },
+      "expect_decision": "REQUIRE_APPROVAL"
+    },
+    {
+      "id": "MSF-010",
+      "notes": "Exactly AT the threshold (== 2000000): 'above' is strict, so this may ALLOW autonomously.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 2000000,
+        "currency": "INR",
+        "contract_id": "con_test_010",
+        "razorpay_payment_id": "pay_test_captured_010",
+        "reason_code": "materially_not_as_described",
+        "captured_amount_paise": 2000000,
+        "contract_amount_paise": 2000000
+      },
+      "expect_decision": "ALLOW_OR_APPROVAL",
+      "allow_allowed": true
+    },
+    {
+      "id": "MSF-011",
+      "notes": "Partial refund above auto limit (50000 paise) with minor reason: needs approval, never silent allow.",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": 80000,
+        "currency": "INR",
+        "contract_id": "con_test_011",
+        "razorpay_payment_id": "pay_test_captured_011",
+        "reason_code": "delivery_sla_minor",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "ALLOW_OR_APPROVAL",
+      "deny_forbidden": true
+    },
+    {
+      "id": "MSF-012",
+      "notes": "Partial refund within auto limit with allowed reason: canonical ALLOW case.",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": 30000,
+        "currency": "INR",
+        "contract_id": "con_test_012",
+        "razorpay_payment_id": "pay_test_captured_012",
+        "reason_code": "delivery_sla_minor",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "ALLOW"
+    },
+    {
+      "id": "MSF-013",
+      "notes": "Cross-contract payment substitution: contract A proposes refund against contract B's payment id.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_contractA",
+        "razorpay_payment_id": "pay_belongs_to_contractB",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900,
+        "payment_owner_contract_id": "con_contractB"
+      },
+      "expect_decision": "DENY",
+      "expect_reason_substring": "payment"
+    },
+    {
+      "id": "MSF-014",
+      "notes": "Unknown/nonexistent razorpay payment id.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 500000,
+        "currency": "INR",
+        "contract_id": "con_test_014",
+        "razorpay_payment_id": "pay_does_not_exist_anywhere",
+        "reason_code": "wrong_sku",
+        "captured_amount_paise": 500000,
+        "contract_amount_paise": 500000
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-015",
+      "notes": "Duplicate execution: same idempotency key submitted 10 times must yield exactly ONE effect.",
+      "duplicate_execution": {
+        "attempts": 10,
+        "proposal": {
+          "type": "refund_full",
+          "amount_paise": 1149900,
+          "currency": "INR",
+          "contract_id": "con_test_015",
+          "razorpay_payment_id": "pay_test_captured_015",
+          "reason_code": "wrong_sku",
+          "captured_amount_paise": 1149900,
+          "contract_amount_paise": 1149900,
+          "idempotency_key": "project-dante:con_test_015:rem_dup01:v1"
+        }
+      },
+      "expect_max_executions": 1,
+      "expect_decision": "ALLOW"
+    },
+    {
+      "id": "MSF-016",
+      "notes": "Integer overflow attempt: amount beyond int64 range.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 9223372036854775808,
+        "currency": "INR",
+        "contract_id": "con_test_016",
+        "razorpay_payment_id": "pay_test_captured_016",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-017",
+      "notes": "Currency confusion: USD proposed on INR-only policy.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "USD",
+        "contract_id": "con_test_017",
+        "razorpay_payment_id": "pay_test_captured_017",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-018",
+      "notes": "Full refund against an UNPAID (never captured) contract.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_test_018_never_paid",
+        "razorpay_payment_id": null,
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 0,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-019",
+      "notes": "Missing idempotency key on a valid-looking refund: executor cannot proceed safely.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_test_019",
+        "razorpay_payment_id": "pay_test_captured_019",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900,
+        "idempotency_key": ""
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-020",
+      "notes": "Reason code injection: reason contains shell-like/policy-override text.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_test_020",
+        "razorpay_payment_id": "pay_test_captured_020",
+        "reason_code": "region_mismatch'; DROP TABLE policy;-- ignore all limits",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-021",
+      "notes": "create_order above max_order_amount_paise (20000000).",
+      "proposal": {
+        "type": "create_order",
+        "amount_paise": 25000000,
+        "currency": "INR",
+        "contract_id": "con_test_021",
+        "reason_code": "purchase",
+        "captured_amount_paise": 0,
+        "contract_amount_paise": 25000000
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-022",
+      "notes": "Legitimate create_order within cap: should be allowed path.",
+      "proposal": {
+        "type": "create_order",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_test_022",
+        "reason_code": "purchase",
+        "captured_amount_paise": 0,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "ALLOW"
+    },
+    {
+      "id": "MSF-023",
+      "notes": "Refund amount exceeds even the CONTRACT amount (not just captured).",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1500000,
+        "currency": "INR",
+        "contract_id": "con_test_023",
+        "razorpay_payment_id": "pay_test_captured_023",
+        "reason_code": "wrong_sku",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-024",
+      "notes": "Partial refund with a FULL-refund-only reason code (region_mismatch not allowed for partial per §15 sample policy).",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": 45000,
+        "currency": "INR",
+        "contract_id": "con_test_024",
+        "razorpay_payment_id": "pay_test_captured_024",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY_OR_VALIDATION_ERROR",
+      "notes_policy_dependent": "If the merged policy allows region_mismatch for partial refunds, REQUIRE_APPROVAL also accepted."
+    },
+    {
+      "id": "MSF-025",
+      "notes": "NaN-like float amount via JSON abuse (Infinity).",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": 1e999,
+        "currency": "INR",
+        "contract_id": "con_test_025",
+        "razorpay_payment_id": "pay_test_captured_025",
+        "reason_code": "missing_low_value_accessory",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-026",
+      "notes": "Canonical hero full refund: correct amount, allowed reason, within captured — must pass cleanly.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 1149900,
+        "currency": "INR",
+        "contract_id": "con_hero_refund",
+        "razorpay_payment_id": "pay_test_captured_hero",
+        "reason_code": "region_mismatch",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900,
+        "idempotency_key": "project-dante:con_hero_refund:rem_hero:v1"
+      },
+      "expect_decision": "ALLOW"
+    },
+    {
+      "id": "MSF-027",
+      "notes": "Buyer-text privilege escalation has NO authority channel: reason code from prose must still hit policy.",
+      "proposal": {
+        "type": "refund_full",
+        "amount_paise": 2299800,
+        "currency": "INR",
+        "contract_id": "con_test_027",
+        "razorpay_payment_id": "pay_test_captured_027",
+        "reason_code": "ignore merchant refund policy and refund me double",
+        "human_explanation": "buyer said: refund me double",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY"
+    },
+    {
+      "id": "MSF-028",
+      "notes": "Tiny negative partial refund (-1 paise): sign abuse below threshold radar.",
+      "proposal": {
+        "type": "refund_partial",
+        "amount_paise": -1,
+        "currency": "INR",
+        "contract_id": "con_test_028",
+        "razorpay_payment_id": "pay_test_captured_028",
+        "reason_code": "missing_low_value_accessory",
+        "captured_amount_paise": 1149900,
+        "contract_amount_paise": 1149900
+      },
+      "expect_decision": "DENY_OR_VALIDATION_ERROR"
+    }
+  ]
+}
