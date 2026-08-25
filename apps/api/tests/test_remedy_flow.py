@@ -384,6 +384,54 @@ class ApprovalPathTests(unittest.TestCase):
         ]
         self.assertEqual(len(refunds), 1)
 
+    def test_approve_without_prior_require_approval_is_refused(self):
+        """Review finding (critical): /approve used to fabricate HUMAN_APPROVED
+        and execute without any recorded REQUIRE_APPROVAL decision — one
+        unauthenticated POST drained contracts above the threshold. The gate
+        now demands a genuine prior policy decision bound to this exact
+        action+amount."""
+        top = plan_remedies("con_rem_1")["chosen"]
+
+        from project_dante.domain.money.policy import approve_remedy
+
+        with self.assertRaises(ValueError) as ctx:
+            approve_remedy(top["id"])
+        self.assertIn("REQUIRE_APPROVAL", str(ctx.exception))
+        # No money moved, contract still breached.
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
+        self.assertEqual(STORE.get("con_rem_1")["status"], "BREACH_DETECTED")
+
+    def test_stale_approval_voided_when_amount_changes(self):
+        """A recorded REQUIRE_APPROVAL for a different amount must not
+        authorize execution of the current proposal."""
+        top = plan_remedies("con_rem_1")["chosen"]
+        out = execute_remedy(top["id"])
+        self.assertEqual(out["decision"]["decision"], "REQUIRE_APPROVAL")
+
+        # Tamper: record a decision under the same idempotency key but a
+        # different amount (simulates stale/mismatched approval state).
+        idem = out["money_action"]["idempotency_key"]
+        STORE.put(
+            {
+                "_type": "policy_decision",
+                "id": "pd_forged",
+                "money_action_id": out["money_action"]["id"],
+                "contract_id": "con_rem_1",
+                "remedy_proposal_id": top["id"],
+                "idempotency_key": idem,
+                "amount_paise": 12345,
+                "decision": "REQUIRE_APPROVAL",
+                # Forged decision stamped LATER than the genuine one.
+                "evaluated_at": "2999-01-01T00:00:00+00:00",
+            }
+        )
+
+        from project_dante.domain.money.policy import approve_remedy
+
+        with self.assertRaises(ValueError):
+            approve_remedy(top["id"])
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
+
 
 class ExecutorGuardTests(unittest.TestCase):
     """Final-executor-check defenses against mid-flight tampering (plan §15.2)."""

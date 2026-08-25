@@ -261,17 +261,34 @@ def _on_payment_captured(event_id: str, payload: dict[str, Any]) -> None:
     status = contract.get("status")
 
     # Attach the observed payment id only where a payment relationship is
-    # meaningful (paid / past-paid / legal pre-payment states). Orphaned
-    # captures on cancelled/draft contracts must not graft onto them.
-    payment_rel_ok = (
-        status == "PAID"
-        or status in _POST_PAID_STATUSES
-        or str(status) in _CAPTURE_WALK
-    )
+    # meaningful and NON-CONFLICTING. Review finding: a second capture for a
+    # DIFFERENT payment id silently repointed a PAID contract's payment id,
+    # corrupting refund routing. Once a contract carries a payment id, only
+    # the SAME id may re-affirm it; anything else is recorded as a conflict.
+    existing_payment = contract.get("razorpay_payment_id")
     updates: dict[str, Any] = {}
-    if payment_id:
-        updates["razorpay_payment_id"] = payment_id
-    if updates and payment_rel_ok:
+    if payment_id and not existing_payment:
+        # Legal pre-payment states may receive their first binding; paid/
+        # past-paid states keep the audit trail below instead.
+        if str(status) in _CAPTURE_WALK:
+            updates["razorpay_payment_id"] = payment_id
+    elif payment_id and existing_payment and payment_id != existing_payment:
+        append_event(
+            aggregate_type="contract",
+            aggregate_id=contract_id,
+            event_type="STATE_RECONCILED",
+            payload={
+                "reason": "conflicting_payment_capture",
+                "known_payment_id": existing_payment,
+                "observed_payment_id": payment_id,
+                "action": "payment_binding_unchanged",
+            },
+        )
+        logger.error(
+            "conflicting capture on contract=%s: known=%s observed=%s",
+            contract_id, existing_payment, payment_id,
+        )
+    if updates:
         STORE.update(contract_id, **updates)
 
     if status == "PAID":

@@ -24,6 +24,21 @@ def _require_demo_mode() -> None:
             status_code=403,
             detail="Demo endpoints disabled: DEMO_MODE is off.",
         )
+    # Review finding: with real Razorpay keys configured, unauthenticated
+    # synthetic fulfillment facts could steer the rights/policy chain into
+    # issuing REAL refunds. State-changing demo endpoints therefore refuse
+    # to run in live-test mode — the same guard /demo/razorpay/simulate-event
+    # already enforced.
+    if settings.razorpay_live_test_mode:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Demo simulation endpoints are disabled while Razorpay live "
+                "Test Mode keys are configured (synthetic data must never "
+                "drive real money actions). Set DEMO_MODE=false or remove "
+                "the API keys."
+            ),
+        )
 
 
 @router.post("/reset")
