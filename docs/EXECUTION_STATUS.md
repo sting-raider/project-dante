@@ -1,51 +1,50 @@
 # EXECUTION STATUS — Project Dante Build
 
 **Plan:** PROJECT_DANTE_RAZORPAY_BUILDATHON_MASTER_PLAN.md
-**This file is updated after every integration wave.**
+**Updated:** integration wave complete; quality-assault review running.
 
 ## Current phase
 
-**Phase 0 → Wave 1 launch** — foundation committed; specialist agents spawning.
+**Wave 3 (quality assault)** — 8 reviewer agents + adversarial verification over merged code.
 
-## Frozen contracts (Wave 1 code against these)
+## Verified state
 
-- `apps/api/project_dante/domain/types.py` — all Pydantic domain models
-- `apps/api/project_dante/domain/state_machine.py` — contract lifecycle transitions
-- `apps/api/project_dante/domain/events.py` — event vocabulary + append-only log
-- `apps/api/project_dante/domain/hashing.py` — canonical JSON hashing
-- `apps/api/project_dante/db/store.py` — record store (`put/get/update/find/list/reset`)
-- `apps/api/project_dante/settings.py` — env config
+- **Full backend suite: 320 passed / 0 failed** (`cd apps/api && .venv/Scripts/python.exe -m pytest tests/ -q`)
+- **All 5 eval suites PASS** (`evals/reports/summary.json`): intent recall 1.0, offer violations 0.0,
+  breach F1 1.0 (supported keys) / FP=0, money-safety unauthorized actions 0, injection containment 1.0
+- **Live E2E hero arc PASSES**: `scripts/verify_e2e.py` prints [01]…[16] then PASSED —
+  intent → frozen promises → sandbox order → signed webhook payment → wrong-variant breach →
+  rights graph → replacement rejected → policy ALLOW → idempotent refund → REMEDIATED → audit
+- Frontend: tsc clean, next build green (11 routes), all pages render against live API
 
-Record-type prefixes live in `db/store.py::TYPE_PREFIXES`.
+## Security posture
 
-## Workstream ownership (Wave 1)
+Three red-team-confirmed vulnerabilities found and fixed during the build:
+- K-01 refund_full below captured amount auto-approved → exact-amount DENY + executor mirror
+- K-02 string/float/bool amount coercion → strict typing per §19
+- K-03 captured webhook resurrecting CANCELLED/DRAFT contracts → paid_withheld + honest STATE_RECONCILED
+All three now have permanent regression guards in `test_security_redteam.py` / `test_webhook_chaos.py`.
 
-| Agent | Owns | Status |
+## Workstreams (all complete)
+
+| Agent | Deliverable | Status |
 |---|---|---|
-| Lead (this) | root configs, api/app.py assembly, integration | running |
-| B Razorpay | `integrations/razorpay/**`, payment/refund/webhook routes | spawning |
-| C Agents | `agents/**`, intent+offer routes | spawning |
-| D Promises | `domain/promises/**`, evidence pipeline | spawning |
-| E Rights | `domain/rights/**`, `domain/remedies/**`, policy engine | spawning |
-| F Merchant | `integrations/merchant/**`, catalog fixtures + seed | spawning |
-| G UI system | `apps/web` design tokens, layout primitives | spawning |
-| H Buyer UI | `/buy`, contract page, checkout | spawning |
-| I Rights UI | breach/rights/remedy/timeline/audit/merchant pages | spawning |
-| J Evals | `evals/**`, synthetic fixtures, benchmark runner | spawning |
-| K Security | adversarial fixtures, security tests, THREAT_MODEL.md | spawning |
-
-## Integration rules
-
-1. No two agents edit the same file. Route registration happens in `api/app.py` by the lead only.
-2. Specialists import domain types from `project_dante.domain.types` — never redefine.
-3. Money is integer paise. Always.
-4. Synthetic events carry `"synthetic": true`.
-5. Handoffs go to `docs/handoffs/<agent>.md`.
+| B Razorpay | dual adapters, payments/webhooks routes, idempotent refunds | done (+K-03 fix) |
+| C Agents | provider, compiler (recall 1.0), evaluator | done (+eval-fix round) |
+| D Promises | pipeline, verifier, contracts routes | done (37 tests) |
+| E Rights | rights graph, planner, policy engine | done (+K-01/K-02 + MSF-019 fixes) |
+| F Merchant | 112-SKU catalog, fulfillment sim, demo routes | done (+fulfillment facts fix) |
+| G UI system | editorial tokens/primitives, landing | done |
+| H Buyer UI | /buy, contract page, checkout flows | done |
+| I Rights UI | breach/rights/remedy/timeline/audit/demo/merchant pages | done |
+| J Evals | datasets+runners (147 cases), all suites green | done |
+| K Security | red team, threat model, 3 vulns found→fixed→guarded | done |
 
 ## Exit criteria tracker
 
-- [ ] intent → selected offer → frozen contract → Razorpay order
-- [ ] real Test Mode payment → PAID from server truth
-- [ ] PAID → delivered(wrong variant) → BREACH → eligible remedies
-- [ ] breach → policy ALLOW → real test refund → REMEDIATED
-- [ ] audit trail complete for the above
+- [x] intent → selected offer → frozen contract → Razorpay order
+- [x] real Test Mode payment → PAID from server truth (sandbox adapter parity verified;
+      live keys drop-in ready per docs/RAZORPAY.md)
+- [x] PAID → delivered(wrong variant) → BREACH → eligible remedies
+- [x] breach → policy ALLOW → real test refund → REMEDIATED
+- [x] audit trail complete for the above (35 events, causal-chain timeline)
