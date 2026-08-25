@@ -32,7 +32,6 @@ import {
   shortHash,
   useContractFlow,
   type OfferMemo,
-  type UseContractFlow,
 } from "@/lib/useContractFlow";
 
 import { AuthorizationCard } from "./_components/AuthorizationCard";
@@ -62,6 +61,7 @@ export default function ContractPage() {
   const [authorizing, setAuthorizing] = useState(false);
   const [simulating, setSimulating] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [rzpScriptReady, setRzpScriptReady] = useState(false);
   const [dismissedNote, setDismissedNote] = useState<string | null>(null);
 
   // initial load (+ resume polling if payment pending)
@@ -80,25 +80,27 @@ export default function ContractPage() {
   const contract = flow.contract;
 
   const openRazorpayCheckout = useCallback(
-    (order: PaymentOrderResponse, f: UseContractFlow, id: string) => {
+    (order: PaymentOrderResponse) => {
       setDismissedNote(null);
       if (!window.Razorpay) {
         setDismissedNote(
-          "Razorpay checkout script not loaded yet — press Authorize again.",
+          "Razorpay checkout script is still loading — try again in a moment.",
         );
         return;
       }
+      const cfg = order.checkout_config;
       const rzp = new window.Razorpay({
-        key: order.checkout_config.key_id,
-        amount: order.checkout_config.amount_paise,
-        currency: order.checkout_config.currency,
+        key_id: cfg.key_id,
+        amount: cfg.amount_paise,
+        currency: cfg.currency ?? "INR",
         name: "ASTER ELECTRONICS",
-        description: `Dante contract ${shortHash(id, 8)}`,
-        order_id: order.checkout_config.order_id,
-        prefill: { name: "Demo Buyer", email: "buyer@dante.demo" },
-        theme: { color: "#0C0C0C" },
+        description: offerMemo?.offer.title ?? "Dante contract purchase",
+        order_id: cfg.order_id,
+        prefill: { name: "Demo Buyer" },
+        theme: { color: "#F04A2D" },
         handler: (response: RazorpayHandlerResponse) => {
-          void f.verifyClient(id, response);
+          // client success ≠ truth; verify then keep polling for webhook
+          void flow.verifyClient(contractId!, response);
         },
         modal: {
           ondismiss: () => {
@@ -106,41 +108,26 @@ export default function ContractPage() {
               "Checkout closed before completing. If the payment actually went through, server reconciliation will confirm it — watch the status below.",
             );
             // window-closed fallback (§33.5): resume polling regardless
-            f.pollUntilResolved(id);
+            flow.pollUntilResolved(contractId!);
           },
         },
       });
       rzp.open();
       setCheckoutOpen(true);
     },
-    [],
+    [contractId, offerMemo, flow],
   );
 
   async function handleAuthorize() {
     if (!contractId) return;
     setAuthorizing(true);
-    const ok = await flow.authorize(contractId);
-    if (!ok) {
-      setAuthorizing(false);
-      return;
-    }
-    const order = await flow.createPaymentOrder(contractId);
+    await flow.authorizeAndOpenCheckout(contractId, openRazorpayCheckout);
     setAuthorizing(false);
-    if (!order) return;
-    if (order.mode !== "sandbox") {
-      openRazorpayCheckout(order, flow, contractId);
-    }
   }
 
   function handleSimulate() {
-    if (!contractId || !flow.orderInfo) return;
     setSimulating(true);
-    void flow
-      .simulateSandboxCapture(
-        contractId,
-        String(flow.orderInfo.checkout_config.order_id),
-      )
-      .finally(() => setSimulating(false));
+    void flow.simulateSandboxPayment().finally(() => setSimulating(false));
   }
 
   // ---------------------------------------------------------- render states
@@ -187,10 +174,11 @@ export default function ContractPage() {
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-5 pb-40 pt-10 md:px-10">
       {/* Razorpay checkout.js — lazyOnload; opened on demand post-authorize */}
-      {!contract.sandbox_mode && (
+      {!contract.sandbox_mode && !rzpScriptReady && (
         <Script
           src="https://checkout.razorpay.com/v1/checkout.js"
           strategy="lazyOnload"
+          onLoad={() => setRzpScriptReady(true)}
         />
       )}
 
@@ -211,7 +199,7 @@ export default function ContractPage() {
       {paid && (
         <div className="mt-6 rounded-[2px] border border-success/50 bg-paper-bright px-5 py-4">
           <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-success">
-            Paid — verified by server-side webhook truth
+            Paid — verified by webhook truth
           </span>{" "}
           <Link
             href={`/contract/${contract.id}/timeline`}
@@ -388,8 +376,9 @@ export default function ContractPage() {
             <AuthorizationCard
               contract={contract}
               promises={flow.promises}
+              offerTitle={offerMemo?.offer.title ?? null}
               onAuthorize={handleAuthorize}
-              authorizing={authorizing || flow.phase === "creating_order"}
+              authorizing={authorizing || flow.phase === "opening_checkout"}
             />
           </div>
         </div>

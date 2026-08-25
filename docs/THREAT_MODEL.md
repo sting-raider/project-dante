@@ -212,22 +212,27 @@ Mitigations:
 
 ## 6. Red-team results
 
-Latest run: `cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
+Latest run (all Wave 1 modules merged): 
+`cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
+→ **66 passed / 1 failed / 3 xfailed(strict) / 0 skipped**.
 
 | Vector group | Cases | Result | Notes |
 |---|---|---|---|
 | STA state machine abuse | 23 (11 illegal + 12 legal) | PASS | all illegal pairs raise `InvalidTransition` |
-| SEC secrets hygiene | 1 repo-wide scan | PASS | 0 offenders across tree |
+| SEC secrets hygiene | repo-wide scan | PASS | 0 offenders; 1 documented synthetic allowlist entry (`client.py` sandbox key) |
 | Event-log idempotency primitive | 1 | PASS | duplicate `(aggregate,key)` suppressed |
-| AMT amount manipulation | 9 | SKIPPED | awaiting `domain/money/policy.py` merge |
-| CCS cross-contract substitution | 2 | SKIPPED | awaiting policy module |
-| RRP refund replay | 2 | SKIPPED | awaiting policy module |
-| WHF forged webhook signatures | 6 | SKIPPED | awaiting `integrations/razorpay/service.py` |
-| WHC webhook chaos | 9 | SKIPPED | awaiting `api/routes/webhooks.py` |
-| PINJ injection corpus | 2 (20+ cases) | SKIPPED | awaiting `domain/promises/pipeline.py` |
-| PESC privilege escalation | 2 | SKIPPED | awaiting policy/intent modules |
-| DEM demo guards | 1 | SKIPPED | awaiting `api/routes/demo.py` |
+| AMT amount manipulation vs policy | 10 | PARTIAL | inflated/negative/zero/overflow → DENY; **K-01**: refund_full under-amount auto-ALLOWs (xfail marker); **K-02**: string/float coerced by `int()` (xfail markers) |
+| CCS cross-contract substitution | 2 | PASS | executor derives payment id from stored contract; final check refuses drift; unknown payment ⇒ no refund |
+| RRP refund replay (remedy + client level) | 8 | PASS | replay ×2/×3 ⇒ exactly one refund record, cached result returned |
+| WHF forged webhook signatures | 6 | PASS | garbage/wrong-secret/tampered/empty ⇒ False + 401 route + zero persistence; positive control verifies True |
+| WHC webhook chaos | 11 | PARTIAL | duplicates ×5, orphan, reorder, amount-mismatch capture all safe; **K-03 FAIL**: captured force-writes PAID onto CANCELLED/FAILED/DRAFT contracts (`webhooks.py:300`) |
+| PINJ injection corpus | 2 suites (20 inline vectors + Agent J corpus) | PASS | text never overrides structured truth; zero side effects |
+| PESC privilege escalation via prose | 3 | PASS | compile/policy treat escalation text as data; no limits inflated |
+| Client payment verification abuse | 3 | PASS | verify-client never mints PAID; forged sigs rejected; order swap rejected |
+| DEM demo guards (incl. simulate-event) | 5 endpoints | PASS | 403 with `demo_mode=False` |
 
-This table is refreshed by Agent K after each integration wave. Skips are NOT passes; they list
-modules not yet under attack. See `docs/handoffs/security_findings.md` for confirmed
-vulnerabilities (currently: none confirmed — attack surface not yet merged).
+Confirmed vulnerabilities and full reproductions: `docs/handoffs/security_findings.md`.
+**K-03** (webhook resurrection of cancelled contracts) is OPEN with Agent B;
+**K-01/K-02** (policy under-amount ALLOW, type coercion) are OPEN with Agent E.
+All three carry regression markers in the suites: K-03 as a live failing test,
+K-01/K-02 as strict xfails that flip to hard failures once fixed.

@@ -16,7 +16,7 @@ const STEPS: { label: string; phases: FlowPhase[] }[] = [
   { label: "Searching merchant", phases: ["searching", "error_search"] },
   {
     label: "Evaluating offers",
-    phases: ["shortlist", "selecting", "navigating", "error_select"],
+    phases: ["shortlist", "awaiting_selection", "freezing", "error_select"],
   },
   { label: "Freezing promises", phases: ["awaiting_authorization"] },
 ];

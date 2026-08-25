@@ -237,13 +237,21 @@ def _on_payment_captured(event_id: str, payload: dict[str, Any]) -> None:
         logger.error("amount mismatch on contract=%s: %s != %s", contract_id, amount, expected)
         return
 
+    status = contract.get("status")
+
+    # Attach the observed payment id only where a payment relationship is
+    # meaningful (paid / past-paid / legal pre-payment states). Orphaned
+    # captures on cancelled/draft contracts must not graft onto them.
+    payment_rel_ok = (
+        status == "PAID"
+        or status in _POST_PAID_STATUSES
+        or str(status) in _CAPTURE_WALK
+    )
     updates: dict[str, Any] = {}
     if payment_id:
         updates["razorpay_payment_id"] = payment_id
-    if updates:
+    if updates and payment_rel_ok:
         STORE.update(contract_id, **updates)
-
-    status = contract.get("status")
 
     if status == "PAID":
         # Idempotent late redelivery after we already went paid.
@@ -261,7 +269,11 @@ def _on_payment_captured(event_id: str, payload: dict[str, Any]) -> None:
             aggregate_type="contract",
             aggregate_id=contract_id,
             event_type="RAZORPAY_PAYMENT_CAPTURED",
-            payload={"payment_id": payment_id, "note": "contract_already_past_paid", "status": status},
+            payload={
+                "payment_id": payment_id,
+                "note": "contract_already_past_paid",
+                "status": status,
+            },
         )
         return
 
@@ -282,26 +294,21 @@ def _on_payment_captured(event_id: str, payload: dict[str, Any]) -> None:
         )
         return
 
-    # Unexpected state with no legal path (defensive): document honestly that
-    # the gateway capture is server truth and catch the projection up.
-    STORE.update(contract_id, status="PAID")
+    # Non-payable state (DRAFT/pre-offer, CANCELLED, FAILED): gateway reality
+    # is recorded honestly but the lifecycle is NEVER resurrected — a capture
+    # on a cancelled contract is an orphaned payment for human handling, not a
+    # teleport to PAID (plan §22, invariant I12).
     append_event(
         aggregate_type="contract",
         aggregate_id=contract_id,
         event_type="STATE_RECONCILED",
         payload={
-            "reason": "out_of_order_captured_forced",
+            "reason": "captured_event_for_non_payable_state",
             "from_status": status,
-            "forced_status": "PAID",
-            "payment_id": payment_id,
-            "policy": "gateway capture is server truth (plan §16.7)",
+            "observed_payment_id": payment_id,
+            "observed_order_id": order_id,
+            "action": "paid_withheld",
         },
-    )
-    append_event(
-        aggregate_type="contract",
-        aggregate_id=contract_id,
-        event_type="RAZORPAY_PAYMENT_CAPTURED",
-        payload={"payment_id": payment_id, "order_id": order_id, "reconciled": True},
     )
 
 

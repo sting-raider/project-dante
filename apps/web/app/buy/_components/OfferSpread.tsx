@@ -35,7 +35,7 @@ function warrantyLabel(o: MerchantOffer): string {
   const t = o.terms;
   if (t.warranty_type === "none") return "none";
   if (t.warranty_type === "unknown") return "unknown";
-  const parts = [t.warranty_type];
+  const parts: string[] = [t.warranty_type];
   if (t.warranty_duration_months) parts.push(`${t.warranty_duration_months}mo`);
   if (t.warranty_region) parts.push(t.warranty_region);
   return parts.join(" · ");
@@ -223,11 +223,12 @@ export function OfferSpread({
 
       {selectedOfferId && (
         <div className="mt-6 flex items-center gap-4">
-          <Button onClick={() => onSelect(selectedOfferId)} disabled={submitting}>
+          <Button onClick={() => onConfirm(selectedOfferId)} disabled={submitting}>
             {submitting ? "Freezing promises…" : "Freeze & open contract"}
           </Button>
-          <span className="font-body text-[13px] text-ink-soft">
-            Freezes this offer's exact promises before any money moves.
+          <span className="max-w-md font-body text-[13px] leading-snug text-ink-soft">
+            Freezes this offer's exact promises into a Dante Contract before any
+            money moves. You authorize payment on the next screen.
           </span>
         </div>
       )}

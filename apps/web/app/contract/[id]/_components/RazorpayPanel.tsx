@@ -85,9 +85,12 @@ export function RazorpayPanel({
       {isSandbox && status !== "PAID" && (
         <>
           <Rule className="my-4" />
-          <p className="font-body text-[12px] leading-relaxed text-ink-soft">
-            No live Razorpay keys are configured. The button below asks the demo
-            endpoint to deliver a <em>real signed webhook</em>{" "}
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-warning">
+            Sandbox mode — no Razorpay keys configured
+          </p>
+          <p className="mt-2 font-body text-[12px] leading-relaxed text-ink-soft">
+            The button below asks the demo endpoint to deliver a{" "}
+            <em>real signed webhook</em>{" "}
             (<code className="font-mono text-[11px]">payment.captured</code>)
             through the normal server verification pipeline — no client-side
             state fabrication.
@@ -116,7 +119,7 @@ export function RazorpayPanel({
       {status === "PAID" && (
         <div className="mt-4 border-t border-rule pt-4">
           <span className="font-mono text-[12px] uppercase tracking-[0.2em] text-success">
-            Paid — verified by server-side webhook truth
+            Paid — verified by webhook truth
           </span>
         </div>
       )}

@@ -270,3 +270,49 @@ def test_select_offer_requires_prior_search():
     finally:
         STORE.delete("int_nosearch")
         STORE.delete("off_nosearch")
+
+
+def test_select_stamps_evaluation_for_verifier_floor():
+    """Agent D's _evaluation_floor matches evaluations by contract_id and reads
+    the stamped constraint snapshot; verify the stamping survives a real
+    select-offer against the merchant catalog."""
+    import asyncio
+
+    from project_dante.api.routes.intents import (
+        compile_intent,
+        search_offers,
+        select_offer,
+    )
+    from project_dante.db.store import STORE
+    from project_dante.domain.promises.pipeline import CONSTRAINT_TO_PROMISE
+
+    r1 = asyncio.run(compile_intent(type("B", (), {
+        "raw_text": (
+            "Buy me over-ear ANC headphones under ₹12,000. I need an Indian "
+            "manufacturer warranty, they must arrive by Thursday."
+        )
+    })()))
+    iid = r1["intent"]["id"]
+    r2 = asyncio.run(search_offers(iid))
+    feasible = [x for x in r2["results"] if x["evaluation"]["feasible"]]
+    assert feasible, "hero query must produce at least one feasible offer"
+    best = feasible[0]["offer"]["id"]
+
+    r3 = asyncio.run(select_offer(iid, type("S", (), {"offer_id": best})()))
+    cid = r3["contract"]["id"]
+
+    ev = STORE.find_one("evaluation", contract_id=cid)
+    assert ev is not None, "selected evaluation must be stamped with contract_id"
+    keys = {c["key"] for c in ev.get("constraints") or []}
+    # critical snapshot uses frozen intent keys verbatim
+    assert "max_price_paise" in keys and "warranty.type" in keys
+    # every stamped key D knows about maps to a promise key (their map has a
+    # known gap for attributes.* — asserted here so the gap can't silently grow)
+    unmapped = {k for k in keys if not CONSTRAINT_TO_PROMISE.get(k)}
+    assert unmapped <= {"attributes.anc", "attributes.form_factor"}
+
+    # cleanup shared-store pollution
+    for rec in STORE.find("evaluation", contract_id=cid):
+        STORE.delete(rec["id"])
+    STORE.delete(cid)
+    STORE.delete(iid)

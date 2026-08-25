@@ -209,6 +209,19 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
     contract_id = f"con_{random.randint(10**11, 10**12 - 1)}"  # 12-digit numeric id
     display_code = f"COV-{random.randint(1000, 9999)}"
 
+    # Stamp the selection-time constraint snapshot onto the evaluation record so
+    # Agent D's verifier can floor severity on critical-constraint mismatches
+    # (their _evaluation_floor matches by contract_id).
+    evaluation["contract_id"] = contract_id
+    if not evaluation.get("constraints"):
+        evaluation["constraints"] = [
+            c for c in (intent.get("hard_constraints") or []) if c.get("critical", True)
+        ]
+    STORE.update(evaluation["id"], **{
+        "contract_id": contract_id,
+        "constraints": evaluation["constraints"],
+    })
+
     contract = DanteContract(
         id=contract_id,
         display_code=display_code,

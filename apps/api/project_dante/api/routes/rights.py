@@ -11,17 +11,18 @@ POST /api/remedies/{proposal_id}/execute  -> {money_action, refund|null, decisio
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from project_dante.db.store import STORE
+from project_dante.domain.remedies.planner import get_proposals, plan_remedies
 from project_dante.domain.rights.engine import (
     build_rights_graph,
     evaluate_eligibility,
     get_breaches,
 )
-from project_dante.domain.remedies.planner import get_proposals, plan_remedies
 
 router = APIRouter(tags=["rights"])
 
@@ -78,7 +79,6 @@ async def remedy_policy(proposal_id: str) -> dict[str, Any]:
     """
     from project_dante.domain.money.policy import (
         build_money_action_for_remedy,
-        execute_remedy,
         evaluate_money_action,
     )
 
@@ -110,10 +110,8 @@ async def remedy_policy(proposal_id: str) -> dict[str, Any]:
     if decision["decision"] == "REQUIRE_APPROVAL":
         from project_dante.domain.money.policy import _transition_contract
 
-        try:
+        with contextlib.suppress(Exception):  # already there / non-blocking
             _transition_contract(ma["contract_id"], "AWAITING_REMEDY_APPROVAL")
-        except Exception:  # noqa: BLE001 — already there / non-blocking for UI
-            pass
 
     return {
         "decision": decision,
@@ -138,6 +136,7 @@ async def remedy_execute(proposal_id: str) -> dict[str, Any]:
         "money_action": result.get("money_action"),
         "refund": result.get("refund"),
         "decision": result.get("decision"),
+        "executed": bool(result.get("executed")),
         **({"note": result["note"]} if result.get("note") else {}),
         **({"error": result["error"]} if result.get("error") else {}),
     }

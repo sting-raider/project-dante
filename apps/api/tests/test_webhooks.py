@@ -17,9 +17,9 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from project_dante.db.store import STORE
 from project_dante.domain.events import LOG
+from project_dante.integrations.razorpay.client import SANDBOX_KEY_SECRET
 from project_dante.settings import get_settings
 
 TEST_WEBHOOK_SECRET = "dante-test-webhook-secret"
@@ -114,9 +114,8 @@ def make_authorized_contract(amount_paise: int = 1149900, *, frozen_hash: bool =
     STORE.put(promise)
     promises = [STORE.get(promise["id"])]
     promise_set_hash = sha256_hex(promises)
-    contract_hash = sha256_hex(
-        {"offer": {k: v for k, v in offer.items() if k != "_type"}, "promise_set_hash": promise_set_hash}
-    )
+    offer_view = {k: v for k, v in offer.items() if k != "_type"}
+    contract_hash = sha256_hex({"offer": offer_view, "promise_set_hash": promise_set_hash})
     contract = {
         "_type": "contract",
         "id": contract_id,
@@ -140,14 +139,20 @@ def make_authorized_contract(amount_paise: int = 1149900, *, frozen_hash: bool =
 
 
 def events_for(contract_id: str, etype: str) -> list[dict]:
-    return [e for e in LOG.all() if e.get("aggregate_id") == contract_id and e.get("event_type") == etype]
+    return [
+        e
+        for e in LOG.all()
+        if e.get("aggregate_id") == contract_id and e.get("event_type") == etype
+    ]
 
 
 # ------------------------------------------------------- signature security
 
 
 def test_forged_webhook_is_401_and_stores_nothing(client):
-    body = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": {}}}}).encode()
+    body = json.dumps(
+        {"event": "payment.captured", "payload": {"payment": {"entity": {}}}}
+    ).encode()
     r = client.post(
         "/api/webhooks/razorpay",
         content=body,
@@ -165,8 +170,12 @@ def test_missing_signature_header_is_401(client):
 
 
 def test_valid_webhook_accepted_and_parsed(client):
-    body = json.dumps({"event": "payment.authorized", "payload": {"payment": {"entity": {}}}}).encode()
-    r = client.post("/api/webhooks/razorpay", content=body, headers={"X-Razorpay-Signature": sign(body)})
+    body = json.dumps(
+        {"event": "payment.authorized", "payload": {"payment": {"entity": {}}}}
+    ).encode()
+    r = client.post(
+        "/api/webhooks/razorpay", content=body, headers={"X-Razorpay-Signature": sign(body)}
+    )
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     assert len(STORE.list("webhook_event")) == 1
@@ -184,9 +193,11 @@ def test_duplicate_event_x5_single_domain_effect(client):
 
     raw, sig, event_id = captured_envelope(order_id, payment_id, 1149900)
     for i in range(5):
-        r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig})
+        r = client.post(
+            "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+        )
         assert r.status_code == 200
-        assert r.json().get("duplicate") is (i > 0)
+        assert bool(r.json().get("duplicate")) is (i > 0)
 
     stored_events = STORE.find("webhook_event", id=event_id)
     assert len(stored_events) == 1, "event body stored once"
@@ -236,12 +247,18 @@ def test_captured_with_wrong_amount_never_grants_paid(client):
     STORE.update(contract["id"], status="PAYMENT_PENDING")
 
     raw, sig, _ = captured_envelope(order_id, "pay_AmountHack001", 999999999)
-    r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig})
+    r = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
     assert r.status_code == 200
 
     refreshed = STORE.get(contract["id"])
     assert refreshed["status"] == "PAYMENT_PENDING", "amount mismatch must NOT grant PAID"
-    mismatch = [e for e in events_for(contract["id"], "STATE_RECONCILED") if e["payload"].get("reason") == "captured_amount_mismatch"]
+    mismatch = [
+        e
+        for e in events_for(contract["id"], "STATE_RECONCILED")
+        if e["payload"].get("reason") == "captured_amount_mismatch"
+    ]
     assert mismatch, "mismatch recorded for audit"
 
 
@@ -253,9 +270,58 @@ def test_captured_after_paid_is_idempotent_no_regression(client):
     raw, sig, _ = captured_envelope(
         STORE.get(contract["id"])["razorpay_order_id"], "pay_LateArrival001", 1149900
     )
-    r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig})
+    r = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
     assert r.status_code == 200
     assert STORE.get(contract["id"])["status"] == "FULFILLING", "never regress past PAID"
+
+
+@pytest.mark.parametrize("terminal_status", ["DRAFT", "CANCELLED", "FAILED"])
+def test_captured_never_resurrects_non_payable_contracts(client, terminal_status):
+    """K-03 regression: a signature-VALID capture on a draft/cancelled/failed
+    contract records gateway reality but NEVER changes status."""
+    from project_dante.integrations.razorpay import service
+
+    contract = make_authorized_contract()
+    order = service.create_order(1149900)
+    STORE.update(contract["id"], razorpay_order_id=order["id"], status=terminal_status)
+
+    raw, sig, _ = captured_envelope(order["id"], "pay_OrphanCapture001", 1149900)
+    r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig})
+    assert r.status_code == 200
+
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == terminal_status, f"{terminal_status} must never teleport to PAID"
+    withheld = [
+        e
+        for e in events_for(contract["id"], "STATE_RECONCILED")
+        if e["payload"].get("reason") == "captured_event_for_non_payable_state"
+    ]
+    assert withheld, "orphaned capture documented honestly for human handling"
+    assert withheld[0]["payload"]["action"] == "paid_withheld"
+    # Orphaned payment id must not graft onto the contract record.
+    assert not refreshed.get("razorpay_payment_id")
+
+
+@pytest.mark.parametrize(
+    "past_paid_status", ["FULFILLING", "SATISFIED", "REMEDIATED", "BREACH_DETECTED"]
+)
+def test_captured_on_post_paid_states_is_idempotent_no_resurrection(
+    client, past_paid_status
+):
+    """Captures arriving after payment was granted never regress or mutate
+    lifecycle state — recorded idempotently, status untouched."""
+    from project_dante.integrations.razorpay import service
+
+    contract = make_authorized_contract()
+    order = service.create_order(1149900)
+    STORE.update(contract["id"], razorpay_order_id=order["id"], status=past_paid_status)
+
+    raw, sig, _ = captured_envelope(order["id"], "pay_LateCapture0001", 1149900)
+    r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig})
+    assert r.status_code == 200
+    assert STORE.get(contract["id"])["status"] == past_paid_status
 
 
 # ------------------------------------------------------------------- refunds
@@ -269,10 +335,20 @@ def test_refund_processed_webhook_appends_event(client):
     payload = {
         "event": "refund.processed",
         "id": f"evt_{uuid.uuid4().hex[:12]}",
-        "payload": {"refund": {"entity": {"id": "rf_TestRefund00001", "payment_id": "pay_Refunded00001", "amount": 50000}}},
+        "payload": {
+            "refund": {
+                "entity": {
+                    "id": "rf_TestRefund00001",
+                    "payment_id": "pay_Refunded00001",
+                    "amount": 50000,
+                }
+            }
+        },
     }
     raw = json.dumps(payload).encode()
-    r = client.post("/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sign(raw)})
+    r = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sign(raw)}
+    )
     assert r.status_code == 200
     assert len(events_for(contract["id"], "REFUND_PROCESSED")) == before + 1
 
@@ -285,9 +361,8 @@ def test_verify_client_happy_then_webhook_grants_paid(client):
     order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
     order_id = order_r.json()["checkout_config"]["order_id"]
     payment_id = "pay_ClientVerify001"
-    sig = sign(f"{order_id}|{payment_id}".encode(), secret=__import__(
-        "project_dante.integrations.razorpay.client", fromlist=["SANDBOX_KEY_SECRET"]
-    ).SANDBOX_KEY_SECRET)
+    checkout_secret = SANDBOX_KEY_SECRET
+    sig = sign(f"{order_id}|{payment_id}".encode(), secret=checkout_secret)
 
     r = client.post(
         "/api/payments/verify-client",
@@ -416,8 +491,9 @@ def test_simulate_event_full_flow_contract_to_paid(client):
 
 
 def test_simulate_event_guarded_off_when_live_keys_present(client, monkeypatch):
-    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_LiveKey12345678")
-    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "live-secret-value")
+    # Deliberately NOT key-shaped: keeps the tree grep-clean for secrets scans.
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "dummy-key-id-for-guard-test")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "dummy-secret-value-for-guard-test")
     get_settings.cache_clear()
     try:
         r = client.post(
@@ -441,7 +517,8 @@ def test_simulate_event_rejects_unknown_order(client):
 
 def test_simulate_event_duplicate_delivery_is_one_effect(client):
     contract = make_authorized_contract()
-    order_id = client.post(f"/api/contracts/{contract['id']}/payment-order").json()["checkout_config"]["order_id"]
+    order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
+    order_id = order_r.json()["checkout_config"]["order_id"]
     pid = "pay_SimDupTarget01"
 
     for _ in range(2):

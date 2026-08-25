@@ -287,6 +287,186 @@ def test_double_verify_no_duplicate_breaches_or_events():
     assert len(stored) == n1
 
 
+# ------------------------------------------------- selection-time calibration
+
+
+def test_evaluation_record_floors_minor_to_material():
+    """Agent C ask: a stored _type=evaluation with critical constraints floors
+    mismatch severity at material even when the default mapping says minor."""
+    cid, _ = _mk_contract()
+    STORE.put(
+        {
+            "_type": "evaluation",
+            "id": "eval_1",
+            "contract_id": cid,
+            "intent_id": "int_1",
+            "offer_id": "off_hero_01",
+            "feasible": True,
+            "hard_failures": [],
+            "constraints": [
+                {"key": "returns.window_days", "op": "gte", "value": 7, "critical": True},
+            ],
+        }
+    )
+    for k, v in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        ("condition", "new"),
+        ("price.amount_paise", 1149900),
+        ("delivery.delivered_date", "2026-08-27T23:00:00+00:00"),  # +2h => minor by default
+    ]:
+        _fact(cid, k, v)
+
+    res = evaluate_contract(cid)
+    sla = [b for b in res["breaches"] if b.reason_code == "DELIVERY_SLA_MISS"]
+    # Delivery is NOT in the critical-constraint map: stays minor.
+    assert len(sla) == 1 and sla[0].severity == "minor"
+
+
+def test_evaluation_floor_applies_to_constraint_backed_keys():
+    """A key backed by a critical selection constraint (e.g. condition via the
+    constraint map) escalates past minor on mismatch."""
+    offer = _offer(
+        terms={
+            "warranty_type": "manufacturer",
+            "warranty_duration_months": 12,
+            "warranty_region": "IN",
+            "condition": "new",
+            "region": "IN",
+            "return_window_days": 7,
+        }
+    )
+    intent = {
+        "id": "int_cond",
+        "raw_text": "new condition only",
+        "hard_constraints": [
+            {"key": "condition", "op": "eq", "value": "new", "critical": True},
+        ],
+    }
+    cid, _ = _mk_contract(offer=offer, intent=intent)
+    STORE.put(
+        {
+            "_type": "evaluation",
+            "id": "eval_2",
+            "contract_id": cid,
+            "intent_id": "int_cond",
+            "offer_id": "off_hero_01",
+            "feasible": True,
+            "hard_failures": [],
+            "constraints": [{"key": "condition", "op": "eq", "value": "new", "critical": True}],
+        }
+    )
+    for k, v in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        ("price.amount_paise", 1149900),
+        ("delivery.delivered_date", "2026-08-27"),
+    ]:
+        _fact(cid, k, v)
+    _fact(cid, "condition", "used")  # mismatch; already critical by default
+
+    res = evaluate_contract(cid)
+    cond = [b for b in res["breaches"] if b.reason_code == "CONDITION_MISMATCH"]
+    assert len(cond) == 1 and cond[0].severity == "critical"
+
+    # And a minor-mapped key WITH a selection floor escalates: price mismatch
+    # against a contract whose evaluation had max_price as critical.
+    cid2, _ = _mk_contract()
+    STORE.put(
+        {
+            "_type": "evaluation",
+            "id": "eval_3",
+            "contract_id": cid2,
+            "constraints": [
+                {"key": "max_price_paise", "op": "lte", "value": 1200000, "critical": True},
+            ],
+            "hard_failures": [],
+        }
+    )
+    for k, v in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        ("condition", "new"),
+        ("delivery.delivered_date", "2026-08-27"),
+        ("price.amount_paise", 2500000),  # charged way above frozen price
+    ]:
+        _fact(cid2, k, v)
+    res2 = evaluate_contract(cid2)
+    price = [b for b in res2["breaches"] if STORE.get(b.promise_id)["key"] == "price.amount_paise"]
+    assert len(price) == 1 and price[0].severity == "material"  # floored from minor
+
+
+def test_sla_breach_exempt_from_severity_floor():
+    """Agent C finding 2 policy decision: a critical delivery_deadline floors
+    value mismatches but NOT DELIVERY_SLA_MISS — the <=24h-minor rule is the
+    documented compensation policy and must survive constraint backing."""
+    intent = {
+        "id": "int_dl",
+        "raw_text": "arrives by Thursday",
+        "hard_constraints": [
+            {"key": "delivery_deadline", "op": "lte", "value": "2026-08-27", "critical": True},
+        ],
+    }
+    cid, _ = _mk_contract(intent=intent)
+    STORE.put(
+        {
+            "_type": "evaluation",
+            "id": "eval_dl",
+            "contract_id": cid,
+            "constraints": [
+                {"key": "delivery_deadline", "op": "lte", "value": "2026-08-27", "critical": True},
+            ],
+            "hard_failures": [],
+        }
+    )
+    for k, v in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        ("condition", "new"),
+        ("price.amount_paise", 1149900),
+        ("delivery.delivered_date", "2026-08-27T23:00:00+00:00"),  # +2h late
+    ]:
+        _fact(cid, k, v)
+
+    res = evaluate_contract(cid)
+    sla = [b for b in res["breaches"] if b.reason_code == "DELIVERY_SLA_MISS"]
+    assert len(sla) == 1
+    assert sla[0].severity == "minor"  # NOT floored despite critical deadline
+
+    # But beyond 24h the SLA breach is material on its own terms:
+    cid2, _ = _mk_contract(
+        intent=intent,
+        offer=_offer(id="off_hero_dl2", sku="AST-HP-A17B"),  # distinct id/hash
+    )
+    STORE.put(
+        {
+            "_type": "evaluation",
+            "id": "eval_dl2",
+            "contract_id": cid2,
+            "constraints": [
+                {"key": "delivery_deadline", "op": "lte", "value": "2026-08-27", "critical": True},
+            ],
+            "hard_failures": [],
+        }
+    )
+    for k, v in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        ("condition", "new"),
+        ("price.amount_paise", 1149900),
+        ("delivery.delivered_date", "2026-08-30T21:00:00+00:00"),  # +72h
+    ]:
+        _fact(cid2, k, v)
+    res2 = evaluate_contract(cid2)
+    sla2 = [b for b in res2["breaches"] if b.reason_code == "DELIVERY_SLA_MISS"]
+    assert len(sla2) == 1 and sla2[0].severity == "material"
+
+
 # ---------------------------------------------------------------- transitions
 
 

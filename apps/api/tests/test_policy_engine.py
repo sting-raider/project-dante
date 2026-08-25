@@ -85,7 +85,9 @@ class PolicyAllowTests(unittest.TestCase):
         self.assertIn("AUTO-APPROVED", d["explanation"])
 
     def test_partial_refund_within_auto_limit_allowed(self):
-        d = evaluate_money_action(_proposal(type="refund_partial", amount_paise=30000, reason_code="delivery_sla_minor"))
+        d = evaluate_money_action(
+            _proposal(type="refund_partial", amount_paise=30000, reason_code="delivery_sla_minor")
+        )
         self.assertEqual(d["decision"], "ALLOW")
         self.assertIn("P-REFUND-04", d["policy_ids"])
 
@@ -108,14 +110,17 @@ class PolicyApprovalTests(unittest.TestCase):
     def setUp(self):
         STORE.reset()
         LOG.reset()
-        _mk_contract(amount=3_000_000)  # Rs 30,000 captured
+        # A FULL refund equals the captured amount by definition (K-01), so
+        # threshold tests use contracts whose captured amount crosses it.
+        _mk_contract(amount=2_500_000)  # Rs 25,000 captured
 
     def test_full_refund_above_threshold_requires_approval(self):
         d = evaluate_money_action(_proposal(amount_paise=2_500_000))
         self.assertEqual(d["decision"], "REQUIRE_APPROVAL")
         self.assertIn("P-REFUND-03", d["policy_ids"])
         self.assertIn("FULL_REFUND_ABOVE_HUMAN_APPROVAL_THRESHOLD", d["reason_codes"])
-        self.assertEqual([e["event_type"] for e in LOG.all() if e["event_type"] == "POLICY_ALLOWED"], [])
+        allowed_events = [e for e in LOG.all() if e["event_type"] == "POLICY_ALLOWED"]
+        self.assertEqual(allowed_events, [])
 
     def test_exact_threshold_is_still_autonomous(self):
         _mk_contract(amount=2_000_000)
@@ -126,6 +131,46 @@ class PolicyApprovalTests(unittest.TestCase):
         _mk_contract(amount=2_000_001)
         d = evaluate_money_action(_proposal(amount_paise=2_000_001))
         self.assertEqual(d["decision"], "REQUIRE_APPROVAL")
+
+
+class FullRefundAmountIntegrityTests(unittest.TestCase):
+    """K-01: refund_full below captured is case-closure fraud, not a remedy."""
+
+    def setUp(self):
+        STORE.reset()
+        LOG.reset()
+        _mk_contract()
+
+    def test_under_amount_full_refund_denied(self):
+        d = evaluate_money_action(_proposal(amount_paise=CAPTURED // 2))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("FULL_REFUND_AMOUNT_MISMATCH", d["reason_codes"])
+
+    def test_under_amount_by_one_paise_denied(self):
+        d = evaluate_money_action(_proposal(amount_paise=CAPTURED - 1))
+        self.assertEqual(d["decision"], "DENY")
+        self.assertIn("FULL_REFUND_AMOUNT_MISMATCH", d["reason_codes"])
+
+    def test_partial_path_still_available_for_smaller_amounts(self):
+        d = evaluate_money_action(
+            _proposal(type="refund_partial", amount_paise=30000, reason_code="delivery_sla_minor")
+        )
+        self.assertEqual(d["decision"], "ALLOW")
+
+    def test_non_integer_amount_types_denied_uncoerced(self):
+        """K-02: strings/floats/bools are never coerced into money."""
+        cases = [
+            ("11499", "string"),
+            (114.99, "float rupee truncation"),
+            (True, "bool"),
+            (None, "missing"),
+        ]
+        for raw, label in cases:
+            with self.subTest(case=label):
+                d = evaluate_money_action(_proposal(amount_paise=raw))
+                self.assertEqual(d["decision"], "DENY", label)
+                self.assertIn("INVALID_AMOUNT_TYPE", d["reason_codes"])
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
 
 
 class PolicyDenyTests(unittest.TestCase):
@@ -156,7 +201,9 @@ class PolicyDenyTests(unittest.TestCase):
         self.assertIn("P-REFUND-01", d["policy_ids"])
 
     def test_disallowed_partial_reason_denied(self):
-        d = evaluate_money_action(_proposal(type="refund_partial", amount_paise=30000, reason_code="wrong_sku"))
+        d = evaluate_money_action(
+            _proposal(type="refund_partial", amount_paise=30000, reason_code="wrong_sku")
+        )
         self.assertEqual(d["decision"], "DENY")
         self.assertIn("REFUND_REASON_NOT_ALLOWED", d["reason_codes"])
 
@@ -229,7 +276,8 @@ class PolicySnapshotTests(unittest.TestCase):
         pr = p["refund"]["partial_refund"]
         self.assertEqual(pr["max_auto_amount_paise"], 50000)
         self.assertEqual(
-            sorted(pr["allowed_reasons"]), sorted(["delivery_sla_minor", "missing_low_value_accessory"])
+            sorted(pr["allowed_reasons"]),
+            sorted(["delivery_sla_minor", "missing_low_value_accessory"]),
         )
 
         ag = p["agent"]

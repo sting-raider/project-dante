@@ -70,7 +70,7 @@ def _effective_key_secret() -> str:
 def compute_checkout_signature(order_id: str, payment_id: str, *, secret: str | None = None) -> str:
     """HMAC-SHA256 hex digest of ``"{order_id}|{payment_id}"`` (Razorpay spec)."""
     key = secret.encode("utf-8") if secret is not None else _effective_key_secret().encode("utf-8")
-    msg = f"{order_id}|{payment_id}".encode("utf-8")
+    msg = f"{order_id}|{payment_id}".encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
@@ -160,7 +160,10 @@ class LiveTestModeClient:
         try:
             resp = self._http.request(method, path, json=json_body)
         except httpx.HTTPError as exc:  # network/DNS/timeout — no body, no secrets
-            raise RazorpayError(f"razorpay transport failure on {method} {path}: {type(exc).__name__}") from exc
+            kind = type(exc).__name__
+            raise RazorpayError(
+                f"razorpay transport failure on {method} {path}: {kind}"
+            ) from exc
         if resp.status_code >= 400:
             desc = (resp.text or "")[:300].replace("\n", " ")
             raise RazorpayError(
@@ -221,9 +224,10 @@ class LiveTestModeClient:
         if existing is not None:
             logger.info("refund replay hit local idempotency key=%s…", idempotency_key[:8])
             return existing
-        if amount_paise is not None:
-            if not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise <= 0:
-                raise ValueError("amount_paise must be a positive integer (paise)")
+        if amount_paise is not None and (
+            not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise <= 0
+        ):
+            raise ValueError("amount_paise must be a positive integer (paise)")
         body: dict[str, Any] = {}
         if amount_paise is not None:
             body["amount"] = amount_paise

@@ -8,7 +8,7 @@
  */
 
 import type { DanteContract, Promise_ } from "@/lib/useContractFlow";
-import { rupees } from "@/lib/useContractFlow";
+import { rupees, shortHash } from "@/lib/useContractFlow";
 import { Badge, Button, ConstraintMark, MoneyText, Panel, Rule, SandboxBadge } from "./atoms";
 
 export function formatPromiseValue(v: unknown): string {
@@ -32,11 +32,13 @@ export function formatPromiseValue(v: unknown): string {
 export function AuthorizationCard({
   contract,
   promises,
+  offerTitle,
   onAuthorize,
   authorizing,
 }: {
   contract: DanteContract;
   promises: Promise_[];
+  offerTitle?: string | null;
   onAuthorize: () => void;
   authorizing: boolean;
 }) {
@@ -60,6 +62,12 @@ export function AuthorizationCard({
           </div>
         </div>
       </div>
+
+      {offerTitle && (
+        <div className="mt-2 font-display text-lg leading-snug text-ink">
+          {offerTitle}
+        </div>
+      )}
 
       {/* constraint checkmarks = material promises */}
       <ul className="mt-5 space-y-1.5">

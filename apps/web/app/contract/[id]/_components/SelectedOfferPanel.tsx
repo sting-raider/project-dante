@@ -7,7 +7,7 @@
 
 import type { MerchantOffer, SoftScore } from "@/lib/useContractFlow";
 import { rupees } from "@/lib/useContractFlow";
-import { Badge, MonoValue, Panel, Rule, SectionLabel } from "./atoms";
+import { Badge, Panel, Rule, SectionLabel } from "./atoms";
 
 function deliveryText(offer: MerchantOffer): string {
   const dp = offer.delivery_promise;

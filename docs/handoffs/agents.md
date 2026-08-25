@@ -150,6 +150,13 @@ infeasible select attempt → HTTP 409.
 - **Agent B** (payments): contracts created here are `CONTRACT_FROZEN`,
   `sandbox_mode=True`, with `amount_paise` from the offer — ready for
   `/payment-order`. No Razorpay fields beyond ids are touched here.
+- **Agent D** (verifier): select-offer stamps the selected evaluation record
+  with `contract_id` and a `constraints` snapshot (critical hard constraints,
+  frozen intent keys verbatim). `evaluate_contract`'s `_evaluation_floor`
+  matches by `contract_id` and floors mismatch severity at material for those
+  keys. Known map gap flagged to D: `pipeline.CONSTRAINT_TO_PROMISE` lacks
+  entries for `attributes.form_factor` / `attributes.anc` (it holds bare
+  `form_factor` / `anc`), so those two floors need an alias on their side.
 - **Agent E** (rights/remedies): evaluation records (`_type=evaluation`) and
   the frozen contract's `promise_ids` are the materiality inputs; breach
   severity for a violated manufacturer-region warranty should be material+

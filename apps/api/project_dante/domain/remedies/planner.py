@@ -85,7 +85,9 @@ def _get_contract(contract_id: str) -> dict[str, Any]:
 
 def _material_breach(breaches: list[dict[str, Any]]) -> dict[str, Any] | None:
     for b in breaches:
-        if b.get("reason_code") in MATERIAL_REASONS or b.get("severity") in {"material", "critical"}:
+        if b.get("reason_code") in MATERIAL_REASONS or b.get(
+            "severity"
+        ) in {"material", "critical"}:
             return b
     return breaches[0] if breaches else None
 
@@ -125,8 +127,16 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
         status = ent.get("status")
         etype = ent.get("type")
 
-        # Only eligible rights produce executable candidates.
-        if status != "eligible":
+        # Only eligible rights produce executable candidates — with ONE
+        # exception: a replacement blocked purely by inventory still becomes a
+        # visible, rejected candidate (replacement_inventory_unavailable) so
+        # the UI can explain WHY the fallback won.
+        inventory_blocked = (
+            slug == "merchant_replacement"
+            and status == "blocked"
+            and ctx.get("replacement.available") is False
+        )
+        if status != "eligible" and not inventory_blocked:
             continue
 
         if slug == "merchant_replacement":
@@ -138,6 +148,11 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
                 "promised variant) with no buyer loss. Chosen first because the "
                 "buyer wanted the product, not merely its price back."
             )
+            if inventory_blocked:
+                expl = (
+                    "Replacement would normally rank first, but the synthetic "
+                    "merchant API reports zero matching inventory."
+                )
         elif etype == "refund" or slug == "merchant_full_refund":
             rtype = "refund_full"
             hours = ent.get("estimated_resolution_hours") or 24.0
@@ -147,7 +162,11 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
             why = (
                 "replacement inventory is unavailable"
                 if avail is False
-                else ("a replacement was already attempted" if attempted else "no valid replacement exists")
+                else (
+                    "a replacement was already attempted"
+                    if attempted
+                    else "no valid replacement exists"
+                )
             )
             expl = f"Full refund of the captured amount selected because {why}."
         elif slug == "merchant_partial_refund_delivery":
@@ -174,9 +193,8 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
         )
 
     # ---- REPLACEMENT UNAVAILABLE RULE ------------------------------------
-    # (Handled upstream via eligibility marking replacement blocked when the
-    # inventory fact is False; belt-and-braces here in case an eligible
-    # replacement slips through with inventory explicitly False.)
+    # Candidates already carry rejected_reason when inventory is explicitly
+    # False; belt-and-braces in case an eligible one slipped through.
     repl_available = ctx.get("replacement.available")
     ranked: list[dict[str, Any]] = []
     for c in candidates:
@@ -187,12 +205,17 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
 
     ranked.sort(key=lambda c: (-c["score"], c["remedy_type"]))
 
+    # Rank positions come from the RANKED order; hard-rejected candidates
+    # (replacement_inventory_unavailable) sit outside it with rank None.
+    rank_by_id = {id(c): i + 1 for i, c in enumerate(ranked)}
+
     proposals: list[dict[str, Any]] = []
-    for i, c in enumerate(candidates):
+    for c in candidates:
         ent = c["entitlement"]
         rejected = c.get("rejected_reason")
         if rejected is None:
-            rejected = "ranked_lower" if i > 0 else None
+            pos = rank_by_id.get(id(c))
+            rejected = "ranked_lower" if (pos is not None and pos > 1) else None
         rec = {
             "_type": "remedy",
             "id": new_id("rem"),
@@ -208,9 +231,18 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
             "evidence_ids": evidence_ids,
             "explanation": c["explanation"],
             "rejected_reason": rejected,
-            "rank": None if rejected == "replacement_inventory_unavailable" else i + 1,
+            "rank": (
+                rank_by_id.get(id(c)) if rejected != "replacement_inventory_unavailable" else None
+            ),
             "score_breakdown": {
-                k: c[k] for k in ("normalized_value", "intent_restoration", "speed", "inconvenience", "score")
+                k: c[k]
+                for k in (
+                    "normalized_value",
+                    "intent_restoration",
+                    "speed",
+                    "inconvenience",
+                    "score",
+                )
             },
             "synthetic": False,
         }

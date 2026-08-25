@@ -83,3 +83,29 @@ export function formatPct(value: number | null | undefined): string {
   const pct = Math.abs(value) <= 1 ? value * 100 : value;
   return `${Math.round(pct)}%`;
 }
+
+/** Indented JSON for audit/event payload viewers; "—" for empty input. */
+export function prettyJson(value: unknown): string {
+  if (value == null) return "—";
+  try {
+    const s = JSON.stringify(value, null, 2);
+    return s === "{}" || s === "[]" ? "—" : s;
+  } catch {
+    return String(value);
+  }
+}
+
+/** One-line summary of an event payload: first few key=value pairs. */
+export function payloadSummary(
+  payload: Record<string, unknown> | null | undefined,
+  maxPairs = 3
+): string {
+  if (!payload || typeof payload !== "object") return "—";
+  const pairs = Object.entries(payload)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .slice(0, maxPairs)
+    .map(([k, v]) => `${k}=${typeof v === "object" ? "{…}" : String(v)}`);
+  if (pairs.length === 0) return "—";
+  const more = Object.keys(payload).length > maxPairs ? `, +${Object.keys(payload).length - maxPairs}` : "";
+  return pairs.join(", ") + more;
+}

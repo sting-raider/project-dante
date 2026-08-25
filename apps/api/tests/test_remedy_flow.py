@@ -26,17 +26,52 @@ store_mod.STORE._load()
 from project_dante.db.store import STORE  # noqa: E402
 from project_dante.domain.events import LOG  # noqa: E402
 from project_dante.domain.hashing import sha256_hex  # noqa: E402
+from project_dante.domain.money.policy import execute_remedy  # noqa: E402
 from project_dante.domain.remedies.planner import (  # noqa: E402
     plan_remedies,
     score_remedy,
 )
-from project_dante.domain.money.policy import execute_remedy  # noqa: E402
 
 CAPTURED = 1_149_900  # Rs 11,499.00
 
 
 def _seed_breach_contract(cid="con_rem_1", captured=CAPTURED):
-    """PAID contract with a material wrong-variant breach + evidence."""
+    """PAID contract with a material wrong-variant breach + evidence.
+
+    Seeds a genuine Agent-B sandbox ``razorpay_payment`` record so the real
+    SandboxClient.create_refund path executes end-to-end (it validates the
+    payment exists and tracks amount_refunded).
+    """
+    order_id = "order_" + cid.replace("_", "")
+    payment_id = "pay_" + cid.replace("_", "")
+    STORE.put(
+        {
+            "_type": "razorpay_order",
+            "id": order_id,
+            "entity": "order",
+            "amount": captured,
+            "currency": "INR",
+            "status": "paid",
+            "receipt": f"rcpt-{cid}",
+            "notes": {},
+            "attempts": 1,
+            "sandbox": True,
+        }
+    )
+    STORE.put(
+        {
+            "_type": "razorpay_payment",
+            "id": payment_id,
+            "entity": "payment",
+            "amount": captured,
+            "currency": "INR",
+            "status": "captured",
+            "order_id": order_id,
+            "captured": True,
+            "amount_refunded": 0,
+            "sandbox": True,
+        }
+    )
     STORE.put(
         {
             "_type": "contract",
@@ -45,8 +80,8 @@ def _seed_breach_contract(cid="con_rem_1", captured=CAPTURED):
             "intent_id": "int_x",
             "offer_id": "off_A17",
             "amount_paise": captured,
-            "razorpay_order_id": "order_test",
-            "razorpay_payment_id": "pay_test_" + cid[-4:],
+            "razorpay_order_id": order_id,
+            "razorpay_payment_id": payment_id,
             "status": "BREACH_DETECTED",
             "contract_hash": sha256_hex({"id": cid}),
             "sandbox_mode": True,
@@ -229,7 +264,8 @@ class ExecuteHappyPathTests(unittest.TestCase):
         self.assertTrue(out["executed"])
         self.assertIsNotNone(out["refund"])
         refund = out["refund"]
-        self.assertEqual(refund["amount_paise"], CAPTURED)
+        # Sandbox adapter mirrors Razorpay's wire shape: `amount` in paise.
+        self.assertEqual(refund.get("amount", refund.get("amount_paise")), CAPTURED)
         self.assertTrue(refund.get("sandbox"))  # honest sandbox marker
 
         contract = STORE.get("con_rem_1")
@@ -246,7 +282,11 @@ class ExecuteHappyPathTests(unittest.TestCase):
         self.assertIn("CONTRACT_REMEDIATED", types)
 
         # exactly one refund record exists
-        refunds = [r for r in STORE.list("razorpay_refund") if r["payment_id"] == contract["razorpay_payment_id"]]
+        refunds = [
+            r
+            for r in STORE.list("razorpay_refund")
+            if r["payment_id"] == contract["razorpay_payment_id"]
+        ]
         self.assertEqual(len(refunds), 1)
 
     def test_repeated_execution_is_idempotent_single_refund(self):
@@ -358,29 +398,43 @@ class ExecutorGuardTests(unittest.TestCase):
         )
         self.top = plan_remedies("con_rem_1")["chosen"]
 
-    def test_amount_inflated_after_decision_fails_final_check(self):
-        from project_dante.domain.money.policy import build_money_action_for_remedy, evaluate_money_action
+    def test_amount_inflated_after_decision_is_blocked(self):
+        from project_dante.domain.money.policy import (
+            build_money_action_for_remedy,
+            evaluate_money_action,
+        )
 
         ma = build_money_action_for_remedy(self.top["id"])
         decision = evaluate_money_action(ma)
         self.assertEqual(decision["decision"], "ALLOW")
 
-        # Tamper: inflate amount AFTER evaluation, BEFORE execution.
+        # Tamper: inflate amount AFTER evaluation, BEFORE execution. The gated
+        # pipeline re-evaluates from the store, so the inflated proposal is
+        # DENYed (over captured) — the plan §23 amount-manipulation threat.
         STORE.update(ma["id"], amount_paise=99_999_999)
         out = execute_remedy(self.top["id"])
         self.assertFalse(out["executed"])
-        self.assertIn("error", out)
-        self.assertEqual(STORE.get(ma["id"])["status"], "failed")
-        # No money moved, contract back in breached family.
+        self.assertEqual(out["decision"]["decision"], "DENY")
+        self.assertIn("AMOUNT_EXCEEDS_CAPTURED", out["decision"]["reason_codes"])
+        self.assertIsNone(out["refund"])
+        self.assertEqual(STORE.get(ma["id"])["status"], "denied")
+        # No money moved; contract stays breached.
         self.assertEqual(STORE.get("con_rem_1")["status"], "BREACH_DETECTED")
         self.assertNotIn("REFUND_PROCESSED", {e["event_type"] for e in LOG.all()})
 
     def test_missing_payment_id_blocks_execution(self):
-        from project_dante.domain.money.policy import build_money_action_for_remedy
+        from project_dante.domain.money.policy import (
+            build_money_action_for_remedy,
+            execute_remedy,
+        )
 
         ma = build_money_action_for_remedy(self.top["id"])
-        evaluate_money_action(ma)
+        STORE.update(ma["id"], status="allowed")  # simulate prior ALLOW decision
         STORE.update("con_rem_1", razorpay_payment_id=None)
+
+        out = execute_remedy(self.top["id"])
+        self.assertFalse(out["executed"])
+        self.assertIn("no captured razorpay_payment_id", out["error"])
 
         out = execute_remedy(self.top["id"])
         self.assertFalse(out["executed"])

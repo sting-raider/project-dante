@@ -23,6 +23,7 @@ which is exactly the separation the money-authority boundary requires.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections import deque
 from functools import lru_cache
@@ -275,15 +276,22 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
             explanation="Only INR money actions are supported.",
         ))
 
-    try:
-        amount = int(proposal.get("amount_paise"))
-    except (TypeError, ValueError):
+    # Strict money typing (plan §19: never coerce malformed financial values).
+    # Strings, floats, bools, and anything non-int are rejected as-is — a
+    # float "rupee" amount must never silently truncate into paise.
+    raw_amount = proposal.get("amount_paise")
+    if isinstance(raw_amount, bool) or not isinstance(raw_amount, int):
         return _finish(proposal, contract_id, _make_decision(
             decision="DENY",
             policy_ids=[P_GENERIC],
-            reason_codes=["INVALID_AMOUNT"],
-            explanation="Money action amount is missing or not an integer paise value.",
+            reason_codes=["INVALID_AMOUNT_TYPE"],
+            explanation=(
+                "Money action amount_paise must be an integer (paise); got "
+                f"{type(raw_amount).__name__}. Malformed financial values are "
+                f"never coerced."
+            ),
         ))
+    amount = raw_amount
 
     contract = STORE.get(contract_id) if contract_id else None
     if contract is None:
@@ -369,6 +377,23 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
         ))
 
     if action_type == "refund_full":
+        # K-01 (case-closure fraud): a "full" refund below the captured amount
+        # would close the case while under-refunding the buyer, silently
+        # bypassing the partial-refund reason list and its auto cap. A full
+        # refund IS the captured amount — anything less is a partial refund
+        # and must travel through that typed path instead.
+        if amount != captured:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="DENY",
+                policy_ids=[P_REFUND_FULL],
+                reason_codes=["FULL_REFUND_AMOUNT_MISMATCH"],
+                explanation=(
+                    f"A full refund must be exactly the captured amount "
+                    f"({_fmt_inr(captured)}); got {_fmt_inr(amount)}. For a "
+                    f"smaller compensation use refund_partial with an allowed "
+                    f"partial-refund reason."
+                ),
+            ))
         allowed: list[str] = list(policy["refund"]["full_refund"]["allowed_reasons"])
         if reason not in allowed:
             return _finish(proposal, contract_id, _make_decision(
@@ -491,7 +516,9 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
 
     evidence_ids = list(prop.get("evidence_ids") or [])
     if not evidence_ids and breach:
-        evidence_ids = [eid for eid in (breach.get("observed_fact_id"), breach.get("promise_id")) if eid]
+        evidence_ids = [
+            eid for eid in (breach.get("observed_fact_id"), breach.get("promise_id")) if eid
+        ]
 
     explanation = (
         f"{action_type.replace('_', ' ').title()} of {_fmt_inr(amount)} on contract "
@@ -520,7 +547,10 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
     if existing and existing.get("status") == "executed":
         return existing  # caller short-circuits: already refunded
     if existing:
-        return STORE.update(existing["id"], status="proposed", **fields) or existing
+        # Reuse preserves the originally built fields (reason, amount, target
+        # payment): mutating them post-hoc would undermine the audit trail and
+        # any prior evaluation bound to this exact proposal.
+        return STORE.update(existing["id"], status="proposed") or existing
 
     ma = {
         "_type": "money_action",
@@ -610,7 +640,9 @@ def rzp_mode() -> str:
     return "sandbox"
 
 
-def _create_refund(payment_id: str, amount_paise: int, idempotency_key: str, notes: dict | None) -> dict:
+def _create_refund(
+    payment_id: str, amount_paise: int, idempotency_key: str, notes: dict | None
+) -> dict:
     """Call the real Razorpay refund API, or the local sandbox stub.
 
     The stub creates a genuine ``razorpay_refund`` store record (prefix rzr_)
@@ -654,6 +686,37 @@ _BREACH_FAMILY_STATUSES = {
 }
 
 
+def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
+    """Amount/payment/policy-drift validation shared by both executor paths."""
+    contract = STORE.get(ma["contract_id"])
+    if contract is None:
+        return False, "contract vanished between evaluation and execution"
+    if not contract.get("razorpay_payment_id"):
+        return False, "contract has no captured razorpay_payment_id"
+    if ma.get("razorpay_payment_id") != contract.get("razorpay_payment_id"):
+        return False, "target payment changed after the policy decision"
+    amount = ma.get("amount_paise")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        return False, f"amount type {type(amount).__name__} is not integer paise"
+    if amount <= 0:
+        return False, f"amount {amount} is not positive"
+    captured = _captured_amount_paise(contract)
+    if captured is None:
+        return False, "no captured amount on record for this contract"
+    if amount > captured:
+        return False, f"amount {amount} exceeds captured amount {captured}"
+    # K-01 executor mirror: a full refund must still be FULL at call time —
+    # a downward tamper after evaluation must not close the case short.
+    if ma.get("type") == "refund_full" and amount != captured:
+        return False, (
+            f"full refund amount {amount} != captured amount {captured}; "
+            f"downward drift is not permitted on a full refund"
+        )
+    if ma.get("policy_snapshot_hash") and ma["policy_snapshot_hash"] != policy_snapshot_hash():
+        return False, "merchant policy changed after the money action was built"
+    return True, ""
+
+
 def _executor_final_check(ma: dict[str, Any], decision: dict[str, Any]) -> tuple[bool, str]:
     """THE FINAL EXECUTOR CHECK — run immediately before the Razorpay call.
 
@@ -663,29 +726,7 @@ def _executor_final_check(ma: dict[str, Any], decision: dict[str, Any]) -> tuple
     if decision.get("decision") != "ALLOW":
         return False, f"policy decision is {decision.get('decision')}, not ALLOW"
 
-    contract = STORE.get(ma["contract_id"])
-    if contract is None:
-        return False, "contract vanished between evaluation and execution"
-
-    if contract.get("status") not in _BREACH_FAMILY_STATUSES:
-        return False, f"contract status {contract.get('status')!r} is not executable"
-
-    if not contract.get("razorpay_payment_id"):
-        return False, "contract has no captured razorpay_payment_id"
-
-    if ma.get("razorpay_payment_id") != contract.get("razorpay_payment_id"):
-        return False, "target payment changed after the policy decision"
-
-    amount = int(ma.get("amount_paise") or 0)
-    if amount <= 0:
-        return False, f"amount {amount} is not positive"
-    captured = _captured_amount_paise(contract)
-    if captured is None or amount > captured:
-        return False, f"amount {amount} exceeds captured amount {captured}"
-
-    if ma.get("policy_snapshot_hash") and ma["policy_snapshot_hash"] != policy_snapshot_hash():
-        return False, "merchant policy changed after the money action was built"
-    return True, ""
+    return _executor_structural_check(ma)
 
 
 def execute_remedy(proposal_id: str) -> dict[str, Any]:
@@ -782,15 +823,39 @@ def approve_remedy(proposal_id: str) -> dict[str, Any]:
     if ma.get("status") == "denied":
         raise ValueError("a denied money action cannot be approved")
 
-    decision = evaluate_money_action(ma)
-    if decision["decision"] == "DENY":
-        raise ValueError(
-            f"policy denied this remedy: {decision['explanation']}"
-        )
+    # The human approval IS the gate for the earlier REQUIRE_APPROVAL verdict;
+    # re-evaluation here would just re-derive the same threshold breach. We
+    # still refuse to run anything structurally invalid or drifted.
+    from project_dante.domain.state_machine import validate_transition
+
+    contract = STORE.get(ma["contract_id"])
+    if contract is None:
+        raise KeyError(f"contract {ma['contract_id']} not found")
+    if not contract.get("razorpay_payment_id"):
+        raise ValueError("contract has no captured razorpay_payment_id")
+
+    ok, why = _executor_structural_check(ma)
+    if not ok:
+        STORE.update(ma["id"], status="failed")
+        raise ValueError(f"execution failed structural check: {why}")
 
     # Approval is the explicit human gate; walk into REMEDY_EXECUTING.
+    validate_transition(contract["status"], "REMEDY_EXECUTING")
     _transition_contract(ma["contract_id"], "REMEDY_EXECUTING")
-    executed_ma, refund, err = _execute_allowed(ma, decision)
+
+    # Approved execution: pass an explicit ALLOW verdict into the pipeline so
+    # the final check gates on structure/drift only — the human already gated
+    # the amount threshold by approving. The decision dict still carries the
+    # original policy citation for the audit trail.
+    approved_decision = {
+        "decision": "ALLOW",
+        "policy_ids": ["P-REFUND-03"],
+        "reason_codes": ["HUMAN_APPROVED"],
+        "explanation": "Executed after explicit human approval of the threshold-gated refund.",
+        "evaluated_at": now_iso(),
+        "policy_snapshot_hash": ma.get("policy_snapshot_hash") or policy_snapshot_hash(),
+    }
+    executed_ma, refund, err = _execute_allowed(ma, approved_decision)
     if err:
         raise ValueError(f"execution failed final check: {err}")
     return {"money_action": executed_ma, "refund": refund}
@@ -818,10 +883,8 @@ def _execute_allowed(
             causation_id=ma.get("remedy_proposal_id"),
         )
         # Recover to the breached family; no money moved.
-        try:
+        with contextlib.suppress(Exception):  # already in a breached state
             _transition_contract(contract_id, "BREACH_DETECTED")
-        except Exception:  # noqa: BLE001 — already in a breached state
-            pass
         return updated or ma, None, why
 
     # Move to a pre-execution state closest to where we are.
@@ -872,10 +935,8 @@ def _execute_allowed(
             correlation_id=contract_id,
             causation_id=ma.get("remedy_proposal_id"),
         )
-        try:
+        with contextlib.suppress(Exception):
             _transition_contract(contract_id, "BREACH_DETECTED")
-        except Exception:  # noqa: BLE001
-            pass
         return updated or ma, None, str(exc)
 
     refund_id = refund.get("id") or refund.get("refund_id") or ""

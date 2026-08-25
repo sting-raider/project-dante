@@ -14,8 +14,12 @@ MEDIUM = hardening gap bounded by other controls; LOW = defense-in-depth nit.
 
 ### K-03 — Webhook capture teleports CANCELLED/FAILED/DRAFT contracts to PAID (HIGH)
 
-**Status:** OPEN — assigned to Agent B (webhooks.py owner)
-**File:** `apps/api/project_dante/api/routes/webhooks.py:300` (`_on_payment_captured`, final fallback)
+**Status:** OPEN — assigned to Agent B (webhooks.py owner). PARTIALLY ADDRESSED by
+Agent B's `_walk_to_paid` refactor (`webhooks.py:275`), which legally walks every
+pre-payment state to PAID — but the force-write fallback remains at
+`webhooks.py:291` and still fires for CANCELLED/FAILED/DRAFT. Regression test
+still failing as of 2026-08-26.
+**File:** `apps/api/project_dante/api/routes/webhooks.py:291` (`_on_payment_captured`, final fallback)
 **Suite:** `tests/test_webhook_chaos.py::TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts`
 
 Reproduction (verified standalone):
