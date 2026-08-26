@@ -146,14 +146,20 @@ def _resolve_store() -> Any:
     DANTE_STORE_BACKEND=json (default) -> Store() below — byte-for-byte the
     original behavior. 'postgres'/'pg' -> PostgresStore(DATABASE_URL) with
     the identical interface, so no call site changes either way.
+
+    Failure postures, deliberately different:
+
+    - missing DATABASE_URL under the postgres backend raises immediately
+      (fail-fast operator misconfiguration — a silent JSON fallback would
+      split Dante's money state across two backends);
+    - an unreachable-but-configured database defers the error to first
+      real use, so processes can start before their DB finishes booting.
     """
     backend = (os.environ.get("DANTE_STORE_BACKEND") or "json").strip().lower()
     if backend in ("postgres", "pg"):
         from project_dante.db.pg_store import PostgresStore
 
         store = PostgresStore(os.environ.get("DATABASE_URL") or None)
-        # DB may not be reachable at import time; first real use raises a
-        # clear PostgresStoreError instead of breaking imports.
         with contextlib.suppress(Exception):
             store.ensure_schema()
         return store

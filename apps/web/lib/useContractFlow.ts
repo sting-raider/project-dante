@@ -414,6 +414,7 @@ export function useContractFlow() {
   const loadContract = useCallback(
     async (id: string): Promise<boolean> => {
       setError(null);
+      setContractId(id); // Stage 2's openCheckout/canOpenCheckout gate on this
       const c = await refreshContract(id);
       if (!c) return false; // only a fatal (404) load lands here now
       // Restore the payment-order context so RazorpayPanel keeps its mode
