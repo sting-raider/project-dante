@@ -45,6 +45,13 @@ _ID_SUFFIX_LEN = 14
 # Refund receipts cap at 40 chars upstream; keep our idempotency receipts legal.
 _RECEIPT_MAX = 40
 
+# Upstream refund idempotency (Razorpay docs, POST /payments/:id/refund): send
+# header ``X-Refund-Idempotency`` whose value is 10-40 chars of
+# [A-Za-z0-9_-]; retrying the same value + body can never create a second
+# refund, while a DIFFERENT body under the same value is rejected (409).
+_REFUND_IDEMPOTENCY_HEADER = "X-Refund-Idempotency"
+_IDEM_VALUE_MAX = 40
+
 
 class RazorpayError(RuntimeError):
     """Raised when the live Razorpay API rejects or fails a call.
@@ -116,6 +123,20 @@ def _existing_refund_for_key(idempotency_key: str) -> dict | None:
     return STORE.find_one("razorpay_refund", idempotency_key=idempotency_key)
 
 
+def refund_idempotency_header_value(idempotency_key: str) -> str:
+    """Derive the upstream ``X-Refund-Idempotency`` header value.
+
+    Razorpay requires 10-40 chars of [A-Za-z0-9_-]; our Dante idempotency keys
+    (e.g. ``rem_abc123:v2``) contain ``:``/may exceed 40 chars, so we send a
+    deterministic digest instead of raw material: sha256 hex truncated to 40
+    chars — stable across process restarts, workers, and retries, and always
+    inside the documented charset. Empty key => empty string (header omitted).
+    """
+    if not idempotency_key:
+        return ""
+    return hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:_IDEM_VALUE_MAX]
+
+
 # ------------------------------------------------------- LiveTestModeClient
 
 
@@ -156,9 +177,15 @@ class LiveTestModeClient:
 
     # ------------------------------------------------------------ internals
 
-    def _request(self, method: str, path: str, json_body: dict | None = None) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json_body: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict:
         try:
-            resp = self._http.request(method, path, json=json_body)
+            resp = self._http.request(method, path, json=json_body, headers=headers)
         except httpx.HTTPError as exc:  # network/DNS/timeout — no body, no secrets
             kind = type(exc).__name__
             raise RazorpayError(
@@ -178,6 +205,14 @@ class LiveTestModeClient:
     def create_order(
         self, amount_paise: int, receipt: str = "", notes: dict | None = None
     ) -> dict:
+        """Create an upstream order.
+
+        ``receipt`` is the order-side idempotency material: Razorpay
+        de-duplicates orders per merchant-unique receipt, so the contract-
+        scoped receipt handed down from routes/payments.py keeps accidental
+        order-recreation retries safe. No extra header is sent — orders have
+        no ``X-Refund-Idempotency`` equivalent upstream.
+        """
         if not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise <= 0:
             raise ValueError("amount_paise must be a positive integer (paise)")
         body: dict[str, Any] = {"amount": amount_paise, "currency": "INR"}
@@ -238,7 +273,17 @@ class LiveTestModeClient:
             if idempotency_key:
                 merged.setdefault("idempotency_key", idempotency_key)
             body["notes"] = merged
-        refund = self._request("POST", f"/payments/{payment_id}/refund", body)
+        # Upstream safety net for the lost-response window: when a timeout or
+        # connection error hits AFTER Razorpay processed the refund, the local
+        # STORE check cannot see the effect — this header makes the retry safe.
+        headers = (
+            {_REFUND_IDEMPOTENCY_HEADER: refund_idempotency_header_value(idempotency_key)}
+            if idempotency_key
+            else None
+        )
+        refund = self._request(
+            "POST", f"/payments/{payment_id}/refund", body, headers=headers
+        )
         refund["mode"] = "live-test-mode"
         refund.setdefault("idempotency_key", idempotency_key)
         STORE.put({"_type": "razorpay_refund", **refund})

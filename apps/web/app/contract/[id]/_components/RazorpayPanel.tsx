@@ -121,11 +121,14 @@ export function RazorpayPanel({
       )}
 
       {/* live test-mode path: reopen Standard Checkout after a dismissal or a
-          refresh — previously impossible at PAYMENT_ORDER_CREATED (#3). */}
+          refresh — previously impossible at PAYMENT_ORDER_CREATED (#3). The
+          primary Pay affordance lives in the sticky bottom bar (Stage 2);
+          this secondary control covers the window-closed/refresh case. */}
       {!isSandbox && awaitingPayment && recheckoutAvailable && onReopenCheckout && (
         <div className="mt-4 border-t border-rule pt-4">
           <p className="font-body text-[12px] leading-relaxed text-ink-soft">
             Checkout window closed or lost? The order is still live — reopen it.
+            Closing the window again simply resumes server polling.
           </p>
           <div className="mt-3">
             <Button variant="secondary" onClick={onReopenCheckout}>

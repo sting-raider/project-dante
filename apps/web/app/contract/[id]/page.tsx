@@ -5,13 +5,21 @@
  *
  * Sections: intent recap · selected offer · why selected · material promises
  * · authorization envelope · contract hashes · Razorpay state · rights
- * overview. A sticky bottom bar carries the §52 "YOU ARE ABOUT TO AUTHORIZE"
- * card whenever the contract sits at AWAITING_BUYER_AUTH.
+ * overview. Sticky bottom bars carry each buyer decision:
+ *
+ * STAGE 1 — §52 "YOU ARE ABOUT TO AUTHORIZE" card while AWAITING_BUYER_AUTH:
+ *   POST /authorize → POST /payment-order → checkout_config stored (and
+ *   session-persisted). This stage creates NO payment window itself.
+ *
+ * STAGE 2 — a distinct explicit "Pay ₹X securely via Razorpay" button whose
+ * onClick calls rzp.open() synchronously (zero awaits between click and
+ * open) — checkout.js needs a live user gesture to escape popup blocking.
+ * In sandbox mode Stage 2 remains the clearly-badged simulate button instead.
  *
  * Payment paths (per docs/API_CONTRACT.md):
  * - sandbox:      payment-order returns mode "sandbox" → clearly-badged button
  *                 fires POST /api/demo/razorpay/simulate-event, then poll to PAID.
- * - live-test:    load checkout.js, open Standard Checkout, handler posts
+ * - live-test:    load checkout.js, open Standard Checkout on Pay, handler posts
  *                 /api/payments/verify-client, then poll to PAID.
  * Client success is never final truth — the webhook is.
  */
@@ -23,6 +31,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type {
   PaymentOrderResponse,
+  RazorpayCheckoutOptions,
   RazorpayHandlerResponse,
 } from "@/lib/useContractFlow";
 import {
@@ -77,6 +86,7 @@ export default function ContractPage() {
   const [simulating, setSimulating] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [rzpScriptReady, setRzpScriptReady] = useState(false);
+  const [rzpScriptFailed, setRzpScriptFailed] = useState(false);
   const [dismissedNote, setDismissedNote] = useState<string | null>(null);
 
   // initial load (+ resume polling if payment pending)
@@ -94,53 +104,104 @@ export default function ContractPage() {
 
   const contract = flow.contract;
 
-  const openRazorpayCheckout = useCallback(
-    (order: PaymentOrderResponse) => {
-      setDismissedNote(null);
-      if (!window.Razorpay) {
-        setDismissedNote(
-          "Razorpay checkout script is still loading — try again in a moment.",
-        );
-        return;
-      }
+  /**
+   * Build Standard Checkout options for an order and call .open() on it.
+   * Every option audited against Razorpay's documented checkout.js surface:
+   * `key` (the public key id VALUE — never `key_id`), `order_id` (server-
+   * minted, reconciled against amount/currency), integer-paise `amount`,
+   * `currency`, `name`/`description`, buyer `prefill`, `notes`, theme accent,
+   * success `handler` (razorpay_order_id / razorpay_payment_id /
+   * razorpay_signature) and `modal.ondismiss`.
+   */
+  const buildRazorpayOptions = useCallback(
+    (order: PaymentOrderResponse): RazorpayCheckoutOptions | null => {
+      if (!contractId) return null;
       const cfg = order.checkout_config;
-      const rzp = new window.Razorpay({
-        key_id: cfg.key_id,
-        amount: cfg.amount_paise,
-        currency: cfg.currency ?? "INR",
+      return {
+        key: cfg.key_id, // checkout.js reads `key`; key_id is not an option
+        amount: cfg.amount_paise, // integer paise — matches the server order
+        currency: cfg.currency || "INR",
         name: "ASTER ELECTRONICS",
         description: offerMemo?.offer.title ?? "Dante contract purchase",
         order_id: cfg.order_id,
         prefill: { name: "Demo Buyer" },
+        notes: {
+          dante_contract_id: contractId,
+          dante_order_id: String(cfg.order_id),
+        },
         theme: { color: "#F04A2D" },
         handler: (response: RazorpayHandlerResponse) => {
           // client success ≠ truth; verify then keep polling for webhook
-          void flow.verifyClient(contractId!, response);
+          void flow.verifyClient(contractId, response);
         },
         modal: {
           ondismiss: () => {
+            setCheckoutOpen(false);
             setDismissedNote(
               "Checkout closed before completing. If the payment actually went through, server reconciliation will confirm it — watch the status below.",
             );
             // window-closed fallback (§33.5): resume polling regardless
-            flow.pollUntilResolved(contractId!);
+            flow.pollUntilResolved(contractId);
           },
         },
-      });
-      rzp.open();
-      setCheckoutOpen(true);
+      };
     },
     [contractId, offerMemo, flow],
   );
 
+  /**
+   * STAGE 1 of the §52 gate: authorize + create the payment order. No window
+   * opens here — Stage 2's explicit Pay click owns rzp.open().
+   */
   async function handleAuthorize() {
     if (!contractId) return;
-    // Idempotency guard: authorizeAndOpenCheckout refuses re-entrant calls,
-    // and this early-return keeps the button from even starting one.
+    // Idempotency guard: authorizeContract refuses re-entrant calls, and this
+    // early-return keeps the button from even starting one.
     if (authorizing || flow.phase === "opening_checkout") return;
     setAuthorizing(true);
-    await flow.authorizeAndOpenCheckout(contractId, openRazorpayCheckout);
-    setAuthorizing(false);
+    try {
+      await flow.authorizeContract(contractId);
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  /**
+   * STAGE 2: the explicit Pay button. Runs synchronously off onClick —
+   * build options → new window.Razorpay(...) → .open() with no await in
+   * between — so the checkout window opens inside the browser's user-gesture
+   * window and cannot be popup-blocked.
+   */
+  function handlePayNow() {
+    if (!contractId || !flow.orderInfo) return;
+    setDismissedNote(null);
+    const options = buildRazorpayOptions(flow.orderInfo);
+    if (!options) return;
+    if (!window.Razorpay) {
+      // Script still loading (or blocked) — surface it instead of failing
+      // silently; a retry click once checkout.js is ready succeeds.
+      setDismissedNote(
+        rzpScriptFailed
+          ? "The Razorpay checkout script failed to load — check the connection and try again."
+          : "The Razorpay checkout script is still loading — try again in a moment.",
+      );
+      return;
+    }
+    const opened = flow.openCheckout();
+    if (!opened) {
+      setDismissedNote("Checkout could not be started — please try again.");
+      return;
+    }
+    const rzp = new window.Razorpay(options);
+    rzp.on?.("payment.failed", (resp: { error?: { description?: string } }) => {
+      setDismissedNote(
+        resp.error?.description
+          ? `Payment attempt failed: ${resp.error.description}`
+          : "Payment attempt failed at the gateway.",
+      );
+    });
+    rzp.open();
+    setCheckoutOpen(true);
   }
 
   function handleSimulate() {
@@ -193,12 +254,14 @@ export default function ContractPage() {
 
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-5 pb-40 pt-10 md:px-10">
-      {/* Razorpay checkout.js — lazyOnload; opened on demand post-authorize */}
+      {/* Razorpay checkout.js — lazyOnload; opened on demand from the
+          Stage 2 Pay click (never auto-opened without a user gesture) */}
       {!contract.sandbox_mode && !rzpScriptReady && (
         <Script
           src="https://checkout.razorpay.com/v1/checkout.js"
           strategy="lazyOnload"
           onLoad={() => setRzpScriptReady(true)}
+          onError={() => setRzpScriptFailed(true)}
         />
       )}
 
@@ -360,15 +423,13 @@ export default function ContractPage() {
               pollingActive={flow.pollingActive}
               sandboxMode={contract.sandbox_mode || (flow.orderInfo?.mode === "sandbox" ? true : undefined)}
               recheckoutAvailable={
-                !contract.sandbox_mode &&
-                !!flow.orderInfo?.checkout_config?.key_id &&
-                contract.status === "PAYMENT_ORDER_CREATED"
+                flow.canOpenCheckout &&
+                (contract.status === "PAYMENT_ORDER_CREATED" ||
+                  contract.status === "PAYMENT_PENDING")
               }
               onSimulateCapture={handleSimulate}
               onReopenCheckout={
-                flow.orderInfo && !contract.sandbox_mode
-                  ? () => openRazorpayCheckout(flow.orderInfo!)
-                  : undefined
+                contract.sandbox_mode ? undefined : handlePayNow
               }
               simulating={simulating}
               onRecheck={() => contractId && void flow.recheckStatus(contractId)}
@@ -431,11 +492,12 @@ export default function ContractPage() {
         </Link>
       </footer>
 
-      {/* sticky §52 authorization bar — only while the gate is genuinely
-          open. Once authorize resolves into creating_order/sandbox_ready/
-          checkout_ready/payment_pending the card clears (#1): re-authorizing
-          is a server-side 409 and a second payment-order would mint a
-          duplicate payable order. */}
+      {/* STAGE 1 — sticky §52 authorization bar, shown only while the gate is
+          genuinely open (AWAITING_BUYER_AUTH, order not yet created). Once
+          authorize resolves into opening_checkout/sandbox_ready/checkout_ready/
+          payment_pending the card clears (#1): re-authorizing is a server-side
+          409 and a second payment-order would mint a duplicate payable order.
+          This stage creates NO payment window — Stage 2 owns rzp.open(). */}
       {awaitingAuth &&
         !checkoutOpen &&
         !POST_AUTHORIZE_PHASES.includes(flow.phase) && (
@@ -448,6 +510,38 @@ export default function ContractPage() {
               onAuthorize={handleAuthorize}
               authorizing={authorizing || flow.phase === "opening_checkout"}
             />
+          </div>
+        </div>
+      )}
+
+      {/* STAGE 2 — distinct explicit Pay button once an order exists (live
+          test mode). handlePayNow runs synchronously off this onClick —
+          options → new window.Razorpay(...) → .open() with zero awaits — so
+          the checkout window opens inside the browser's user-gesture window
+          instead of being popup-blocked. Sandbox never lands here: it keeps
+          the clearly-badged simulate affordance in §7. */}
+      {!awaitingAuth &&
+        !paid &&
+        !contract.sandbox_mode &&
+        flow.canOpenCheckout &&
+        !checkoutOpen &&
+        (contract.status === "PAYMENT_ORDER_CREATED" ||
+          contract.status === "PAYMENT_PENDING") && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper-bright">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
+            <p className="font-body text-[13px] leading-snug text-ink-soft">
+              Order {shortHash(flow.orderInfo?.checkout_config.order_id)} created
+              for {rupees(flow.orderInfo?.checkout_config.amount_paise)}. Nothing
+              is charged until you complete Razorpay&rsquo;s secure checkout.
+            </p>
+            <Button onClick={handlePayNow}>
+              Pay{" "}
+              {rupees(
+                flow.orderInfo?.checkout_config.amount_paise ??
+                  contract.amount_paise,
+              )}{" "}
+              securely via Razorpay
+            </Button>
           </div>
         </div>
       )}

@@ -46,11 +46,19 @@ _register_routes()
 
 @app.get("/api/health")
 async def health() -> dict:
+    # Read live settings, not the import-time snapshot: tests (and operators)
+    # mutate env + get_settings.cache_clear(), so a stale module constant would
+    # misreport. "llm" reports the engine that will ACTUALLY serve requests —
+    # configured-but-unusable states honestly show deterministic-fallback.
+    current = get_settings()
     return {
         "status": "ok",
         "service": "project-dante-api",
-        "env": settings.app_env,
-        "demo_mode": settings.demo_mode,
-        "razorpay": "live-test-mode" if settings.razorpay_live_test_mode else "sandbox-adapter",
-        "llm": settings.llm_provider or "deterministic-fallback",
+        "env": current.app_env,
+        "demo_mode": current.demo_mode,
+        "razorpay": (
+            "live-test-mode" if current.razorpay_live_test_mode else "sandbox-adapter"
+        ),
+        "llm": current.llm_engine or "deterministic-fallback",
+        "llm_engine": current.llm_engine or "deterministic-fallback",
     }

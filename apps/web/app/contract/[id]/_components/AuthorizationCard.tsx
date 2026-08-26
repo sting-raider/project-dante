@@ -179,7 +179,7 @@ export function AuthorizationCard({
 
       <div className="mt-6 flex flex-wrap items-center gap-4">
         <Button onClick={onAuthorize} disabled={authorizing}>
-          {authorizing ? "Authorizing…" : "Authorize & open Razorpay"}
+          {authorizing ? "Authorizing…" : "Authorize & create payment order"}
         </Button>
         <span className="max-w-sm font-body text-[12px] leading-snug text-ink-soft">
           Authorization is bound to this exact frozen contract hash. Any drift
@@ -189,7 +189,8 @@ export function AuthorizationCard({
 
       {!contract.sandbox_mode && (
         <p className="mt-4 font-body text-[12px] text-ink-soft">
-          Opens Razorpay Standard Checkout in test mode.{" "}
+          Creates the Razorpay order in test mode. Payment happens only when
+          you press the separate &ldquo;Pay&rdquo; button next.{" "}
           <Badge tone="neutral">test keys</Badge>
         </p>
       )}
