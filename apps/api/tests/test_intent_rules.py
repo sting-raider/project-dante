@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from project_dante.agents.compiler import rule_compile
+import pytest
+from project_dante.agents.compiler import IntentCompilerAgent, rule_compile
 
 TODAY = datetime.now(UTC)
 
@@ -347,6 +348,143 @@ def test_unknown_values_omitted_never_invented():
     assert intent.hard_constraints == []
     assert intent.soft_preferences == []
     assert intent.max_total_amount_paise is None
+
+
+# ------------------------------------------------- hardening wave (schema strictness)
+
+
+def _validated(patch):
+    from project_dante.agents.compiler import CompiledIntentSchema
+
+    base = {
+        "hard_constraints": [
+            {"key": "category", "op": "eq", "value": "headphones", "critical": True},
+            {"key": "brand", "op": "in", "value": ["sony", "bose"]},
+            {"key": "attributes.anc", "op": "eq", "value": True},
+        ],
+        "soft_preferences": [{"key": "brand", "weight": 0.8, "value": "Sony"}],
+        "max_total_amount_paise": 1_200_000,
+        "substitutions_allowed": False,
+    }
+    base.update(patch)
+    return CompiledIntentSchema.model_validate(base)
+
+
+def test_llm_schema_accepts_wellformed_payload():
+    s = _validated({})
+    assert s.max_total_amount_paise == 1_200_000
+    assert s.hard_constraints[1].value == ["sony", "bose"]
+    assert s.soft_preferences[0].weight == 0.8
+
+
+
+
+
+@pytest.mark.parametrize(
+    ("label", "patch"),
+    [
+        ("string money", {"max_total_amount_paise": "12000"}),
+        ("float money integral", {"max_total_amount_paise": 12000.0}),
+        ("bool money", {"max_total_amount_paise": True}),
+        ("negative money", {"max_total_amount_paise": -500}),
+        ("zero money", {"max_total_amount_paise": 0}),
+        ("dict constraint value", {"hard_constraints": [{"key": "k", "value": {"a": 1}}]}),
+        ("nested list value", {"hard_constraints": [{"key": "k", "value": [[1]]}]}),
+        ("dict preference value", {"soft_preferences": [{"key": "k", "value": {"x": "y"}}]}),
+        ("disallowed op", {"hard_constraints": [{"key": "k", "op": "drop_all", "value": 1}]}),
+        ("empty key", {"hard_constraints": [{"key": "", "value": 1}]}),
+        ("string critical", {"hard_constraints": [{"key": "k", "critical": "yes", "value": 1}]}),
+        ("oversize weight", {"soft_preferences": [{"key": "k", "weight": 1.5}]}),
+        ("negative weight", {"soft_preferences": [{"key": "k", "weight": -0.1}]}),
+        ("bool weight", {"soft_preferences": [{"key": "k", "weight": True}]}),
+        ("string weight", {"soft_preferences": [{"key": "k", "weight": "0.8"}]}),
+        ("string substitutions flag", {"substitutions_allowed": "false"}),
+    ],
+)
+def test_llm_schema_rejects_malformed_payloads(label, patch):
+    """Malformed LLM-shaped dicts raise ValidationError (which the provider
+    retry loop feeds back once, then compile fails safe to rules)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _validated(patch)
+
+
+def test_llm_schema_allows_none_and_flat_scalar_lists():
+    s = _validated(
+        {
+            "hard_constraints": [{"key": "note", "op": "eq", "value": None}],
+            "soft_preferences": [],
+            "max_total_amount_paise": None,
+        }
+    )
+    assert s.max_total_amount_paise is None
+    assert s.hard_constraints[0].value is None
+
+
+# ------------------------------------------------- hardening wave (input sanitization)
+
+
+def test_sanitize_strips_bidi_and_zero_width_controls():
+    from project_dante.agents.compiler import _sanitize_input
+
+    dirty = (
+        "headphones under ₹12,000‮ RTL override‬ zero​-width‍ BOM﻿ "
+        "isolate⁦ pop⁩ done"
+    )
+    clean = _sanitize_input(dirty)
+    for ch in "‪‭‮⁦⁩​‌‍﻿":
+        assert ch not in clean
+    # content survives
+    assert "headphones under ₹12,000" in clean
+    assert "zero-width" in clean.replace(" ", "")
+
+
+def test_sanitize_preserves_regular_unicode():
+    from project_dante.agents.compiler import _sanitize_input
+
+    hindi = "मुझे हेडफ़ोन चाहिए"
+    emoji = "headphones 🎧 please"
+    for text in (hindi, emoji):
+        out = _sanitize_input(text)
+        assert all(ch in out for ch in text), f"{text!r} was altered"
+
+
+def test_compile_with_bidi_controls_matches_clean_text():
+    import asyncio
+
+    from project_dante.db.store import STORE
+    from project_dante.domain.events import LOG
+
+    clean_text = (
+        "Buy me over-ear ANC headphones under ₹12,000 with Indian manufacturer "
+        "warranty."
+    )
+    dirty_text = clean_text.replace("₹12,000", "₹12,000‮") + "​"
+    ctrl = set("‪‭‮⁦⁩​‌‍﻿")
+
+    def has_ctrl(obj):
+        if isinstance(obj, str):
+            return any(ch in ctrl for ch in obj)
+        if isinstance(obj, dict):
+            return any(has_ctrl(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(has_ctrl(v) for v in obj)
+        return False
+
+    a = asyncio.run(IntentCompilerAgent(provider=None).compile(clean_text))
+    b = asyncio.run(IntentCompilerAgent(provider=None).compile(dirty_text))
+    assert [c.model_dump() for c in a.hard_constraints] == [
+        c.model_dump() for c in b.hard_constraints
+    ]
+    assert a.max_total_amount_paise == b.max_total_amount_paise == 1_200_000
+    rec = b.model_dump(mode="json")
+    rec["_type"] = "intent"
+    STORE.put(rec)
+    assert not has_ctrl(rec), "stored intent record contains control characters"
+    # cleanup shared-store pollution
+    STORE.delete(b.id)
+    _ = LOG
 
 
 # ---------------------------------------------------------------- persistence

@@ -11,7 +11,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Folio from "@/components/editorial/Folio";
 import SectionLabel from "@/components/editorial/SectionLabel";
 import Badge from "@/components/commerce/Badge";
@@ -21,7 +21,7 @@ import RightsGraph, {
 } from "@/components/rights-graph/RightsGraph";
 import { apiGet } from "@/lib/api";
 import type { ContractResponse, Entitlement, RightsResponse } from "@/lib/rights-ui";
-import { normalizeEdges } from "@/lib/rights-ui";
+import { normalizeEdges, isTerminal } from "@/lib/rights-ui";
 import { formatDateTime, prettyJson } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -46,6 +46,10 @@ export default function RightsPage() {
   const [sandbox, setSandbox] = useState(false);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Drawer focus management (#15).
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const lastTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -68,19 +72,55 @@ export default function RightsPage() {
     };
   }, [contractId]);
 
-  // Poll lightly so eligibility changes (replacement-unavailable etc.)
-  // recolor the graph without a manual refresh.
-  useEffect(() => {
-    const t = setInterval(() => {
+  const fetchRights = useCallback(
+    () =>
       apiGet<RightsResponse>(`/api/contracts/${contractId}/rights`)
         .then((d) => {
           setGraph(d.graph);
           setEntitlements(d.entitlements ?? []);
         })
-        .catch(() => undefined);
-    }, 5000);
+        .catch(() => undefined),
+    [contractId],
+  );
+
+  // Poll lightly so eligibility changes (replacement-unavailable etc.)
+  // recolor the graph without a manual refresh — but only while the contract
+  // is still moving (not terminal) and the tab is visible (#15).
+  useEffect(() => {
+    if (isTerminal(contractStatus) || typeof document === "undefined") return;
+    if (document.hidden) return; // resumed by the visibility listener below
+
+    const t = setInterval(fetchRights, 5000);
     return () => clearInterval(t);
-  }, [contractId]);
+  }, [contractStatus, fetchRights]);
+
+  // When the tab is hidden mid-polling we drop the interval; when it becomes
+  // visible again and polling is still warranted, restart it.
+  useEffect(() => {
+    function onVisibility() {
+      if (!document.hidden && !isTerminal(contractStatus)) {
+        void fetchRights();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [contractStatus, fetchRights]);
+
+  // Focus the drawer on open; Escape closes; focus returns to the trigger.
+  useEffect(() => {
+    if (!selected) return;
+    lastTriggerRef.current = document.activeElement as HTMLElement | null;
+    const raf = requestAnimationFrame(() => closeBtnRef.current?.focus());
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setSelected(null);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("keydown", onKeyDown);
+      lastTriggerRef.current?.focus?.();
+    };
+  }, [selected]);
 
   const nodes = graph?.nodes ?? [];
   const edges = useMemo(
@@ -166,21 +206,27 @@ export default function RightsPage() {
             selectedId={selected?.id ?? null}
           />
 
-          {/* Drawer */}
+          {/* Drawer — focus lands on close on open; Escape closes; focus
+              returns to the triggering node (#15). */}
           {selected && (
             <aside
-              aria-label="Entitlement detail"
+              ref={drawerRef}
+              role="dialog"
+              aria-label={`Entitlement detail: ${selected.label}`}
               className={cn(
-                "mt-6 rounded-md border border-ink bg-paper p-5 lg:absolute lg:right-4 lg:top-4 lg:mt-0 lg:max-h-[calc(100%-2rem)] lg:w-96 lg:overflow-y-auto"
+                "mt-6 rounded-md border border-ink bg-paper p-5 lg:absolute lg:right-4 lg:top-4 lg:mt-0 lg:max-h-[calc(100%-2rem)] lg:w-96 lg:overflow-y-auto",
+                // Keep the drawer in view when keyboard focus moves into it.
+                "focus-within:outline focus-within:outline-2 focus-within:outline-signal"
               )}
             >
               <div className="flex items-start justify-between gap-3">
                 <SectionLabel>ENTITLEMENT DETAIL</SectionLabel>
                 <button
                   type="button"
+                  ref={closeBtnRef}
                   onClick={() => setSelected(null)}
                   aria-label="Close detail panel"
-                  className="font-mono text-xs text-ink-soft hover:text-signal"
+                  className="rounded-[2px] font-mono text-xs text-ink-soft outline-offset-4 hover:text-signal focus-visible:outline focus-visible:outline-2 focus-visible:outline-signal"
                 >
                   ✕ CLOSE
                 </button>

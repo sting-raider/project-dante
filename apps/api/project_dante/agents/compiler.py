@@ -20,8 +20,9 @@ import pathlib
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from project_dante.agents.provider import ModelProvider, _log_agent_run, get_provider
 from project_dante.db.store import STORE
@@ -34,8 +35,39 @@ COMPILER_VERSION = "rules-v1"
 # ---------------------------------------------------------------- LLM schema
 
 
+_SCALAR = (bool, int, float, str)
+
+
+def _check_scalar_value(v: Any) -> Any:
+    """Shared validator body for constraint/preference values.
+
+    Accepts None, a scalar (str/int/float/bool), or a FLAT list of scalars.
+    Rejects dicts and nested lists outright — an LLM that emits object-shaped
+    constraint values is hallucinating structure the evaluator cannot apply.
+    """
+    if v is None or isinstance(v, _SCALAR):
+        return v
+    if isinstance(v, list) and all(isinstance(x, _SCALAR) for x in v):
+        return v
+    raise ValueError(
+        "value must be a scalar or flat list of scalars "
+        f"(dict/nested rejected), got {type(v).__name__}"
+    )
+
+
+# ------------------------------------------------------------------ helpers
+
+
 class CompiledIntentSchema(BaseModel):
-    """Output schema for the LLM compile path (plan §18.1)."""
+    """Output schema for the LLM compile path (plan §18.1).
+
+    Type-strict by design: the LLM is untrusted structured input. Money must be
+    a true positive int (bool/float/str rejected — '12000' and 12000.0 are NOT
+    money), constraint values must be scalars or flat scalar lists (dicts/nested
+    structures rejected), ops restricted to the frozen set, weights bounded to
+    0..1. ValidationError here feeds the provider's one-shot retry loop; after
+    retries the compile path fails safe down to the rules engine.
+    """
 
     class _Constraint(BaseModel):
         key: str
@@ -43,14 +75,74 @@ class CompiledIntentSchema(BaseModel):
         value: object = None
         critical: bool = True
 
+        ALLOWED_OPS: ClassVar[frozenset[str]] = frozenset(
+            {"eq", "lte", "gte", "lt", "gt", "in", "contains"}
+        )
+
+        @field_validator("key")
+        @classmethod
+        def _key_nonempty(cls, v: Any) -> str:
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError("constraint key must be a non-empty string")
+            return v.strip()
+
+        @field_validator("op")
+        @classmethod
+        def _op_allowed(cls, v: Any) -> str:
+            if not isinstance(v, str) or v not in cls.ALLOWED_OPS:
+                raise ValueError(
+                    f"op must be one of {sorted(cls.ALLOWED_OPS)}, got {v!r}"
+                )
+            return v
+
+        @field_validator("critical", mode="before")
+        @classmethod
+        def _critical_strict_bool(cls, v: Any) -> Any:
+            if isinstance(v, bool):
+                return v
+            raise ValueError(f"critical must be a real boolean, got {type(v).__name__}")
+
+        @field_validator("value", mode="before")
+        @classmethod
+        def _value_scalar(cls, v):
+            # dicts / nested lists rejected — see _check_scalar_value
+            return _check_scalar_value(v)
+
     class _Preference(BaseModel):
         key: str
         weight: float = 1.0
         value: object = None
 
+        @field_validator("key")
+        @classmethod
+        def _key_nonempty(cls, v: Any) -> str:
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError("preference key must be a non-empty string")
+            return v.strip()
+
+        @field_validator("weight", mode="before")
+        @classmethod
+        def _weight_bounded(cls, v: Any) -> Any:
+            # bool is an int subclass; numeric strings are LLM sloppiness —
+            # both rejected. Only real ints/floats bounded to 0..1 pass.
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ValueError(f"weight must be a real number 0..1, got {v!r}")
+            w = float(v)
+            if not 0.0 <= w <= 1.0:
+                raise ValueError(f"weight must be within 0..1, got {w!r}")
+            return v
+
+        @field_validator("value", mode="before")
+        @classmethod
+        def _value_scalar(cls, v):
+            # dicts / nested lists rejected — see _check_scalar_value
+            return _check_scalar_value(v)
+
     hard_constraints: list[_Constraint] = Field(default_factory=list)
     soft_preferences: list[_Preference] = Field(default_factory=list)
+
     max_total_amount_paise: int | None = None
+
     substitutions_allowed: bool = True
 
     class _Outcome(BaseModel):
@@ -58,6 +150,31 @@ class CompiledIntentSchema(BaseModel):
         keys: list[str] = Field(default_factory=list)
 
     desired_outcome: _Outcome | None = None
+
+    @field_validator("max_total_amount_paise", mode="before")
+    @classmethod
+    def _money_strict_int(cls, v: Any) -> Any:
+        # bool is an int subclass in Python — reject it explicitly. Floats are
+        # rejected even when integral (12000.0 is NOT money); strings likewise.
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                "max_total_amount_paise must be integer paise (bool/float/string "
+                f"rejected), got {v!r}"
+            )
+        if v <= 0:
+            raise ValueError(f"max_total_amount_paise must be positive, got {v}")
+        return v
+
+    @field_validator("substitutions_allowed", mode="before")
+    @classmethod
+    def _subs_strict_bool(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            return v
+        raise ValueError(
+            f"substitutions_allowed must be a real boolean, got {type(v).__name__}"
+        )
 
 
 COMPILER_SYSTEM_PROMPT = """You are the Intent Compiler for Project Dante, a \
@@ -121,6 +238,27 @@ def _repair_mojibake(text: str) -> str:
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
     return text
+
+
+# Bidi/directionality controls (U+202A–U+202E, U+2066–U+2069), zero-width and
+# format characters (U+200B–U+200D, U+FEFF). These can visually reorder UI text
+# while leaving constraint parsing untouched — strip on ingest. Regular unicode
+# (Devanagari, homoglyphs, emoji) is deliberately left intact: it is content,
+# not control structure.
+_INVISIBLE_CONTROLS = re.compile(
+    "[‪-‮⁦-⁩​-‍﻿]"
+)
+
+
+def _sanitize_input(text: str) -> str:
+    """Mojibake repair THEN invisible-control stripping, in that order.
+
+    Order matters: repair first so a mojibake round-trip cannot reassemble a
+    control character after stripping. Only bidi/zero-width/format controls are
+    removed; all other unicode passes through unchanged.
+    """
+    repaired = _repair_mojibake(text)
+    return _INVISIBLE_CONTROLS.sub("", repaired)
 
 
 _CATEGORIES = [
@@ -732,7 +870,7 @@ class IntentCompilerAgent:
 
     async def compile(self, raw_text: str, trace_id: str | None = None) -> BuyerIntent:
         trace_id = trace_id or new_id("trace_")
-        raw_text = _repair_mojibake(raw_text)
+        raw_text = _sanitize_input(raw_text)
         started = time.monotonic()
         append_event(
             aggregate_type="intent",

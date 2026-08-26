@@ -34,6 +34,8 @@ import {
   type OfferMemo,
 } from "@/lib/useContractFlow";
 
+import type { FlowPhase } from "@/lib/useContractFlow";
+
 import { AuthorizationCard } from "./_components/AuthorizationCard";
 import { ContractHashes } from "./_components/ContractHashes";
 import { MaterialPromises } from "./_components/MaterialPromises";
@@ -50,6 +52,19 @@ import {
   SandboxBadge,
   SectionLabel,
 } from "./_components/atoms";
+
+/**
+ * Phases meaning "authorization has resolved and the payment pipeline is in
+ * motion" — the sticky §52 card must not re-render once any of these hold,
+ * even if the 2s poll hasn't yet flipped the contract status (#1).
+ */
+const POST_AUTHORIZE_PHASES: FlowPhase[] = [
+  "opening_checkout",
+  "checkout_ready",
+  "sandbox_ready",
+  "payment_pending",
+  "paid",
+];
 
 export default function ContractPage() {
   const params = useParams<{ id: string }>();
@@ -120,6 +135,9 @@ export default function ContractPage() {
 
   async function handleAuthorize() {
     if (!contractId) return;
+    // Idempotency guard: authorizeAndOpenCheckout refuses re-entrant calls,
+    // and this early-return keeps the button from even starting one.
+    if (authorizing || flow.phase === "opening_checkout") return;
     setAuthorizing(true);
     await flow.authorizeAndOpenCheckout(contractId, openRazorpayCheckout);
     setAuthorizing(false);
@@ -132,6 +150,8 @@ export default function ContractPage() {
 
   // ---------------------------------------------------------- render states
 
+  // Fatal screen only when the contract genuinely can't be loaded (404) —
+  // transient poll failures degrade to the inline retrying notice (#2).
   if (flow.phase === "error_contract_load" || flow.phase === "error_poll") {
     return (
       <main className="mx-auto min-h-screen max-w-6xl px-5 pb-24 pt-10 md:px-10">
@@ -184,7 +204,9 @@ export default function ContractPage() {
 
       {/* masthead */}
       <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <Folio>Dossier / {contract.display_code ?? contract.id}</Folio>
+        <h1 className="font-mono text-[10px] uppercase tracking-[0.3em] text-ink-soft">
+          Dossier / {contract.display_code ?? contract.id}
+        </h1>
         <Dateline>
           Frozen {contract.frozen_at ? new Date(contract.frozen_at).toLocaleString("en-IN") : "—"}
           {contract.sandbox_mode && (
@@ -219,6 +241,35 @@ export default function ContractPage() {
         <div className="mt-6 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-warning">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" aria-hidden="true" />
           {flow.verifyNote ?? "confirming against server truth…"}
+        </div>
+      )}
+
+      {/* Transient poll degradation (#2): keep last-known data on screen, show
+          a small retrying notice instead of the fatal full-page error. */}
+      {flow.pollRetrying && (
+        <div
+          role="status"
+          className="mt-4 inline-flex max-w-full items-center gap-2 rounded-[2px] border border-rule bg-paper-bright px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.16em] text-ink-soft"
+        >
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" aria-hidden="true" />
+          Connection hiccup while polling server truth — showing last-known
+          state, retrying…
+          {flow.pollError && (
+            <span className="normal-case tracking-normal text-ink-soft/80">
+              ({flow.pollError})
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Outcome of a manual “Re-check now” (#12) — never a silent no-op. */}
+      {flow.recheckNote && !paid && (
+        <div
+          role="status"
+          className="mt-4 inline-flex max-w-full items-center gap-2 rounded-[2px] border border-rule bg-paper-bright px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.16em] text-ink-soft"
+        >
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" aria-hidden="true" />
+          {flow.recheckNote}
         </div>
       )}
 
@@ -297,7 +348,7 @@ export default function ContractPage() {
       </section>
 
       {/* §7 razorpay */}
-      <section className="mt-14">
+      <section className="mt-14" id="razorpay">
         <Rule />
         <div className="mt-8 grid gap-6 md:grid-cols-12">
           <div className="md:col-span-7">
@@ -307,8 +358,19 @@ export default function ContractPage() {
               orderId={contract.razorpay_order_id}
               paymentId={contract.razorpay_payment_id}
               pollingActive={flow.pollingActive}
-              simulating={simulating}
+              sandboxMode={contract.sandbox_mode || (flow.orderInfo?.mode === "sandbox" ? true : undefined)}
+              recheckoutAvailable={
+                !contract.sandbox_mode &&
+                !!flow.orderInfo?.checkout_config?.key_id &&
+                contract.status === "PAYMENT_ORDER_CREATED"
+              }
               onSimulateCapture={handleSimulate}
+              onReopenCheckout={
+                flow.orderInfo && !contract.sandbox_mode
+                  ? () => openRazorpayCheckout(flow.orderInfo!)
+                  : undefined
+              }
+              simulating={simulating}
               onRecheck={() => contractId && void flow.recheckStatus(contractId)}
             />
           </div>
@@ -369,8 +431,14 @@ export default function ContractPage() {
         </Link>
       </footer>
 
-      {/* sticky §52 authorization bar */}
-      {awaitingAuth && !checkoutOpen && (
+      {/* sticky §52 authorization bar — only while the gate is genuinely
+          open. Once authorize resolves into creating_order/sandbox_ready/
+          checkout_ready/payment_pending the card clears (#1): re-authorizing
+          is a server-side 409 and a second payment-order would mint a
+          duplicate payable order. */}
+      {awaitingAuth &&
+        !checkoutOpen &&
+        !POST_AUTHORIZE_PHASES.includes(flow.phase) && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper/95 backdrop-blur">
           <div className="mx-auto max-w-6xl px-5 py-4 md:px-10">
             <AuthorizationCard
@@ -383,6 +451,29 @@ export default function ContractPage() {
           </div>
         </div>
       )}
+
+      {/* sandbox hand-off note — replaces the cleared authorization bar so the
+          buyer knows what to do next (simulate button lives in §7 panel). */}
+      {!awaitingAuth &&
+        !paid &&
+        contract.sandbox_mode &&
+        (flow.phase === "sandbox_ready" || flow.phase === "opening_checkout") && (
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-warning bg-paper-bright">
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
+              <p className="font-body text-[13px] leading-snug text-warning">
+                Order created in sandbox mode — no Razorpay keys configured.
+                Use “Simulate test payment” in the Razorpay section above; the
+                signed webhook confirms it server-side.
+              </p>
+              <a
+                href="#razorpay"
+                className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink underline underline-offset-4 hover:text-signal"
+              >
+                Jump to Razorpay ↓
+              </a>
+            </div>
+          </div>
+        )}
 
       {flow.phase === "error_authorize" && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-danger bg-paper-bright">

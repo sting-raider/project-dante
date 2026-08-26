@@ -32,7 +32,7 @@ import {
 } from "./_components/atoms";
 
 const HERO_BRIEF =
-  "Buy me over-ear ANC headphones under ₹12,000. I need an Indian manufacturer warranty, as they must arrive by Thursday, and do not show me anything over ₹12,000.";
+  "Buy me over-ear ANC headphones under ₹12,000. I need an Indian manufacturer warranty, as they must arrive within 3 days, and do not show me anything over ₹12,000.";
 
 export default function BuyPage() {
   const router = useRouter();
@@ -73,7 +73,11 @@ export default function BuyPage() {
     <main className="mx-auto min-h-screen max-w-6xl px-5 pb-24 pt-10 md:px-10">
       {/* masthead */}
       <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <Folio>Issue 01 / Buy</Folio>
+        {/* Document h1, styled as the folio label so the editorial masthead
+            stays visually identical while giving the page a real heading (#14). */}
+        <h1 className="font-mono text-[10px] uppercase tracking-[0.3em] text-ink-soft">
+          Issue 01 / Buy
+        </h1>
         <Dateline>
           Aster Electronics · {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
           · Buyer desk
@@ -94,7 +98,7 @@ export default function BuyPage() {
             onChange={(e) => setBrief(e.target.value)}
             rows={5}
             disabled={busy}
-            className="mt-5 w-full resize-none border-0 bg-transparent font-display text-[clamp(1.6rem,3.2vw,2.6rem)] leading-[1.25] text-ink caret-signal outline-none placeholder:text-rule focus-visible:outline-none"
+            className="mt-5 w-full resize-none rounded-[2px] border-0 bg-transparent font-display text-[clamp(1.6rem,3.2vw,2.6rem)] leading-[1.25] text-ink caret-signal outline-offset-4 placeholder:text-rule outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-signal"
             placeholder="Tell Dante what you need…"
           />
           <div className="mt-6 flex flex-wrap items-center gap-4">

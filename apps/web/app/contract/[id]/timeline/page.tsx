@@ -26,7 +26,8 @@ import { isTerminal } from "@/lib/rights-ui";
 import { formatTime, prettyJson, payloadSummary } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
-const FILTERS = ["All", "Agent", "Money", "Merchant", "Fulfillment", "Policy", "Evidence"] as const;
+// Mirrors _TIMELINE_CATEGORIES in apps/api/.../routes/contracts.py (#11).
+const FILTERS = ["All", "Agent", "Money", "Merchant", "Fulfillment", "Policy", "Evidence", "System"] as const;
 type Filter = (typeof FILTERS)[number];
 
 const CATEGORY_TONE: Record<string, string> = {
@@ -36,6 +37,7 @@ const CATEGORY_TONE: Record<string, string> = {
   Fulfillment: "text-warning border-warning/40 bg-warning/[0.08]",
   Policy: "text-signal-deep border-signal/40 bg-signal/[0.07]",
   Evidence: "text-ink-soft border-rule",
+  System: "text-ink-soft border-rule",
 };
 
 function categoryClass(cat: string): string {
@@ -54,16 +56,18 @@ export default function TimelinePage() {
 
   const load = useCallback(async () => {
     try {
-      const query = filter === "All" ? "" : `?category=${filter}`;
+      // Always fetch the unfiltered stream: chip counts must reflect the
+      // whole trace regardless of the active filter (#11), and client-side
+      // filtering keeps chip clicks instant.
       const data = await apiGet<TimelineResponse>(
-        `/api/contracts/${contractId}/timeline${query}`
+        `/api/contracts/${contractId}/timeline`
       );
       setEvents(data.events);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load timeline");
     }
-  }, [contractId, filter]);
+  }, [contractId]);
 
   // Initial load + contract status probe (for the poll gate).
   useEffect(() => {
@@ -80,7 +84,7 @@ export default function TimelinePage() {
     };
   }, [contractId]);
 
-  // Re-fetch on filter change; poll every 3s while not terminal.
+  // Re-fetch on mount; poll every 3s while not terminal.
   useEffect(() => {
     load();
     if (isTerminal(status)) return;
@@ -101,15 +105,18 @@ export default function TimelinePage() {
     }
   }, [events]);
 
-  const rows = events;
+  // Client-side category filter over the full stream (#11).
+  const rows = events?.filter((e) => filter === "All" || e.category === filter) ?? null;
 
+  // Counts computed over the UNFILTERED set so every chip shows its true
+  // total, not the slice visible under the current filter (#11).
   const counts = useMemo(() => {
-    if (!rows) return {} as Record<string, number>;
-    return rows.reduce<Record<string, number>>((acc, e) => {
+    if (!events) return {} as Record<string, number>;
+    return events.reduce<Record<string, number>>((acc, e) => {
       acc[e.category] = (acc[e.category] ?? 0) + 1;
       return acc;
     }, {});
-  }, [rows]);
+  }, [events]);
 
   return (
     <main className="dante-container py-8 md:py-12">
@@ -161,7 +168,7 @@ export default function TimelinePage() {
             )}
           >
             {f}
-            {f !== "All" && counts[f] ? ` (${counts[f]})` : ""}
+            {f !== "All" && counts[f] ? ` (${counts[f]})` : f !== "All" ? " (0)" : ""}
           </button>
         ))}
       </nav>

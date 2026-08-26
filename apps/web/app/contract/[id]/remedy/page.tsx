@@ -35,11 +35,13 @@ import type {
 import { prettyJson } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
-/* Score-bar weights straight from plan §14.2 — the visible scoring fn. */
+/* Score-bar weights straight from plan §14.2 — the visible scoring fn.
+   Labels name the ACTUAL planner field behind each bar (#8): confidence is
+   presented as the confidence proxy it is, not as "intent restoration". */
 const WEIGHTS = [
-  { key: "value", label: "Buyer value", weight: 0.4 },
-  { key: "intent", label: "Intent restoration", weight: 0.35 },
-  { key: "speed", label: "Speed", weight: 0.15 },
+  { key: "value", label: "Value (weight .40)", weight: 0.4 },
+  { key: "confidence", label: "Confidence (.35 proxy)", weight: 0.35 },
+  { key: "speed", label: "Speed (.15)", weight: 0.15 },
 ] as const;
 const INCONVENIENCE_WEIGHT = -0.1;
 
@@ -52,7 +54,6 @@ export default function RemedyPage() {
   const [proposals, setProposals] = useState<RemedyProposal[] | null>(null);
   const [sandbox, setSandbox] = useState<boolean | null>(null);
   const [contractStatus, setContractStatus] = useState<string | null>(null);
-  const [chosenId, setChosenId] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [decision, setDecision] = useState<PolicyDecision | null>(null);
   const [moneyAction, setMoneyAction] = useState<MoneyAction | null>(null);
@@ -162,7 +163,9 @@ export default function RemedyPage() {
   );
 
   const busy = phase === "policy" || phase === "executing";
-  const chosen = proposals?.find((p) => p.id === chosenId) ?? proposals?.[0];
+  // The actionable candidate: the highest-ranked non-rejected proposal.
+  // (Ranking authority is the server's; there is no manual chooser here.)
+  const chosen = proposals?.find((p) => !p.rejected_reason);
 
   return (
     <main className="dante-container py-8 md:py-12">
@@ -250,17 +253,26 @@ export default function RemedyPage() {
                   </header>
 
                   <div className="grid grid-cols-1 gap-6 px-5 py-5 md:grid-cols-2">
-                    {/* score breakdown bars */}
+                    {/* score breakdown bars — labels name the planner fields
+                        actually plotted (#8) */}
                     <div aria-label="Score breakdown">
-                      <ScoreBar label="Value" weight={0.4} value={clamp01(p.expected_buyer_value)} />
-                      <ScoreBar label="Intent restoration" weight={0.35} value={clamp01(p.confidence)} />
                       <ScoreBar
-                        label="Speed"
+                        label="Value (weight .40)"
+                        weight={0.4}
+                        value={clamp01(p.expected_buyer_value)}
+                      />
+                      <ScoreBar
+                        label="Confidence (.35 proxy)"
+                        weight={0.35}
+                        value={clamp01(p.confidence)}
+                      />
+                      <ScoreBar
+                        label="Speed (.15)"
                         weight={0.15}
                         value={speedScore(p.estimated_time_hours)}
                       />
                       <ScoreBar
-                        label="Inconvenience"
+                        label="Friction (−.10)"
                         weight={INCONVENIENCE_WEIGHT}
                         value={clamp01(p.inconvenience_score)}
                         penalty

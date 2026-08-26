@@ -240,3 +240,72 @@ infeasible select attempt → HTTP 409.
   service would replace my scan-based resolver, and a shared trace-id header
   convention across all routes would make agent_run records joinable to
   frontend traces.
+
+## Hardening wave (2026-08-26, agent-layer hardening agent)
+
+Five confirmed defects fixed in `project_dante/agents/compiler.py` and
+`project_dante/agents/evaluator.py`. All existing tests stay green; regression
+tests added for every fix.
+
+1. **[MAJOR] Hard-constraint 'eq' substring bypass — FIXED.** The generic
+   "contains" fallback in `_check_scalar` let merchant-controlled strings pass
+   buyer gates (brand `eq "Sony"` matched `"not-sony-compatible"`; category
+   `"headphone-stands"` matched `eq "headphones"`). Replaced with exact
+   case-insensitive equality plus a **closed catalog-vocabulary map**
+   (`mouse/mice`, `router/routers`, `charger/chargers-cables`, etc. — the pairs
+   the offer-eval dataset actually relies on, replacing what the old substring
+   fallback accidentally provided). Soft-score brand matching keeps contains
+   (advisory only). The single remaining containment case is documented and
+   narrow: category resolved from TITLE when an offer has no category field,
+   whole-word only, hyphen-adjacent compounds excluded.
+2. **[MAJOR] Non-integer unit_amount_paise crashed evaluate() — FIXED.**
+   String/float/dict/None money now FAILS CLOSED at every comparison boundary:
+   `_as_int_money` (bool excluded) guards the spend cap, an unconditional
+   structural check marks such offers infeasible even with no buyer cap
+   (failure key `unit_amount_paise`, actual junk preserved for audit),
+   `_check_numeric` never raises, scoring drops junk prices from min/max
+   windows, sorting treats them as +inf, and `explain()` renders them verbatim.
+   One hostile offer can no longer 500 the whole search route.
+3. **[MAJOR] CompiledIntentSchema type-laxness — FIXED** with pydantic v2
+   validators: `max_total_amount_paise` must be int > 0 or absent (bool, float
+   even if integral, strings rejected); constraint/preference values must be
+   None, scalar, or a flat scalar list (dicts/nested rejected); ops restricted
+   to the frozen set; keys non-empty; `critical`/`substitutions_allowed` strict
+   booleans; weight a real number bounded 0..1 (numeric strings rejected).
+   Validation errors still feed the provider's one-shot retry loop; after
+   retries compile fails safe to the rules engine.
+4. **[MINOR] Bidi/zero-width controls passed into intent records — FIXED.**
+   New `_sanitize_input` = mojibake repair THEN stripping of U+202A–E,
+   U+2066–9, U+200B–D, U+FEFF, applied in `compile()` before parsing/storage.
+   Regular unicode (Devanagari, homoglyphs, emoji) passes through untouched.
+   Compiles of control-laden text produce constraints identical to clean text;
+   stored records are control-free.
+5. **[MINOR] LLM enrichment swapped grounded explanations for unvalidated text
+   — FIXED.** Every proposed rephrase now passes `_explanation_is_safe`:
+   <= 500 chars; no markdown fences/headers/bullets/links, no URLs, no
+   tool-call-looking JSON, no control chars; and **no digit sequence absent
+   from the deterministic explanation** (blocks invented prices/refunds/
+   percentages). Any doubt keeps the deterministic grounded text.
+
+### Verification
+
+- Pinned suites: `pytest tests/test_agents.py tests/test_intent_rules.py
+  tests/test_eval_harness.py tests/test_security_redteam.py` → **162 passed**
+  (was 134; +28 regression tests).
+- Full API suite: **352 passed**, ruff clean on all touched files.
+- Eval runners (DANTE_STORE_PATH=.dante-fixstore.json):
+  - `run_intent_evals.py`: PASS, 68/68 cases, critical_recall=1.0.
+  - `run_offer_evals.py`: thresholds PASS (violation_rate=0), but case count is
+    calendar-dependent — see known issue below.
+
+### Known issue reported, NOT fixed (outside mandate)
+
+**OFF-001 is calendar-sensitive (pre-existing, dataset-level).** Its intent
+says "delivered by Thursday"; HP-005 ships in 2 days. On Mon/Tue runs the
+deadline is >= 2 days out and HP-005 is feasible (ground truth); on Wed runs
+the deadline is tomorrow and HP-005 legitimately misses it → false-negative
+(safe direction: no hard-constraint violation ever occurs; the absolute bar
+violation_rate == 0 holds on any day). Verified identical code passed 26/26 on
+Tue 2026-08-25 and scored 25/26 on Wed 2026-08-26. Fix belongs with Agent J /
+dataset owner (e.g. pin promised_by_date in the fixture or use a
+deadline-relative expectation); datasets were not edited per instructions.

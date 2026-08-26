@@ -78,7 +78,8 @@ export function ActivityTicker({
                       ? "text-success"
                       : state === "active"
                         ? "text-ink"
-                        : "text-rule"
+                        // Pending glyphs at ink-soft minimum (#15 contrast).
+                        : "text-ink-soft"
                 }`}
               >
                 {state === "error" ? "✗" : state === "done" ? "✓" : state === "active" ? "▸" : "·"}
@@ -91,7 +92,9 @@ export function ActivityTicker({
                       ? "text-ink"
                       : state === "done"
                         ? "text-ink-soft"
-                        : "text-rule"
+                        // Pending steps sit at ink-soft, never rule — the old
+                        // rule-tone glyphs measured ~1.6:1 contrast (#15).
+                        : "text-ink-soft"
                 }`}
               >
                 {s.label}

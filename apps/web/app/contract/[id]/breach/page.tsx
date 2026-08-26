@@ -23,6 +23,7 @@ import type {
   ContractResponse,
   EvidenceArtifactRec,
   PromiseRec,
+  TimelineResponse,
 } from "@/lib/rights-ui";
 import { formatDateTime, prettyJson } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -33,11 +34,31 @@ type VerifyShape = {
   satisfied: boolean;
 };
 
+/** One OBSERVED_FACT_RECORDED event — the delivery-time reality. */
+type ObservedFact = { key: string; value: unknown; synthetic?: boolean };
+
 function renderValue(v: unknown): string {
   if (v === null || v === undefined || v === "") return "—";
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
+
+/**
+ * Promise key → the observed-fact keys that speak to it. Mirrors
+ * _FACT_TO_PROMISE in project_dante/domain/promises/verifier.py.
+ */
+const FACT_TO_PROMISE: Record<string, string> = {
+  "warranty.type": "warranty.type",
+  "warranty.region": "warranty.region",
+  "product.region": "product.region",
+  condition: "condition",
+  "price.amount_paise": "price.amount_paise",
+  unit_amount_paise: "price.amount_paise",
+  "payment.amount_paise": "price.amount_paise",
+  amount_paid_paise: "price.amount_paise",
+  "delivery.delivered_date": "delivery.promised_by_date",
+  "delivery.actual_date": "delivery.promised_by_date",
+};
 
 export default function BreachPage() {
   const params = useParams<{ id: string }>();
@@ -45,6 +66,7 @@ export default function BreachPage() {
 
   const [detail, setDetail] = useState<ContractResponse | null>(null);
   const [breaches, setBreaches] = useState<Breach[] | null>(null);
+  const [facts, setFacts] = useState<ObservedFact[]>([]);
   const [evidence, setEvidence] = useState<EvidenceArtifactRec[]>([]);
   const [sandbox, setSandbox] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,31 +86,55 @@ export default function BreachPage() {
         if (!alive) return;
         setBreaches(b.breaches ?? []);
 
-        // Evidence referenced by promises + breach observed-facts; the frozen
-        // contract response doesn't carry artifacts, pull them per promise ref.
-        const ids = new Set<string>();
-        for (const p of d.promises ?? []) {
-          if (p.source_artifact_id) ids.add(p.source_artifact_id);
-        }
-        // The timeline's EVIDENCE_SNAPSHOT_CREATED events carry artifact payloads.
+        // Evidence + observed facts both live on the timeline. Payload shapes
+        // mirror the backend emitters exactly:
+        //   EVIDENCE_SNAPSHOT_CREATED → {evidence_id, source_type, sha256,
+        //     trusted_level, synthetic, scenario_id}
+        //     (domain/promises/pipeline.py build_evidence)
+        //   OBSERVED_FACT_RECORDED → {key, value, observed_fact_id, synthetic}
+        //     (integrations/merchant/service.py _store_fact)
         try {
-          const tl = await apiGet<{ events: Record<string, unknown>[] }>(
-            `/api/contracts/${contractId}/timeline?category=Evidence`
+          const tl = await apiGet<TimelineResponse>(
+            `/api/contracts/${contractId}/timeline`
           );
-          for (const ev of tl.events) {
-            const payload = (ev.payload ?? {}) as Record<string, unknown>;
-            const art = (payload.artifact ?? payload.evidence) as
-              | EvidenceArtifactRec
-              | undefined;
-            if (art?.id && !ids.has(art.id)) {
-              ids.add(art.id);
-              setEvidence((prev) => [...prev, ...(art ? [art] : [])]);
-            } else if (art?.id && ids.has(art.id)) {
-              setEvidence((prev) => [...prev.filter((p) => p.id !== art.id), art]);
+          if (!alive) return;
+          const evs = tl.events ?? [];
+          const nextFacts: ObservedFact[] = [];
+          for (const ev of evs) {
+            const p = (ev.payload ?? {}) as Record<string, unknown>;
+            if (ev.event_type === "OBSERVED_FACT_RECORDED") {
+              if (p.key !== undefined) {
+                nextFacts.push({
+                  key: String(p.key),
+                  value: p.value,
+                  synthetic: typeof p.synthetic === "boolean" ? p.synthetic : undefined,
+                });
+              }
+              continue;
             }
+            if (ev.event_type !== "EVIDENCE_SNAPSHOT_CREATED") continue;
+            const eid = typeof p.evidence_id === "string" ? p.evidence_id : null;
+            if (!eid) continue;
+            const rec: EvidenceArtifactRec = {
+              id: eid,
+              source_type: String(p.source_type ?? "unknown"),
+              raw_payload_ref: `store://${eid}`,
+              sha256: String(p.sha256 ?? ""),
+              observed_at: ev.created_at ?? undefined,
+              trusted_level:
+                (p.trusted_level as EvidenceArtifactRec["trusted_level"]) ??
+                (p.synthetic === true ? "synthetic" : "external"),
+              synthetic: p.synthetic === true,
+              excerpt: undefined,
+            };
+            setEvidence((prev) =>
+              prev.some((a) => a.id === rec.id) ? prev : [...prev, rec],
+            );
           }
+          setFacts(nextFacts);
         } catch {
-          /* evidence panel degrades to empty */
+          /* evidence panel degrades to empty; observed column falls back to
+             best-effort extraction from breach explanations */
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "failed to load contract");
@@ -112,15 +158,30 @@ export default function BreachPage() {
 
   const promises: PromiseRec[] = detail?.promises ?? [];
   const materialPromises = promises.filter((p) => p.material_to_intent);
-  const byPromiseId = new Map(promises.map((p) => [p.id, p]));
   const breachedPromiseIds = new Set((breaches ?? []).map((b) => b.promise_id));
 
+  /**
+   * Latest observed fact whose key speaks to this promise key — same mapping
+   * the verifier uses, so what the buyer sees here is what verification saw.
+   */
+  const latestFactFor = (promiseKey: string): ObservedFact | null => {
+    let match: ObservedFact | null = null;
+    for (const f of facts) {
+      if (FACT_TO_PROMISE[f.key] === promiseKey) match = f;
+    }
+    return match;
+  };
+
   /** Comparison rows: every material promise, marked MISMATCH when breached. */
-  const rows = materialPromises.map((p) => ({
-    promise: p,
-    breach: (breaches ?? []).find((b) => b.promise_id === p.id),
-    mismatch: breachedPromiseIds.has(p.id),
-  }));
+  const rows = materialPromises.map((p) => {
+    const canonicalKey = FACT_TO_PROMISE[p.key] ?? p.key;
+    return {
+      promise: p,
+      fact: latestFactFor(canonicalKey),
+      breach: (breaches ?? []).find((b) => b.promise_id === p.id),
+      mismatch: breachedPromiseIds.has(p.id),
+    };
+  });
 
   const anyBreach = (breaches ?? []).length > 0;
   const severityRank: Record<string, number> = {
@@ -129,6 +190,12 @@ export default function BreachPage() {
     material: 2,
     critical: 3,
   };
+
+  /** Highest severity across recorded breaches — gates the headline (#7). */
+  const maxSeverityRank = (breaches ?? []).reduce(
+    (max, b) => Math.max(max, severityRank[b.severity] ?? 0),
+    0,
+  );
 
   return (
     <main className="min-h-screen bg-paper">
@@ -144,22 +211,41 @@ export default function BreachPage() {
 
         <header className="mt-10 md:mt-14">
           <SectionLabel>VERIFICATION REPORT</SectionLabel>
-          <h1
-            className={cn(
-              "mt-4 font-display text-[clamp(3rem,10vw,7.5rem)] leading-[0.95] tracking-[-0.02em]",
-              anyBreach ? "text-signal" : "text-ink"
-            )}
-          >
-            {anyBreach ? "MATERIAL BREACH" : "NO BREACH"}
-          </h1>
+          {/* Headline severity is gated (#7): only material|critical breaches
+              earn the giant red MATERIAL BREACH spread; minor/informational
+              get the calmer PROMISES DRIFTED treatment. */}
+          {maxSeverityRank >= 2 ? (
+            <h1
+              className={cn(
+                "mt-4 font-display text-[clamp(3rem,10vw,7.5rem)] leading-[0.95] tracking-[-0.02em]",
+                "text-signal"
+              )}
+            >
+              MATERIAL BREACH
+            </h1>
+          ) : anyBreach ? (
+            <h1 className="mt-4 font-display text-[clamp(2.4rem,7vw,5rem)] leading-[0.98] tracking-[-0.02em] text-warning">
+              Minor promises drifted
+            </h1>
+          ) : (
+            <h1 className="mt-4 font-display text-[clamp(3rem,10vw,7.5rem)] leading-[0.95] tracking-[-0.02em] text-ink">
+              NO BREACH
+            </h1>
+          )}
 
           <p className="mt-6 max-w-prose text-base leading-relaxed text-ink-soft">
-            {anyBreach ? (
+            {maxSeverityRank >= 2 ? (
               <>
                 What the merchant froze into this contract at purchase time did
                 not survive contact with reality. Every mismatch below is backed
                 by a hashed evidence artifact and re-derivable from the audit
                 trail.
+              </>
+            ) : anyBreach ? (
+              <>
+                A material promise drifted from its observed fact, but the
+                verifier rated the gap minor or informational — compensation
+                territory, not headline breach. Details per promise below.
               </>
             ) : (
               <>
@@ -214,12 +300,18 @@ export default function BreachPage() {
                 </p>
               )}
 
-              {rows.map(({ promise: p, breach, mismatch }) => {
-                // Observed value comes from the breach explanation when the
-                // fact record itself isn't exposed on this endpoint.
-                const observed = breach
-                  ? extractObserved(breach.explanation, p.key)
-                  : null;
+              {rows.map(({ promise: p, fact, mismatch }) => {
+                // Observed value: the real observed-fact payload when one was
+                // recorded for this promise key; otherwise best-effort from
+                // the breach explanation; otherwise an honest "not yet".
+                const observed =
+                  fact != null
+                    ? renderValue(fact.value)
+                    : (() => {
+                        const b = (breaches ?? []).find((x) => x.promise_id === p.id);
+                        return b ? extractObserved(b.explanation, p.key) : null;
+                      })();
+                const syntheticFact = fact?.synthetic === true;
                 return (
                   <div
                     key={p.id}
@@ -239,6 +331,11 @@ export default function BreachPage() {
                     <div className="pr-4">
                       <p className="folio-label flex flex-wrap items-center gap-2">
                         Delivered reality
+                        {syntheticFact && (
+                          <span className="inline-flex items-center gap-1 rounded-sm border border-dashed border-warning/50 px-1.5 py-[2px] font-mono text-[0.5625rem] uppercase tracking-[0.14em] text-warning">
+                            SYNTHETIC FACT
+                          </span>
+                        )}
                         {mismatch && (
                           <span
                             role="img"
@@ -257,12 +354,14 @@ export default function BreachPage() {
                       <p
                         className={cn(
                           "tabular mt-1 text-lg leading-snug",
-                          mismatch ? "font-medium text-signal-deep" : "text-ink"
+                          mismatch ? "font-medium text-signal-deep" : "text-ink",
+                          observed == null && !mismatch && "text-ink-soft"
                         )}
                       >
-                        {mismatch
-                          ? (observed ?? "differs from the frozen promise")
-                          : (observed ?? "matches as promised")}
+                        {observed ??
+                          (mismatch
+                            ? "differs from the frozen promise — see breach detail below"
+                            : "no observation recorded yet")}
                       </p>
                     </div>
                   </div>
@@ -307,7 +406,9 @@ export default function BreachPage() {
               <SectionLabel>SOURCE EVIDENCE · HASHED</SectionLabel>
               {evidence.length === 0 ? (
                 <p className="mt-4 font-mono text-xs uppercase tracking-[0.14em] text-ink-soft">
-                  Evidence artifacts are attached at freeze and delivery time.
+                  No evidence snapshots on this trace yet — artifacts are
+                  recorded at freeze and at every synthetic fulfillment step
+                  (EVIDENCE_SNAPSHOT_CREATED events).
                 </p>
               ) : (
                 <ul className="mt-4 divide-y divide-rule border-y border-rule">

@@ -52,9 +52,25 @@ type DeliverResponse = {
 type RemediesResponse = {
   proposals: { id: string; remedy_type: string; rank?: number | null; rejected_reason?: string | null }[];
 };
-type PolicyResponse = { decision?: { decision: string; policy_ids?: string[] } | null };
+type PolicyResponse = {
+  decision?: {
+    decision: string;
+    policy_ids?: string[];
+    reason_codes?: string[];
+    explanation?: string;
+  } | null;
+  money_action?: {
+    status?: string;
+    reason_code?: string;
+  } | null;
+};
 type ExecuteResponse = {
-  money_action?: { result_ref?: string | null; amount_paise?: number; status?: string } | null;
+  money_action?: {
+    result_ref?: string | null;
+    amount_paise?: number;
+    status?: string;
+    reason_code?: string;
+  } | null;
   refund?: Record<string, unknown> | null;
   error?: string;
 };
@@ -69,6 +85,15 @@ type StepStatus = "pending" | "running" | "ok" | "fail";
 interface Step {
   label: string;
   run: (ctx: Ctx) => Promise<string>;
+}
+
+/** One ticker row; timestamps are stamped once at each transition (#10). */
+interface StepState {
+  name: string;
+  status: StepStatus;
+  detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 /** Shared mutable context threaded through orchestrator steps. */
@@ -90,14 +115,12 @@ export default function DemoPage() {
 
   // Orchestrator state
   const [running, setRunning] = useState(false);
-  const [steps, setSteps] = useState<{ name: string; status: StepStatus; detail?: string }[]>([]);
+  const [steps, setSteps] = useState<StepState[]>([]);
   const ctxRef = useRef<Ctx>({});
   const logRef = useRef<HTMLOListElement>(null);
   const reduceMotion = useReducedMotion();
 
-  const stamp = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
-
-  function setStep(i: number, patch: Partial<{ status: StepStatus; detail: string }>) {
+  function setStep(i: number, patch: Partial<Omit<StepState, "name">>) {
     setSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   }
 
@@ -238,10 +261,17 @@ export default function DemoPage() {
         if (!c.proposalId) throw new Error("no proposal");
         const r = await apiPost<PolicyResponse>(`/api/remedies/${c.proposalId}/policy`);
         const d = r.decision?.decision;
+        // A DENY is a real policy refusal, not a step success — halt the
+        // chain with the reason codes so the ticker can't read as green (#6).
+        if (d === "DENY" || !r.decision || r.money_action?.status === "denied") {
+          throw new Error(
+            `policy DENIED — reasons: ${(r.decision?.reason_codes ?? ["unknown"]).join(", ")}` +
+              (r.decision?.explanation ? ` · ${r.decision.explanation.slice(0, 140)}` : ""),
+          );
+        }
         if (d === "REQUIRE_APPROVAL") {
           return `REQUIRE_APPROVAL (${(r.decision?.policy_ids ?? []).join(",")}) — approving`;
         }
-        if (d !== "ALLOW") throw new Error(`policy said ${d ?? "unknown"}`);
         return `ALLOW by ${(r.decision?.policy_ids ?? []).join(", ")}`;
       },
     },
@@ -251,8 +281,20 @@ export default function DemoPage() {
         if (!c.proposalId) throw new Error("no proposal");
         const r = await apiPost<ExecuteResponse>(`/api/remedies/${c.proposalId}/execute`);
         if (r.error && !r.money_action) throw new Error(r.error);
+        const status = r.money_action?.status;
+        // executed:false / failed money action must fail the step — the hero
+        // arc only reports success when the refund actually went through (#6).
+        if (status === "failed" || status === "denied") {
+          throw new Error(
+            `refund did not execute — money_action=${status}` +
+              (r.money_action?.reason_code ? ` · ${r.money_action.reason_code}` : ""),
+          );
+        }
         const ref = r.money_action?.result_ref ?? (r.refund as { id?: string })?.id;
-        return `refund ${ref ?? "submitted"} · money_action=${r.money_action?.status ?? "?"}`;
+        if (!ref && status !== "executed") {
+          throw new Error(`refund not confirmed — no result_ref, money_action=${status ?? "?"}`);
+        }
+        return `refund ${ref ?? "confirmed"} · money_action=${status ?? "executed"}`;
       },
     },
   ];
@@ -261,7 +303,15 @@ export default function DemoPage() {
     setRunning(true);
     setFlash(null);
     ctxRef.current = {};
-    setSteps(stepsDef.map((s) => ({ name: s.label, status: "pending" as StepStatus })));
+    const now = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
+    // Each step carries its own timestamp, stamped at transition (#10).
+    setSteps(
+      stepsDef.map((s) => ({
+        name: s.label,
+        status: "pending" as StepStatus,
+        startedAt: now(),
+      })),
+    );
 
     let halted = false;
     for (let i = 0; i < stepsDef.length; i++) {
@@ -269,13 +319,14 @@ export default function DemoPage() {
         setStep(i, { status: "pending", detail: "skipped — chain halted" });
         continue;
       }
-      setStep(i, { status: "running" });
+      const startedAt = now();
+      setStep(i, { status: "running", startedAt });
       try {
         const detail = await stepsDef[i].run(ctxRef.current);
-        setStep(i, { status: "ok", detail });
+        setStep(i, { status: "ok", detail, finishedAt: now() });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        setStep(i, { status: "fail", detail: msg });
+        setStep(i, { status: "fail", detail: msg, finishedAt: now() });
         setFlash({ tone: "fail", text: `Chain halted at "${stepsDef[i].label}": ${msg}` });
         halted = true;
       }
@@ -343,7 +394,9 @@ export default function DemoPage() {
           >
             {steps.map((s, i) => (
               <li key={i} className="flex items-baseline gap-3 py-0.5">
-                <time className="shrink-0 text-ink-soft">{stamp()}</time>
+                <time className="shrink-0 text-ink-soft">
+                  {s.status === "ok" || s.status === "fail" ? (s.finishedAt ?? s.startedAt ?? "") : s.status === "running" ? s.startedAt ?? "" : ""}
+                </time>
                 <span
                   className={cn(
                     "w-4 shrink-0 text-center",
