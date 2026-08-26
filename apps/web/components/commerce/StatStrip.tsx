@@ -56,11 +56,15 @@ export default function StatStrip() {
   ];
 
   return (
+    /* Valid dl order: each dt (term) precedes its dd (value) in DOM order
+       (#15); flex column + order utilities keep the numeral visually first. */
     <dl className="grid grid-cols-2 gap-px border border-rule bg-rule md:grid-cols-5">
       {items.map(([label, value]) => (
-        <div key={label} className="bg-paper px-4 py-4">
-          <dd className="tabular font-display text-3xl leading-none text-ink">{value}</dd>
-          <dt className="folio-label mt-2">{label}</dt>
+        <div key={label} className="flex flex-col bg-paper px-4 py-4">
+          <dt className="order-2 folio-label mt-2">{label}</dt>
+          <dd className="order-1 tabular font-display text-3xl leading-none text-ink">
+            {value}
+          </dd>
         </div>
       ))}
     </dl>

@@ -204,13 +204,31 @@ export default function RightsGraph({
     return acc;
   }, {});
 
+  const edgeCounts = edges.reduce<Record<string, number>>((acc, e) => {
+    acc[e.type] = (acc[e.type] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const nodeSummary =
+    nodes.length === 0
+      ? ""
+      : Object.entries(countsByType)
+          .map(([t, c]) => `${c} ${t}${c === 1 ? "" : "s"}`)
+          .join(", ");
+  // Edge-type summary rides in the accessible description (#15), so screen
+  // reader users get the relationship vocabulary without pointing at edges.
+  const edgeSummary =
+    edges.length === 0
+      ? ""
+      : ` Relationships: ${Object.entries(edgeCounts)
+          .map(([t, c]) => `${c} ${t.replace(/_/g, " ").toLowerCase()}`)
+          .join(", ")}.`;
+
   const summary =
     ariaLabel ??
     (nodes.length === 0
       ? "Rights graph: empty"
-      : `Rights graph with ${nodes.length} nodes: ${Object.entries(countsByType)
-          .map(([t, c]) => `${c} ${t}${c === 1 ? "" : "s"}`)
-          .join(", ")}`);
+      : `Rights graph with ${nodes.length} nodes: ${nodeSummary}.${edgeSummary}`);
 
   if (nodes.length === 0) {
     return (
@@ -226,14 +244,15 @@ export default function RightsGraph({
 
   return (
     <figure className={className} role="group" aria-label={summary}>
+      {/* role="group" keeps interactive child nodes in the accessibility tree
+          (#13); role="img" would flatten them away. */}
       <svg
         viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}
         className="h-auto w-full"
         style={{ minWidth: 480 }}
-        role="img"
-        aria-label={summary}
+        role="group"
+        aria-label={`Rights graph: ${nodeSummary}.${edgeSummary}`}
       >
-        <title>{summary}</title>
 
         <defs>
           {[...new Set(edges.map((e) => e.type))].map((t) => (
@@ -303,7 +322,7 @@ export default function RightsGraph({
                 key={`${n.id}:${n.status ?? ""}`}
                 tabIndex={onSelect ? 0 : undefined}
                 role={onSelect ? "button" : undefined}
-                aria-label={`${n.type}: ${n.label}${n.status ? `, ${n.status}` : ""}`}
+                aria-label={`${n.type}: ${n.label}${n.status ? `, ${n.status}` : ""}${onSelect ? ". Press Enter to inspect." : ""}`}
                 onClick={() => onSelect?.(n)}
                 onKeyDown={(ev) => {
                   if ((ev.key === "Enter" || ev.key === " ") && onSelect) {
@@ -316,11 +335,17 @@ export default function RightsGraph({
                 initial={reduceMotion ? false : { opacity: 0.25 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.45, ease: "easeOut" }}
-                style={{ cursor: onSelect ? "pointer" : "default" }}
+                style={{
+                  cursor: onSelect ? "pointer" : "default",
+                  // Visible keyboard focus (#13): signal ring replaces the
+                  // browser default that SVG elements don't reliably paint.
+                  outline: focusedNode === n.id && onSelect ? `2px solid ${SIGNAL}` : undefined,
+                  outlineOffset: 4,
+                }}
               >
                 <title>{`${n.type.toUpperCase()} — ${n.label}${n.status ? ` (${n.status})` : ""}`}</title>
 
-                {selected && onSelect && (
+                {(selected || (focusedNode === n.id && onSelect)) && (
                   <rect
                     x={n.x - 6}
                     y={n.y - 6}
@@ -329,9 +354,9 @@ export default function RightsGraph({
                     }
                     height={shape === "diamond" ? NODE_H + 26 : NODE_H + 12}
                     fill="none"
-                    stroke={ink}
-                    strokeWidth={1}
-                    strokeDasharray="3 3"
+                    stroke={focusedNode === n.id ? SIGNAL : ink}
+                    strokeWidth={focusedNode === n.id ? 1.75 : 1}
+                    strokeDasharray={focusedNode === n.id ? undefined : "3 3"}
                     rx={2}
                   />
                 )}

@@ -23,20 +23,57 @@ import { apiGet } from "@/lib/api";
 import type {
   ContractResponse,
   DanteEvent,
-  MoneyAction,
   TimelineResponse,
 } from "@/lib/rights-ui";
+import { cn } from "@/lib/cn";
+
+/** String|undefined coercion for payload fields of any shape. */
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/** Number|undefined coercion for payload fields of any shape. */
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
 
 type AgentRun = {
-  id?: string;
-  agent_name?: string;
-  engine?: string;
-  input_summary?: string;
-  output_summary?: string;
-  decision_rationale?: string;
-  tool_calls?: unknown;
-  created_at?: string;
-  [k: string]: unknown;
+  agent_name: string;
+  engine: string;
+  input_summary: string;
+  output_summary: string;
+  latency_ms?: number;
+  validation_retries?: number;
+  trace_id?: string;
+  created_at: string;
+};
+
+/**
+ * One derived money-action row, built from the POLICY_* / REFUND_* event
+ * payloads the backend actually emits (project_dante/domain/money/policy.py):
+ *   POLICY_DECIDED/ALLOWED/DENIED → {decision, reason_codes, explanation,
+ *     money_action_id, amount_paise, action_type, policy_snapshot_hash}
+ *   REFUND_REQUESTED → {payment_id, amount_paise, idempotency_key,
+ *     reason_code, mode}
+ *   REFUND_PROCESSED → {refund_id, amount_paise, payment_id, sandbox, mode}
+ */
+type DerivedMoneyAction = {
+  key: string;
+  money_action_id: string | null;
+  type: string | null;
+  decision: string | null;
+  status: string;
+  amount_paise: number | null;
+  reason_codes: unknown[];
+  reason_code: string | null;
+  human_explanation: string | null;
+  idempotency_key: string | null;
+  policy_snapshot_hash: string | null;
+  razorpay_payment_id: string | null;
+  result_ref: string | null;
+  sandbox: boolean | null;
+  event_type: string;
+  at: string;
 };
 
 function Mono({ children }: { children: React.ReactNode }) {
@@ -53,7 +90,7 @@ export default function AuditPage() {
 
   const [detail, setDetail] = useState<ContractResponse | null>(null);
   const [events, setEvents] = useState<DanteEvent[]>([]);
-  const [moneyActions, setMoneyActions] = useState<MoneyAction[]>([]);
+  const [moneyActions, setMoneyActions] = useState<DerivedMoneyAction[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,21 +122,108 @@ export default function AuditPage() {
   }, [contractId]);
 
   // Derive money actions + agent runs from event payloads (the audit trail is
-  // the source of truth; no private endpoints assumed).
+  // the source of truth; no private endpoints assumed). Payload shapes mirror
+  // the backend append_event calls exactly:
+  //   - POLICY_DECIDED/_ALLOWED/_DENIED (domain/money/policy.py _persist_and_link)
+  //   - REFUND_REQUESTED / REFUND_PROCESSED / REFUND_FAILED (policy.py executor)
+  // Agent-run rows come from INTENT_COMPILED / OFFER_EVALUATED events whose
+  // payloads carry engine + constraint keys; the STORE-level _log_agent_run
+  // records (agents/provider.py: input_summary/output_summary/latency_ms) are
+  // not exposed over HTTP, so the timeline's own payloads stand in for them.
   useEffect(() => {
-    const maById = new Map<string, MoneyAction>();
+    const maByKey = new Map<string, DerivedMoneyAction>();
+    for (const e of events) {
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      if (
+        e.event_type !== "POLICY_DECIDED" &&
+        e.event_type !== "POLICY_ALLOWED" &&
+        e.event_type !== "POLICY_DENIED" &&
+        e.event_type !== "REFUND_REQUESTED" &&
+        e.event_type !== "REFUND_PROCESSED"
+      ) {
+        continue;
+      }
+      const key =
+        (typeof e.idempotency_key === "string" && e.idempotency_key) ||
+        `${e.aggregate_id}:${p.money_action_id ?? ""}`;
+      const prev = maByKey.get(key);
+      const row: DerivedMoneyAction = {
+        key,
+        money_action_id:
+          str(p.money_action_id) ?? prev?.money_action_id ?? null,
+        type:
+          str(p.action_type) ??
+          (e.event_type === "REFUND_REQUESTED" || e.event_type === "REFUND_PROCESSED"
+            ? "refund_full"
+            : prev?.type ?? null),
+        decision: str(p.decision) ?? prev?.decision ?? null,
+        status:
+          e.event_type === "REFUND_PROCESSED"
+            ? "executed"
+            : e.event_type === "POLICY_DENIED"
+              ? "denied"
+              : e.event_type === "POLICY_ALLOWED"
+                ? "allowed"
+                : e.event_type === "POLICY_DECIDED"
+                  ? (str(p.decision)?.toLowerCase() ?? "decided")
+                  : prev?.status ?? "proposed",
+        amount_paise:
+          num(p.amount_paise) ?? prev?.amount_paise ?? null,
+        reason_codes: Array.isArray(p.reason_codes)
+          ? (p.reason_codes as unknown[])
+          : (prev?.reason_codes ?? []),
+        reason_code: str(p.reason_code) ?? prev?.reason_code ?? null,
+        human_explanation: str(p.explanation) ?? prev?.human_explanation ?? null,
+        idempotency_key: str(p.idempotency_key) ?? prev?.idempotency_key ?? null,
+        policy_snapshot_hash:
+          str(p.policy_snapshot_hash) ?? prev?.policy_snapshot_hash ?? null,
+        razorpay_payment_id:
+          str(p.payment_id) ?? prev?.razorpay_payment_id ?? null,
+        result_ref: str(p.refund_id) ?? prev?.result_ref ?? null,
+        sandbox: typeof p.sandbox === "boolean" ? p.sandbox : (prev?.sandbox ?? null),
+        event_type: e.event_type,
+        at: e.created_at ?? "",
+      };
+      maByKey.set(key, row);
+    }
+    setMoneyActions([...maByKey.values()].sort((a, b) => a.at.localeCompare(b.at)));
+
+    // Agent runs from the Agent-category events the compiler/evaluator emit.
     const runs: AgentRun[] = [];
     for (const e of events) {
       const p = (e.payload ?? {}) as Record<string, unknown>;
-      const candidateMa = (p.money_action ?? p.moneyAction) as MoneyAction | undefined;
-      if (candidateMa?.id) maById.set(candidateMa.id, { ...maById.get(candidateMa.id), ...candidateMa });
-      const run = (p.agent_run ?? p.agentRun ?? p.run) as AgentRun | undefined;
-      if (run?.agent_name) runs.push({ id: e.id, ...run });
-      if (e.event_type === "REMEDY_PROPOSED" && p.planner_run) {
-        runs.push(p.planner_run as AgentRun);
+      if (e.event_type === "INTENT_COMPILED") {
+        runs.push({
+          agent_name: "IntentCompiler",
+          engine: str(p.engine) ?? "rules",
+          input_summary: "raw buyer brief → typed hard constraints + soft preferences",
+          output_summary: `constraint keys: ${(Array.isArray(p.hard_constraint_keys)
+            ? (p.hard_constraint_keys as unknown[])
+            : []
+          ).join(", ")}`,
+          trace_id: e.trace_id ?? undefined,
+          created_at: e.created_at ?? "",
+        });
+      } else if (e.event_type === "OFFER_EVALUATED") {
+        runs.push({
+          agent_name: "OfferEvaluator",
+          engine: "rules", // deterministic evaluator; enrichment rephrase never changes order
+          input_summary: `offers evaluated: ${num(p.offers_evaluated) ?? "?"}`,
+          output_summary: `feasible: ${num(p.feasible_count) ?? "?"}`,
+          trace_id: e.trace_id ?? undefined,
+          created_at: e.created_at ?? "",
+        });
+      } else if (e.event_type === "CATALOG_SEARCHED") {
+        runs.push({
+          agent_name: "MerchantSearch",
+          engine: "keyword",
+          input_summary: "distilled intent keywords",
+          output_summary: `source=${str(p.source) ?? "?"} · candidates=${num(p.candidates) ?? "?"}`,
+          trace_id: e.trace_id ?? undefined,
+          created_at: e.created_at ?? "",
+        });
       }
     }
-    setMoneyActions([...maById.values()]);
     setAgentRuns(runs);
   }, [events]);
 
@@ -176,25 +300,63 @@ export default function AuditPage() {
           <SectionLabel>MONEY ACTIONS · POLICY SNAPSHOT HASHES</SectionLabel>
           {moneyActions.length === 0 ? (
             <p className="mt-3 text-ink-soft">
-              none recorded on this trace yet — money actions appear after a remedy executes.
+              none recorded on this trace yet — money actions appear once a
+              remedy is policy-checked or executed.
             </p>
           ) : (
             <ul className="mt-3 space-y-3">
               {moneyActions.map((ma) => (
-                <li key={ma.id} className="rounded-md border border-rule bg-paper-bright p-4">
+                <li key={ma.key} className="rounded-md border border-rule bg-paper-bright p-4">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                    <span className="font-medium uppercase">{ma.type}</span>
-                    <span className="tabular">{ma.amount_paise} paise</span>
+                    <span className="font-medium uppercase">{ma.type ?? "money action"}</span>
+                    {ma.amount_paise != null && (
+                      <span className="tabular">{ma.amount_paise} paise</span>
+                    )}
                     <span className="uppercase text-ink-soft">status: {ma.status}</span>
-                    {ma.result_ref && <span className="text-success">result_ref: {ma.result_ref}</span>}
+                    {ma.decision && (
+                      <span
+                        className={cn(
+                          "uppercase",
+                          ma.decision === "ALLOW"
+                            ? "text-success"
+                            : ma.decision === "DENY"
+                              ? "text-danger"
+                              : "text-warning"
+                        )}
+                      >
+                        decision: {ma.decision}
+                      </span>
+                    )}
+                    {ma.sandbox === true && (
+                      <span className="uppercase text-warning">sandbox adapter</span>
+                    )}
+                    {ma.result_ref && <span className="text-success">refund_id: {ma.result_ref}</span>}
                   </div>
                   <dl className="mt-2 space-y-1 text-ink-soft">
-                    <div><dt className="inline">reason_code: </dt><dd className="inline text-ink">{ma.reason_code}</dd></div>
-                    <div><dt className="inline">explanation: </dt><dd className="inline text-ink">{ma.human_explanation}</dd></div>
-                    <div><dt className="inline">idempotency_key: </dt><dd className="inline"><Mono>{ma.idempotency_key}</Mono></dd></div>
-                    <div><dt className="inline">policy_snapshot_hash: </dt><dd className="inline"><Mono>{ma.policy_snapshot_hash || "—"}</Mono></dd></div>
-                    <div><dt className="inline">razorpay payment/order: </dt><dd className="inline"><Mono>{ma.razorpay_payment_id ?? "—"} / {ma.razorpay_order_id ?? "—"}</Mono></dd></div>
+                    {(ma.reason_codes.length > 0 || ma.reason_code) && (
+                      <div>
+                        <dt className="inline">reason codes: </dt>
+                        <dd className="inline text-ink">
+                          {[...new Set([...(ma.reason_codes.map(String)), ...(ma.reason_code ? [ma.reason_code] : [])])].join(", ")}
+                        </dd>
+                      </div>
+                    )}
+                    {ma.human_explanation && (
+                      <div><dt className="inline">explanation: </dt><dd className="inline text-ink">{ma.human_explanation}</dd></div>
+                    )}
+                    {ma.idempotency_key && (
+                      <div><dt className="inline">idempotency_key: </dt><dd className="inline"><Mono>{ma.idempotency_key}</Mono></dd></div>
+                    )}
+                    {ma.policy_snapshot_hash && (
+                      <div><dt className="inline">policy_snapshot_hash: </dt><dd className="inline"><Mono>{ma.policy_snapshot_hash}</Mono></dd></div>
+                    )}
+                    {ma.razorpay_payment_id && (
+                      <div><dt className="inline">razorpay payment: </dt><dd className="inline"><Mono>{ma.razorpay_payment_id}</Mono></dd></div>
+                    )}
                   </dl>
+                  <p className="mt-1 text-[0.625rem] uppercase tracking-[0.1em] text-ink-soft/70">
+                    from event {ma.event_type} · {ma.at.replace("T", " ").slice(11, 19)}
+                  </p>
                 </li>
               ))}
             </ul>
@@ -207,9 +369,10 @@ export default function AuditPage() {
             <SectionLabel>AGENT RUNS · INPUTS/OUTPUTS ONLY, NO HIDDEN REASONING</SectionLabel>
             <ul className="mt-3 space-y-2">
               {agentRuns.map((r, i) => (
-                <li key={r.id ?? i} className="border-l-2 border-rule pl-3">
+                <li key={`${r.created_at}:${i}`} className="border-l-2 border-rule pl-3">
                   <span className="font-medium uppercase">{r.agent_name}</span>
                   {r.engine && <span className="text-ink-soft"> · engine: {r.engine}</span>}
+                  <span className="text-ink-soft"> · {(r.created_at ?? "").replace("T", " ").slice(11, 19)}</span>
                   {r.input_summary && <p className="text-ink-soft">in: {r.input_summary}</p>}
                   {r.output_summary && <p className="text-ink-soft">out: {r.output_summary}</p>}
                 </li>

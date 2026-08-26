@@ -32,7 +32,10 @@ export function RazorpayPanel({
   orderId,
   paymentId,
   pollingActive,
+  sandboxMode,
+  recheckoutAvailable,
   onSimulateCapture,
+  onReopenCheckout,
   simulating,
   onRecheck,
 }: {
@@ -41,11 +44,22 @@ export function RazorpayPanel({
   orderId?: string | null;
   paymentId?: string | null;
   pollingActive: boolean;
+  /** Authoritative sandbox flag from the contract record (survives refresh). */
+  sandboxMode?: boolean;
+  /** True when an order exists and checkout can be (re)opened. */
+  recheckoutAvailable?: boolean;
   onSimulateCapture: () => void;
+  /** Re-open the Razorpay Standard Checkout window (live test-mode path). */
+  onReopenCheckout?: () => void;
   simulating: boolean;
   onRecheck: () => void;
 }) {
-  const isSandbox = orderInfo?.mode === "sandbox";
+  // Sandbox detection must NOT hinge on in-memory orderInfo alone (#3): a
+  // refresh used to make the simulate button vanish. The contract's own
+  // sandbox_mode flag is authoritative; the cached order response corroborates.
+  const isSandbox = sandboxMode ?? orderInfo?.mode === "sandbox";
+  const awaitingPayment =
+    status === "PAYMENT_PENDING" || status === "PAYMENT_ORDER_CREATED";
 
   return (
     <Panel>
@@ -53,7 +67,9 @@ export function RazorpayPanel({
         <SectionLabel index="§7">Razorpay</SectionLabel>
         <div className="flex items-center gap-2">
           {isSandbox && <SandboxBadge />}
-          {!isSandbox && orderInfo && <Badge tone="neutral">live test mode</Badge>}
+          {!isSandbox && (orderInfo || status === "PAID") && (
+            <Badge tone="neutral">live test mode</Badge>
+          )}
           <StatusChip status={status} />
         </div>
       </div>
@@ -81,8 +97,9 @@ export function RazorpayPanel({
         )}
       </dl>
 
-      {/* sandbox path */}
-      {isSandbox && status !== "PAID" && (
+      {/* sandbox path — shown whenever the rail is sandbox and payment is
+          still open, however this page was loaded (#3) */}
+      {isSandbox && awaitingPayment && (
         <>
           <Rule className="my-4" />
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-warning">
@@ -103,8 +120,23 @@ export function RazorpayPanel({
         </>
       )}
 
+      {/* live test-mode path: reopen Standard Checkout after a dismissal or a
+          refresh — previously impossible at PAYMENT_ORDER_CREATED (#3). */}
+      {!isSandbox && awaitingPayment && recheckoutAvailable && onReopenCheckout && (
+        <div className="mt-4 border-t border-rule pt-4">
+          <p className="font-body text-[12px] leading-relaxed text-ink-soft">
+            Checkout window closed or lost? The order is still live — reopen it.
+          </p>
+          <div className="mt-3">
+            <Button variant="secondary" onClick={onReopenCheckout}>
+              Re-open Razorpay checkout
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* pending / reconciliation affordances */}
-      {(status === "PAYMENT_PENDING" || status === "PAYMENT_ORDER_CREATED") && (
+      {awaitingPayment && (
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule pt-4">
           <span className="inline-flex items-center gap-2 font-mono text-[11px] text-warning">
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" aria-hidden="true" />

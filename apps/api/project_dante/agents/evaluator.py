@@ -15,6 +15,7 @@ deterministic text is kept.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -149,18 +150,23 @@ def _category_equivalent(al: str | None, el: str | None) -> bool:
 
 
 def _check_scalar(
-    actual: Any, op: str, expected: Any, *, key: str | None = None
+    actual: Any,
+    op: str,
+    expected: Any,
+    *,
+    key: str | None = None,
+    title_fallback: bool = False,
 ) -> tuple[bool, Any]:
     """Scalar comparison for HARD constraints.
 
     ``eq`` is exact case-insensitive equality, plus two documented equivalences:
 
     - the closed category vocabulary above (singular vs stored catalog form);
-    - category-vs-title fallback ONLY when the offer has no category field at
-      all (_actual_for_key substitutes title): a title containing the whole
-      category word as a word-boundary token passes. This is the single
-      intentional substring case — it exists because titles are free text and
-      the fallback already degraded resolution quality.
+    - category-vs-title fallback ONLY when ``title_fallback`` is set — i.e. the
+      offer had no category field at all and its title was substituted. A title
+      containing the whole category word as a word-boundary token passes. This
+      is the single intentional containment case; a structured category VALUE
+      never gets it ('headphone-stands' as a category fails).
 
     Everything else must match exactly; near-miss strings ('not-sony',
     'sony-compatible') fail. Non-int money on numeric comparisons fails closed
@@ -174,16 +180,19 @@ def _check_scalar(
             return True, actual
         if _category_equivalent(al, el):
             return True, actual
-        # Narrow documented substring case: title standing in for a missing
-        # category field. Word-boundary containment of the full expected token.
-        if (
-            key == "category"
-            and isinstance(al, str)
-            and isinstance(el, str)
-            and el
-            and re.search(rf"\b{re.escape(el)}\b", al) is not None
-        ):
-            return True, actual
+        # Narrow documented containment case: title standing in for a missing
+        # category field. Whole-word containment of the expected category token
+        # or its singular form ('headphones'/'headphone'). Boundaries exclude
+        # hyphens so compounds ('headphone-stands', 'not-headphones') fail.
+        if title_fallback and isinstance(al, str) and isinstance(el, str) and el:
+            tokens = {el}
+            if el.endswith("s") and len(el) > 3:
+                tokens.add(el[:-1])
+            if any(
+                re.search(rf"(?<![\w-]){re.escape(t)}(?![\w-])", al) is not None
+                for t in tokens
+            ):
+                return True, actual
         return False, actual
     if op == "contains":
         al, el = _lower(actual), _lower(expected)
@@ -209,14 +218,23 @@ def _resolve_path(offer: dict[str, Any], key: str) -> Any:
     return cur
 
 
-def _actual_for_key(offer: dict[str, Any], key: str) -> Any:
+def _actual_for_key(offer: dict[str, Any], key: str) -> tuple[Any, bool]:
+    """Resolve a constraint key onto the offer.
+
+    Returns (actual, title_fallback). ``title_fallback`` is True only when the
+    category key was resolved from the TITLE because the offer had no category
+    field — the one case where containment matching is allowed (see
+    _check_scalar).
+    """
     attrs = offer.get("attributes") or {}
     variant = offer.get("variant") or {}
     terms = offer.get("terms") or {}
     category = offer.get("category")
     if not category:
-        category = offer.get("title")
-    elif str(category).strip().lower() == "mice":
+        return offer.get("title"), True
+    if str(category).strip().lower() == "mice":
+        # catalog stores plural 'mice'; the buyer-facing value is 'mouse'
+        category = "mouse"
         # catalog stores plural 'mice'; the buyer-facing value is 'mouse'
         category = "mouse"
     mapping: dict[str, Any] = {
@@ -235,8 +253,8 @@ def _actual_for_key(offer: dict[str, Any], key: str) -> Any:
         "region": terms.get("region") or offer.get("region"),
     }
     if key in mapping:
-        return mapping[key]
-    return _resolve_path(offer, key)
+        return mapping[key], False
+    return _resolve_path(offer, key), False
 
 
 def _delivery_actual(offer: dict[str, Any], now: datetime) -> tuple[date | None, str]:
@@ -284,6 +302,9 @@ def soft_scores_for_offer(
         if key == "brand":
             actual = _lower(offer.get("brand"))
             wanted = _lower(value)
+            # Advisory preference: contains-tolerance is acceptable here (a
+            # soft brand nudge can never gate feasibility). Hard gates never
+            # take this path.
             matched = bool(actual and wanted and (actual == wanted or wanted in actual))
             scores.append(
                 {
@@ -298,16 +319,26 @@ def soft_scores_for_offer(
                 }
             )
 
-    amounts = [o.get("unit_amount_paise", 0) or 0 for o in all_offers]
+    # Non-integer money anywhere in the candidate set must not crash scoring:
+    # junk prices are dropped from the min/max window and score 0.0.
+    def _int_amount(o: dict[str, Any]) -> int | None:
+        return _as_int_money(o.get("unit_amount_paise"))
+
+    amounts = [a for a in (_int_amount(o) for o in all_offers) if a is not None]
     lo, hi = (min(amounts), max(amounts)) if amounts else (0, 0)
-    amount = offer.get("unit_amount_paise", 0) or 0
-    price_score = round((hi - amount) / (hi - lo), 4) if hi > lo else 0.5
+    amount = _int_amount(offer)
+    price_score = (
+        round((hi - amount) / (hi - lo), 4)
+        if amount is not None and hi > lo
+        else (1.0 if amount is not None and hi == lo and hi != 0 else 0.5)
+    )
+    display_amount = amount if amount is not None else 0
     scores.append(
         {
             "key": "price",
             "weight": 1.0,
             "score": price_score,
-            "note": f"₹{amount // 100:,} within candidate set",
+            "note": f"₹{display_amount // 100:,} within candidate set",
         }
     )
 
@@ -374,28 +405,42 @@ class OfferEvaluatorAgent:
                 if key == "delivery_deadline":
                     ok, actual = _check_delivery(offer, str(expected), now)
                 else:
-                    actual = _actual_for_key(offer, key)
-                    ok, actual = _check_scalar(actual, op, expected)
+                    actual, title_fallback = _actual_for_key(offer, key)
+                    ok, actual = _check_scalar(
+                        actual, op, expected, key=key, title_fallback=title_fallback
+                    )
                 if not ok:
                     failures.append(
                         {"key": key, "op": op, "expected": expected, "actual": actual}
                     )
             # Absolute spend cap enforced independently of compiled constraints.
+            # Fail-closed on non-integer money: the offer can never pass the cap
+            # check, and the actual junk value is recorded in the failure.
             if max_total is not None:
-                amount = offer.get("unit_amount_paise")
-                try:
-                    over = int(amount) > int(max_total)
-                except (TypeError, ValueError):
-                    over = True
-                if over:
+                amount = _as_int_money(offer.get("unit_amount_paise"))
+                if amount is None or amount > int(max_total):
                     failures.append(
                         {
                             "key": "max_total_amount_paise",
                             "op": "lte",
                             "expected": max_total,
-                            "actual": amount,
+                            "actual": offer.get("unit_amount_paise"),
                         }
                     )
+            # Non-integer unit price fails closed even with no explicit cap: an
+            # offer whose price cannot be validated must not be purchasable.
+            elif (
+                "unit_amount_paise" in offer
+                and _as_int_money(offer.get("unit_amount_paise")) is None
+            ):
+                failures.append(
+                    {
+                        "key": "unit_amount_paise",
+                        "op": "int",
+                        "expected": "integer paise",
+                        "actual": offer.get("unit_amount_paise"),
+                    }
+                )
             # Out-of-stock offers cannot be selected, whatever else matches.
             inventory = offer.get("inventory")
             if isinstance(inventory, (int, float)) and inventory <= 0:
@@ -425,11 +470,16 @@ class OfferEvaluatorAgent:
             )
 
         # Rank: feasible first, then soft total desc, then cheaper price.
+        # Junk (non-int) money sorts as +inf so it can never win on price.
+        def _sort_amount(r: dict[str, Any]) -> float:
+            a = _as_int_money(r["offer"].get("unit_amount_paise"))
+            return float("inf") if a is None else float(a)
+
         results.sort(
             key=lambda r: (
                 not r["evaluation"]["feasible"],
                 -r["evaluation"]["soft_total"],
-                r["offer"].get("unit_amount_paise", 0) or 0,
+                _sort_amount(r),
             )
         )
         for i, r in enumerate(results, start=1):
@@ -462,7 +512,21 @@ class OfferEvaluatorAgent:
     async def enrich_explanations(
         self, intent_dict: dict[str, Any], results: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Optional LLM phrasing pass — NEVER changes feasibility or order."""
+        """Optional LLM phrasing pass — NEVER changes feasibility or order.
+
+        The deterministic explanation is the grounded authority; the LLM pass
+        only rephrases. Every model-proposed replacement must clear a hygiene
+        gate before it is shown to the buyer:
+
+        - length <= 500 chars;
+        - no markdown fences/headers/bullets, no URLs, no tool-call-looking
+          JSON (``{"`` shapes / ``tool_call``), no control characters;
+        - no digit sequence absent from the grounded facts — the simplest
+          robust rule against the model inventing numbers (prices, refunds,
+          percentages) that the deterministic evaluation never stated.
+
+        On any doubt the deterministic text is kept.
+        """
         if self.provider is None or not results:
             return results
         started = time.monotonic()
@@ -504,8 +568,9 @@ class OfferEvaluatorAgent:
             changed = 0
             for r in results[: len(top)]:
                 oid = r["offer"].get("id")
-                if oid in by_id and by_id[oid]:
-                    r["evaluation"]["explanation"] = by_id[oid]
+                proposed = by_id.get(oid)
+                if proposed and _explanation_is_safe(proposed, r):
+                    r["evaluation"]["explanation"] = proposed
                     changed += 1
             _log_agent_run(
                 agent_name=self.name + ".enrich",
@@ -529,6 +594,46 @@ class OfferEvaluatorAgent:
         return results
 
 
+# ---------------------------------------------------------------- enrichment
+# hygiene gate for LLM-proposed explanation text (see enrich_explanations)
+
+_EXPLANATION_MAX_CHARS = 500
+
+# digit sequences (with optional ,/. thousand separators) — any run in an LLM
+# proposal that is absent from the grounded deterministic text is fabrication.
+_DIGITS_RE = re.compile(r"\d[\d,./]*")
+
+_MARKUP_RE = re.compile(r"```|^#{1,6}\s|^\s*[-*]\s|\[.*?\]\(.*?\)|<https?://")
+_URL_RE = re.compile(r"https?://|www\.|\b[\w.-]+\.(?:com|net|org|io|in)\b", re.IGNORECASE)
+_TOOLCALL_RE = re.compile(r'\{\s*"|"tool_call"|\bfunction_call\b|\btool_use\b')
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f‪-‮⁦-⁩﻿]")
+
+
+def _explanation_is_safe(proposed: str, grounded_result: dict[str, Any]) -> bool:
+    """Hygiene gate: may the LLM's rephrase replace the grounded text?
+
+    ``grounded_result`` is one evaluate() result dict; its deterministic
+    explanation defines the only digits a rephrase may mention. Any failure
+    keeps the deterministic text — fail-safe by construction.
+    """
+    if not isinstance(proposed, str) or not proposed.strip():
+        return False
+    if len(proposed) > _EXPLANATION_MAX_CHARS:
+        return False
+    if _MARKUP_RE.search(proposed) or _URL_RE.search(proposed):
+        return False
+    if _TOOLCALL_RE.search(proposed):
+        return False
+    if _CONTROL_RE.search(proposed):
+        return False
+    # Digit grounding: every number in the proposal must appear verbatim in
+    # the deterministic explanation for this result. (The deterministic text
+    # embeds price, delivery window, warranty months, and failure values.)
+    grounded = grounded_result["evaluation"]["explanation"]
+    grounded_digits = set(_DIGITS_RE.findall(grounded))
+    return all(d in grounded_digits for d in _DIGITS_RE.findall(proposed))
+
+
 def explain(
     intent_dict: dict[str, Any],
     offer: dict[str, Any],
@@ -537,7 +642,9 @@ def explain(
     scores: list[dict[str, Any]],
 ) -> str:
     title = offer.get("title", offer.get("id", "offer"))
-    amount = offer.get("unit_amount_paise", 0) or 0
+    raw_amount = offer.get("unit_amount_paise", 0)
+    # Non-int money never reaches arithmetic; it is rendered verbatim.
+    amount = _as_int_money(raw_amount) or 0
     if feasible:
         notes = "; ".join(s["note"] for s in scores if s.get("note"))[:200]
         return f"'{title}' at ₹{amount // 100:,} satisfies every hard constraint. {notes}."

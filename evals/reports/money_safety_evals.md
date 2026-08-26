@@ -1,6 +1,6 @@
 # Eval report: money_safety_evals
 
-**Status:** `PASS`  ·  **Generated:** 2026-08-25T23:44:16.889080+00:00
+**Status:** `PASS`  ·  **Generated:** 2026-08-26T00:16:08.838518+00:00
 
 ## Metrics
 

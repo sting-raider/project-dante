@@ -9,7 +9,49 @@
 
 import type { DanteContract, Promise_ } from "@/lib/useContractFlow";
 import { rupees, shortHash } from "@/lib/useContractFlow";
-import { Badge, Button, ConstraintMark, MoneyText, Panel, Rule, SandboxBadge } from "./atoms";
+import { Badge, Button, MoneyText, Panel, Rule, SandboxBadge } from "./atoms";
+
+/**
+ * Verification-honest mark for one material promise (#9). A green ✓ is
+ * reserved for verification_status === "verified" — merchant-asserted and
+ * unverified promises get asserted "~" / muted "?" glyphs with tooltips so
+ * the §52 gate never implies third-party verification that didn't happen.
+ */
+function VerificationMark({
+  status,
+  detail,
+}: {
+  status: Promise_["verification_status"];
+  detail?: string;
+}) {
+  if (status === "verified") {
+    return (
+      <span title={detail ?? "Verified against structured source evidence"} className="text-success">
+        ✓
+      </span>
+    );
+  }
+  if (status === "merchant_asserted") {
+    return (
+      <span
+        title="Merchant asserted — not independently verified. Dante froze the claim as made."
+        className="font-semibold text-warning"
+        aria-label="merchant asserted, unverified"
+      >
+        ~
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Unverified — no structured evidence backs this promise."
+      className="text-ink-soft"
+      aria-label="unverified"
+    >
+      ?
+    </span>
+  );
+}
 
 export function formatPromiseValue(v: unknown): string {
   if (v == null) return "—";
@@ -69,20 +111,41 @@ export function AuthorizationCard({
         </div>
       )}
 
-      {/* constraint checkmarks = material promises */}
+      {/* constraint marks = material promises, colored by verification
+          honesty: green ✓ only where the claim was actually verified;
+          merchant_asserted "~" and unverified "?" never imply a pass (#9) */}
       <ul className="mt-5 space-y-1.5">
         {material.length === 0 && (
           <li className="font-body text-[13px] italic text-ink-soft">
             No material promises recorded.
           </li>
         )}
-        {material.map((p) => (
-          <li key={p.id}>
-            <ConstraintMark pass detail={p.material_reason ?? undefined}>
-              {p.key} = {formatPromiseValue(p.value)}
-            </ConstraintMark>
-          </li>
-        ))}
+        {material.map((p) => {
+          const verified = p.verification_status === "verified";
+          return (
+            <li
+              key={p.id}
+              className={`inline-flex items-center gap-1.5 font-mono text-[11px] ${
+                verified
+                  ? "text-success"
+                  : p.verification_status === "merchant_asserted"
+                    ? "text-warning"
+                    : "text-ink-soft"
+              }`}
+              title={p.material_reason ?? undefined}
+            >
+              <VerificationMark status={p.verification_status} />
+              <span>
+                {p.key} = {formatPromiseValue(p.value)}
+                {!verified && (
+                  <span className="ml-1.5 font-mono text-[9px] uppercase tracking-[0.12em]">
+                    {p.verification_status === "merchant_asserted" ? "asserted" : "unverified"}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
       </ul>
 
       {/* envelope facts */}

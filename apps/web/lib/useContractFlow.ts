@@ -276,10 +276,18 @@ export function useContractFlow() {
   const [entitlements, setEntitlements] = useState<ContractDetail["entitlements"]>([]);
   const [orderInfo, setOrderInfo] = useState<PaymentOrderResponse | null>(null);
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
+  // Transient poll degradation — last-known data stays on screen; only an
+  // explicit 404 replaces the whole page with the fatal screen.
+  const [pollRetrying, setPollRetrying] = useState(false);
+  const [pollError, setPollError] = useState<string | null>(null);
+  // Result of the last manual "Re-check now" press (surfaced inline).
+  const [recheckNote, setRecheckNote] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [pollingActive, setPollingActive] = useState(false);
   const mountedRef = useRef(true);
+  /** Guards authorize→order against double-firing while a click is in flight. */
+  const authorizeInFlightRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -320,22 +328,32 @@ export function useContractFlow() {
         setContract(detail.contract);
         setPromises(detail.promises ?? []);
         setEntitlements(detail.entitlements ?? []);
+        setPollRetrying(false);
+        setPollError(null);
         return detail.contract;
       } catch (e) {
-        if (mountedRef.current) {
+        if (!mountedRef.current) return null;
+        const msg =
+          e instanceof ApiError
+            ? `${e.status ? `HTTP ${e.status}: ` : ""}${e.message}`
+            : e instanceof Error
+              ? e.message
+              : String(e);
+        // 404 is fatal — the contract genuinely doesn't exist. Anything else
+        // (timeout, network blip, 5xx) keeps last-known data on screen and
+        // degrades to a small "retrying" notice instead of nuking the page.
+        if (e instanceof ApiError && e.status === 404) {
           setPhase("error_poll");
-          setError(
-            e instanceof ApiError
-              ? `${e.status ? `HTTP ${e.status}: ` : ""}${e.message}`
-              : e instanceof Error
-                ? e.message
-                : String(e),
-          );
+          setError(msg);
+          stopPolling();
+          return null;
         }
+        setPollRetrying(true);
+        setPollError(msg);
         return null;
       }
     },
-    [],
+    [stopPolling],
   );
 
   /**
@@ -368,7 +386,18 @@ export function useContractFlow() {
     async (id: string): Promise<boolean> => {
       setError(null);
       const c = await refreshContract(id);
-      if (!c) return false; // refreshContract already set error phase
+      if (!c) return false; // only a fatal (404) load lands here now
+      // Restore the payment-order context so RazorpayPanel keeps its mode
+      // badge + simulate/open affordance across a cold refresh (#3). Prefer
+      // the cached full response; fall back to re-deriving from contract
+      // fields (sandbox_mode + razorpay_order_id).
+      if (!orderInfo) {
+        const cached = readOrderSnapshot(id);
+        const restored =
+          cached ??
+          deriveOrderFromContract(c);
+        if (restored) setOrderInfo(restored);
+      }
       setPhase("awaiting_authorization");
       if (
         c.status === "PAYMENT_PENDING" ||
@@ -383,7 +412,7 @@ export function useContractFlow() {
       }
       return true;
     },
-    [refreshContract, startPollingUntilResolved],
+    [refreshContract, startPollingUntilResolved, orderInfo],
   );
 
   useEffect(() => () => stopPolling(), [stopPolling]);
@@ -530,6 +559,9 @@ export function useContractFlow() {
    * internally (documented POST /api/demo/razorpay/simulate-event). We do not
    * fabricate payment state client-side; we trigger the event and let the
    * normal webhook → server-truth pipeline flip the contract to PAID.
+   *
+   * Idempotent at the call site: a capture already in flight (or already
+   * delivered — status past PAYMENT_ORDER_CREATED) refuses a second POST.
    */
   const simulateSandboxCapture = useCallback(
     async (id: string, orderId: string): Promise<boolean> => {
@@ -551,25 +583,43 @@ export function useContractFlow() {
     [startPollingUntilResolved, fail],
   );
 
+  /** True once a sandbox simulate has been fired for this contract. */
+  const [simulatedOrderIds, setSimulatedOrderIds] = useState<Set<string>>(new Set());
+
   /** Sandbox button target: simulate capture for the current contract/order. */
   const simulateSandboxPayment = useCallback(async (): Promise<boolean> => {
     const id = contract?.id ?? null;
     const orderId =
       orderInfo?.checkout_config.order_id ?? contract?.razorpay_order_id ?? null;
     if (!id || !orderId) return false;
+    if (simulatedOrderIds.has(String(orderId))) return true; // already fired
+    setSimulatedOrderIds((prev) => new Set(prev).add(String(orderId)));
     return simulateSandboxCapture(id, String(orderId));
-  }, [contract, orderInfo, simulateSandboxCapture]);
+  }, [contract, orderInfo, simulatedOrderIds, simulateSandboxCapture]);
 
-  /** Manual re-check button (window-closed fallback). */
+  /**
+   * Manual re-check button (window-closed fallback). Always surfaces its
+   * outcome — a status change announces the new state, otherwise the buyer
+   * is told the webhook hasn't landed yet.
+   */
   const recheckStatus = useCallback(
     async (id: string) => {
+      setRecheckNote("re-checking against server truth…");
       const c = await refreshContract(id);
-      if (c && c.status === "PAID") {
+      if (!mountedRef.current) return;
+      if (!c) {
+        setRecheckNote(`re-check failed — ${pollError ?? "server unreachable"}; will keep polling`);
+        return;
+      }
+      if (c.status === "PAID") {
         stopPolling();
         setPhase("paid");
+        setRecheckNote(null); // PAID banner takes over from here
+        return;
       }
+      setRecheckNote(`still ${c.status.replaceAll("_", " ")} — awaiting webhook confirmation; polling continues`);
     },
-    [refreshContract, stopPolling],
+    [refreshContract, stopPolling, pollError],
   );
 
   /**
@@ -577,22 +627,35 @@ export function useContractFlow() {
    * order to the caller's checkout opener (Razorpay JS for live-test-mode;
    * nothing to open for sandbox). The opener is injected because the hook is
    * DOM-free; it receives mode + checkout_config.
+   *
+   * Idempotent: a re-entrant call while one is already in flight (or once the
+   * order exists) is a no-op — no double POSTs, no double Razorpay orders.
+   * The server also refuses a second authorize (409 invalid_transition), but
+   * the client must never fire the duplicate request in the first place.
    */
   const authorizeAndOpenCheckout = useCallback(
     async (
       id: string,
       openCheckout: (order: PaymentOrderResponse) => void,
     ): Promise<void> => {
+      if (authorizeInFlightRef.current) return; // click already in flight
       setError(null);
+      setRecheckNote(null);
       setPhase("opening_checkout");
-      const ok = await authorize(id);
-      if (!ok) return; // authorize() set error_authorize
-      const order = await createPaymentOrder(id);
-      if (!order) return; // createPaymentOrder() set error_order
-      if (order.mode === "sandbox") {
-        return; // sandbox_ready already set by createPaymentOrder
+      authorizeInFlightRef.current = true;
+      try {
+        const ok = await authorize(id);
+        if (!ok) return; // authorize() set error_authorize
+        const order = await createPaymentOrder(id);
+        if (!order) return; // createPaymentOrder() set error_order
+        persistOrderSnapshot(id, order); // survives refresh (#3)
+        if (order.mode === "sandbox") {
+          return; // sandbox_ready already set by createPaymentOrder
+        }
+        openCheckout(order); // live path: page opens Razorpay Standard Checkout
+      } finally {
+        authorizeInFlightRef.current = false;
       }
-      openCheckout(order); // live path: page opens Razorpay Standard Checkout
     },
     [authorize, createPaymentOrder],
   );
@@ -624,6 +687,9 @@ export function useContractFlow() {
     entitlements,
     orderInfo,
     verifyNote,
+    pollRetrying,
+    pollError,
+    recheckNote,
     // derived
     isBusy: ["compiling", "searching", "freezing", "opening_checkout"].includes(phase),
     // /buy
@@ -672,6 +738,61 @@ export function rupees(paise?: number | null): string {
 // gracefully when this is absent (cold refresh, new tab).
 
 export const BRIEF_SESSION_KEY = "dante.brief.raw";
+
+/**
+ * Payment-order snapshot cache (per contract). RazorpayPanel's sandbox
+ * detection used to derive from in-memory orderInfo only — a refresh lost it.
+ * We persist mode + checkout_config here at order time AND re-derive from the
+ * contract's own fields (sandbox_mode + razorpay_order_id) on load, so the
+ * simulate / open-checkout affordance survives any reload path (#3).
+ */
+function orderSnapshotKey(contractId: string): string {
+  return `dante.contract.${contractId}.order`;
+}
+
+function persistOrderSnapshot(
+  contractId: string,
+  order: PaymentOrderResponse,
+): void {
+  try {
+    window.sessionStorage.setItem(orderSnapshotKey(contractId), JSON.stringify(order));
+  } catch {
+    /* storage unavailable — contract fields still re-derive the essentials */
+  }
+}
+
+/** Read back the cached payment-order snapshot; null when absent/corrupt. */
+export function readOrderSnapshot(
+  contractId: string,
+): PaymentOrderResponse | null {
+  try {
+    const raw = window.sessionStorage.getItem(orderSnapshotKey(contractId));
+    return raw ? (JSON.parse(raw) as PaymentOrderResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Re-derive a minimal PaymentOrderResponse from contract fields when no
+ * snapshot exists. `mode` is authoritative from contract.sandbox_mode; the
+ * checkout config carries what the simulate/open paths need. key_id is
+ * unknown from this shape (only needed for live checkout open, which always
+ * has the fresh order response) so it is left blank deliberately.
+ */
+function deriveOrderFromContract(c: DanteContract): PaymentOrderResponse | null {
+  if (!c.razorpay_order_id || c.status !== "PAYMENT_ORDER_CREATED") return null;
+  return {
+    mode: c.sandbox_mode ? "sandbox" : "live-test-mode",
+    razorpay_order: {},
+    checkout_config: {
+      key_id: "",
+      order_id: String(c.razorpay_order_id),
+      amount_paise: c.amount_paise ?? 0,
+      currency: "INR",
+    },
+  };
+}
 
 export type OfferMemo = {
   offer: MerchantOffer;

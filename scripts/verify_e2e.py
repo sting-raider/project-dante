@@ -25,7 +25,7 @@ import httpx
 
 HERO_TEXT = (
     "Buy me over-ear ANC headphones under Rs 12,000. I need an Indian manufacturer "
-    "warranty, they must arrive by Thursday, and do not spend over Rs 12,000."
+    "warranty, they must arrive within 3 days, and do not spend over Rs 12,000."
 )
 
 STEPS: list[tuple[str, str]] = []

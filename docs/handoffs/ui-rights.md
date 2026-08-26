@@ -174,3 +174,109 @@ field to the graph's `type`.
 - Coordination: initially drafted standalone lib/api/types/format files when
   apps/web was empty; Agent G landed canonical versions mid-flight and my
   drafts were superseded — pages import G's modules exclusively now.
+
+---
+
+## Remediation wave (2026-08-26)
+
+Post-quality-review fixes across apps/web. `npx tsc --noEmit` = 0 errors;
+`npm run build` green. No files outside apps/web touched; no commits made.
+
+### Critical
+
+1. **Sticky §52 authorize bar never cleared (contract/[id]/page.tsx +
+   lib/useContractFlow.ts)** — the bar now hides as soon as the flow leaves
+   AWAITING_BUYER_AUTH semantics: gated on a POST_AUTHORIZE_PHASES list
+   (opening_checkout / checkout_ready / sandbox_ready / payment_pending /
+   paid), so the card clears the moment authorize resolves, not two polls
+   later. Authorize is idempotent three ways: page-level early-return,
+   button `disabled={authorizing || opening_checkout}`, and an
+   `authorizeInFlightRef` guard inside `authorizeAndOpenCheckout` — no
+   double POSTs, no duplicate Razorpay orders. A sandbox hand-off strip
+   ("Order created… use Simulate test payment") replaces the cleared bar.
+
+### Major
+
+2. **One failed poll nuked the contract page (lib/useContractFlow.ts)** —
+   `refreshContract` no longer flips to error_poll on transient failures.
+   Last-known data stays mounted; `pollRetrying`/`pollError` drive a small
+   inline "connection hiccup — retrying" notice (role=status). Only an
+   explicit 404 sets the fatal screen (and stops polling).
+3. **Sandbox detection lost on refresh (useContractFlow.ts +
+   RazorpayPanel.tsx + page.tsx)** — the full PaymentOrderResponse is now
+   persisted to sessionStorage (`dante.contract.{id}.order`) at order time
+   and restored in `loadContract`; when absent it is re-derived from the
+   contract's own `sandbox_mode` + `razorpay_order_id`.
+   RazorpayPanel takes authoritative `sandboxMode` from the contract record.
+   Added a "Re-open Razorpay checkout" affordance for live-test-mode
+   dismissals at PAYMENT_ORDER_CREATED (was impossible). Sandbox simulate
+   button renders whenever the rail is sandbox and status is
+   PAYMENT_ORDER_CREATED/PAYMENT_PENDING regardless of load path; a
+   client-side per-order guard prevents duplicate simulate POSTs.
+4. **Audit Money Actions + Agent Runs never populated (audit/[id]/page.tsx)**
+   — derivation rewritten against the payloads the backend actually emits:
+   POLICY_DECIDED/_ALLOWED/_DENIED {decision, reason_codes, explanation,
+   money_action_id, amount_paise, action_type, policy_snapshot_hash} and
+   REFUND_REQUESTED/{PROCESSED} {idempotency_key, reason_code, refund_id,
+   payment_id, sandbox} from domain/money/policy.py, merged per
+   idempotency_key into one row per money action. Agent-run rows are derived
+   from INTENT_COMPILED {engine, hard_constraint_keys},
+   CATALOG_SEARCHED {source, candidates}, OFFER_EVALUATED {offers_evaluated,
+   feasible_count}; STORE-level _log_agent_run records are not HTTP-exposed,
+   so timeline events stand in (documented in-file).
+5. **Breach OBSERVED column showed field names; evidence panel always empty
+   (breach/page.tsx)** — observed values now come from real
+   OBSERVED_FACT_RECORDED payloads {key, value, synthetic}, mapped onto
+   promise keys via the verifier's own _FACT_TO_PROMISE table; breach-
+   explanation regex remains only as fallback. Evidence artifacts are built
+   from EVIDENCE_SNAPSHOT_CREATED payloads {evidence_id, source_type,
+   sha256, trusted_level, synthetic} (pipeline.build_evidence shape).
+   Synthetic facts are flagged inline.
+6. **Demo hero reported success on failed refund (demo/page.tsx)** — policy
+   DENY (or denied money_action) throws with reason codes and halts the
+   chain; execute fails the step unless result_ref exists or status is
+   executed. Success flash is unreachable unless the refund truly executed.
+7. **MATERIAL BREACH headline fired for minor breaches (breach/page.tsx)** —
+   headline/copy gated on max severity rank >= 2 (material|critical); minor/
+   informational breaches get a calmer warning-toned "Minor promises
+   drifted" treatment.
+
+### Minor
+
+8. **Remedy score bars mislabeled proxies (remedy/page.tsx)** — bars now
+   read Value (weight .40), Confidence (.35 proxy), Speed (.15), Friction
+   (−.10), naming the planner fields actually plotted. Dead `chosenId`
+   state removed; the actionable candidate is the top-ranked non-rejected
+   proposal (server ranking authority unchanged).
+9. **§52 gate stamped ✓ on unverified promises (AuthorizationCard.tsx)** —
+   green ✓ reserved for verification_status==="verified"; merchant_asserted
+   gets a "~" glyph + tooltip + ASSERTED tag (warning tone); unverified gets
+   muted "?" + UNVERIFIED tag.
+10. **Ticker timestamps recomputed every render (demo/page.tsx)** — each
+    step stores startedAt/finishedAt stamped once at transition.
+11. **Timeline chips missing System; counts filter-scoped (timeline/
+    page.tsx)** — System chip added (matches backend _TIMELINE_CATEGORIES);
+    stream is fetched unfiltered, counts computed over the full set,
+    filtering applied client-side; empty chips show (0).
+12. **"Re-check now" silent no-op (useContractFlow.ts + page.tsx)** —
+    recheckStatus surfaces its outcome inline (role=status): still-<status>
+    awaiting-webhook message, failure message, or silent hand-off to the
+    PAID banner.
+13. **RightsGraph role="img" stripped interactive nodes (RightsGraph.tsx)**
+    — svg is now role="group" with a descriptive label; clickable nodes are
+    focusable <g role="button"> with Enter/Space handling and a visible
+    signal-colored focus ring (+ dashed selection rect on keyboard focus).
+14. **Missing h1 / killed textarea outline (/buy, /contract/[id])** — both
+    pages gained visually-appropriate h1s (folio-styled masthead heading on
+    /buy; dossier folio on /contract/[id]); textarea restores a 2px
+    signal-color focus-visible outline (offset 4) instead of outline-none.
+15. **A11y sweep** — ActivityTicker pending glyphs/steps darkened rule →
+    ink-soft (~4.6:1 on paper-bright). Rights drawer: role=dialog, focus
+    moves to Close on open, Escape closes, focus returns to the triggering
+    node; visible focus-within ring. Rights polling stops at terminal
+    statuses and while document.hidden (resumes on visibilitychange).
+    Graph aria description now includes an edge-type summary. StatStrip:
+    dt precedes dd in DOM (visual order via flex order). StatNumeral:
+    animated numeral aria-hidden with sr-only text equivalent (no invalid
+    aria-label on a span); layout reserved with "—" until first data, never
+    a painted 0.
