@@ -1,0 +1,172 @@
+# DEPLOYMENT — Project Dante on Railway + Vercel
+
+> Target topology (master plan §23/§24): **API → Railway** (FastAPI, single
+> replica), **web → Vercel** (Next.js 15). Razorpay runs in **Test Mode**
+> only — live keys fail closed at process start by design.
+
+---
+
+## 0. Topology at a glance
+
+```
+Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
+                                              │
+                     Razorpay Test Mode ◄─────┤ checkout + server calls
+                              │               │
+                              └──webhooks──►  https://<api>.up.railway.app/api/webhooks/razorpay
+```
+
+- Money = integer paise end to end; no floats anywhere.
+- Single replica is **mandatory** (§11.4): webhook idempotency dedupe and
+  ordering live in the process-wide store. Scale vertically only.
+- The store is a JSON snapshot (`DANTE_STORE_PATH`, default
+  `.dante-store.json`). On Railway, mount a volume at the service root so
+  state survives restarts.
+
+---
+
+## 1. Deploy the API to Railway
+
+### Click-path
+
+1. Sign in at [railway.com](https://railway.com) → **New Project** →
+   **Deploy from GitHub repo** → pick this repository.
+2. In the service card → ⋯ menu → **Settings**:
+   - **Root Directory**: leave empty (repo root); the config below handles paths.
+   - **Config file / Start command**: if the dashboard asks, point it at
+     `infra/deploy/railway.toml`. Otherwise set the **Custom Start Command**
+     to:
+     ```
+     cd apps/api && uv run uvicorn project_dante.api.app:app --host 0.0.0.0 --port $PORT
+     ```
+   - **Networking → Generate Domain**: note the public URL
+     (`https://<service>.up.railway.app`) — this is your `API_BASE_URL`.
+3. **Settings → Healthcheck**: path `/api/ready`, timeout ≥ 60 s. (Railway
+   reads `healthcheckPath` from `railway.toml` automatically when the config
+   file is used.)
+4. **Deploy → Replicas**: exactly **1**. Do not enable autoscaling.
+5. **Variables** tab: add the environment variables from §1.1.
+6. **Deploy** → watch build logs; first deploy takes a few minutes (uv sync).
+7. Optional persistence: **Storage → New Volume**, mount at `/data`, then set
+   `DANTE_STORE_PATH=/data/.dante-store.json` in Variables.
+
+### 1.1 Environment variables (API / Railway)
+
+| Variable | Secret? | Value / notes |
+|---|---|---|
+| `APP_ENV` | no | `production` |
+| `DEMO_MODE` | no | `true` for the buildathon demo posture |
+| `RAZORPAY_KEY_ID` | **SECRET** | `rzp_test_…` from Razorpay Test Mode. Live `rzp_live_…` keys are REJECTED at boot. |
+| `RAZORPAY_KEY_SECRET` | **SECRET** | Test-mode key secret (shown once — copy immediately). |
+| `RAZORPAY_WEBHOOK_SECRET` | **SECRET** | The secret you type into the Razorpay webhook form (§2). Must match exactly. |
+| `DEMO_OPERATOR_TOKEN` | **SECRET** | Required once real test keys exist: `/api/demo/*` state changes demand `X-Demo-Operator-Token`. Empty ⇒ endpoints LOCKED. Generate with `openssl rand -hex 32`. |
+| `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible`. Empty ⇒ deterministic rules engine. |
+| `LLM_MODEL` | no | Model name when a provider is configured. |
+| `LLM_API_KEY` | **SECRET** | Provider credential. Omit for rules engine. |
+| `PUBLIC_APP_URL` | no | Vercel web URL, e.g. `https://dante-web.vercel.app`. Used as the CORS allow-listed origin. |
+| `API_BASE_URL` | no | This service's public URL (Razorpay order/checkout callbacks). |
+| `DANTE_STORE_PATH` | no | Optional. Set to a volume-mounted path for restart-safe persistence. |
+
+### 1.2 CORS
+
+The API allows origins from `settings.public_app_url` plus
+`http://localhost:3000`. Set `PUBLIC_APP_URL` to the exact Vercel production
+URL (scheme + host, no trailing slash). For Vercel preview deployments add
+the preview origin too or test preview features against localhost.
+
+---
+
+## 2. Configure Razorpay Test Mode webhooks
+
+Prereq: a Razorpay account with Test Mode enabled (toggle top-right of the
+dashboard).
+
+### Click-path
+
+1. Dashboard → **Account & Settings → Webhooks** (Test Mode must be active) →
+   **Add New Webhook**.
+2. **Webhook URL**: `https://<your-api>.up.railway.app/api/webhooks/razorpay`
+3. **Secret**: generate one (`openssl rand -hex 32`), paste it here AND set it
+   as `RAZORPAY_WEBHOOK_SECRET` on Railway (§1.1). The API verifies
+   `X-Razorpay-Signature` (HMAC-SHA256 over raw bytes) BEFORE parsing JSON;
+   a mismatch is rejected with no side effects.
+4. **Active events** — subscribe to exactly these two:
+   - `payment.captured` — the ONLY signal that moves a contract to PAID.
+   - `refund.processed` — closes the loop on executed refund remedies.
+5. **Create Webhook**. Use the **Send Test Sample** button afterwards and
+   confirm delivery in **Webhook Attempts** (expect HTTP 200).
+
+Note: the intake also tolerates `refund.completed` aliases and dedupes by
+`X-Razorpay-Event-Id`, but only the two events above are required.
+
+---
+
+## 3. Deploy the web app to Vercel
+
+### Click-path
+
+1. Sign in at [vercel.com](https://vercel.com) → **Add New → Project** →
+   import this repository.
+2. **Framework Preset**: Next.js (auto-detected; `infra/deploy/vercel.json`
+   pins `framework: nextjs`, root dir `apps/web`).
+3. **Root Directory**: `apps/web`.
+4. **Environment Variables**:
+
+| Variable | Secret? | Value / notes |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | no | `https://<your-api>.up.railway.app`. Inlined into the client bundle at BUILD time — changing it requires a rebuild/redeploy. |
+| `PUBLIC_APP_URL` | no | Same Vercel URL (informational parity with the API env). |
+
+5. **Deploy**. Note the assigned domain (e.g. `https://dante-web.vercel.app`)
+   — it must equal the API's `PUBLIC_APP_URL` or CORS will block browser
+   calls.
+6. Every push redeploys previews automatically; production tracks the
+   default branch.
+
+Docker alternative: `docker build -f infra/docker/Dockerfile.web
+--build-arg NEXT_PUBLIC_API_URL=https://<api-host> -t dante-web ./apps/web`.
+
+---
+
+## 4. Post-deploy verification checklist
+
+Run these in order after both deploys land.
+
+1. **Health** — `curl https://<api>/api/health` →
+   `200 {"status":"ok", …,"razorpay":"live-test-mode","llm":…}`.
+2. **Ready** — `curl -i https://<api>/api/ready` →
+   `200 {"ready":true,"store_backend":"json-snapshot","razorpay_mode":
+   "live-test-mode","llm_engine":…,"demo_mode":true}`. A `503` here means
+   the store can't persist (read-only volume?) — fix before taking traffic.
+   Neither endpoint ever returns secrets.
+3. **Webhook delivery** — Razorpay dashboard → Webhooks → Send Test Sample →
+   attempt log shows `200`; check Railway logs for the intake line. Then run
+   one real Test Mode payment end-to-end and confirm the contract flips to
+   PAID via the webhook (server truth), not the browser callback.
+4. **Hero flow** — open the web app:
+   1. `/buy`: paste hero brief → Compile → offers ranked with visible failures.
+   2. Select offer → contract page shows frozen promises + hashes.
+   3. Authorize & pay → real Test Mode checkout → PAID arrives via webhook.
+   4. `/demo` panel: ship + deliver `wrong_variant` → material breach spreads.
+   5. Contract remedy view: replacement tried first, inventory unavailable,
+      refund ranks first → policy ALLOW → execute → refund processed.
+   6. `/audit/[id]`: full event stream present.
+5. **Operator gate sanity** — with real test keys set, any `/api/demo/*`
+   state change WITHOUT `X-Demo-Operator-Token` must be refused; WITH the
+   token it succeeds.
+6. **Secret hygiene** — `GET /api/ready` and `/api/health` responses contain
+   no key ids, secrets, or tokens; Railway/Vercel dashboards show secrets
+   masked.
+
+---
+
+## 5. Operations notes
+
+- **Single replica forever** (§11.4): two replicas would double-process
+  concurrent first-time webhook events until Postgres-backed uniqueness lands.
+- **Restart safety**: without a volume, restarts wipe in-memory state (JSON
+  snapshot lost). Mount the volume before demo day.
+- **Rollback**: Railway/Vercel both keep per-deploy snapshots — redeploy the
+  previous build from their timelines.
+- **Local parity**: `.env.example` mirrors every variable above; docker
+  images live under `infra/docker/`.

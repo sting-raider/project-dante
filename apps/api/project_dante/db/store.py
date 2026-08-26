@@ -10,6 +10,7 @@ Every record carries its type under `_type`; `id` is unique across the store.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -139,4 +140,24 @@ class Store:
             return n
 
 
-STORE = Store()
+def _resolve_store() -> Any:
+    """Resolve the process-wide STORE through the backend factory.
+
+    DANTE_STORE_BACKEND=json (default) -> Store() below — byte-for-byte the
+    original behavior. 'postgres'/'pg' -> PostgresStore(DATABASE_URL) with
+    the identical interface, so no call site changes either way.
+    """
+    backend = (os.environ.get("DANTE_STORE_BACKEND") or "json").strip().lower()
+    if backend in ("postgres", "pg"):
+        from project_dante.db.pg_store import PostgresStore
+
+        store = PostgresStore(os.environ.get("DATABASE_URL") or None)
+        # DB may not be reachable at import time; first real use raises a
+        # clear PostgresStoreError instead of breaking imports.
+        with contextlib.suppress(Exception):
+            store.ensure_schema()
+        return store
+    return Store()
+
+
+STORE = _resolve_store()

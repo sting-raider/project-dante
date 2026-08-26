@@ -1,349 +1,155 @@
 "use client";
 
 /**
- * /demo — DEMO SIMULATION CONTROL (plan §28). Manual controls for reset /
- * ship / deliver(scenario) / replacement-unavailable, plus the one-click
- * hero orchestrator that fires the whole arc end-to-end with a visible
- * mono step ticker: compile → search → select → authorize → payment-order
- * → capture (sandbox simulate or live handoff) → ship → deliver
- * wrong_variant → replacement-unavailable → remedies → policy → execute.
+ * /demo — DEMO SIMULATION CONTROL (plan §20). The resumable 15-step hero-arc
+ * orchestrator console: intent → frozen promises → authorization → Razorpay
+ * order → [WAITING: buyer completes real/sandbox checkout on
+ * /contract/{id}] → capture → synthetic ship → wrong_variant deliver →
+ * material breach → rights → replacement-unavailable → refund selected →
+ * policy ALLOW → refund executed / REMEDIATED.
  *
- * Agent I.
+ * Every step is a timestamped mono ticker row with ✓ / WAITING / ✗ status and
+ * a stable failure reason code; errors halt with a retry button scoped to the
+ * failed step. State persists to sessionStorage keyed by the run id, so a
+ * refresh resumes at the current step with completed rows shown as historical
+ * checkmarks. Sandbox vs live-test-mode is surfaced per money row
+ * (SANDBOX / RAZORPAY TEST MODE badges) from GET /api/demo/status + the run's
+ * payment-order rail. Operator-token input for live-test-mode demo gating —
+ * never hardcoded, sent as X-Demo-Operator-Token on state-changing demo calls.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "motion/react";
 import Folio from "@/components/editorial/Folio";
 import SectionLabel from "@/components/editorial/SectionLabel";
 import SyntheticBadge from "@/components/commerce/SyntheticBadge";
-import { Button } from "@/components/ui/Button";
+import { apiPost, ApiError } from "@/lib/api";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import Panel from "@/components/ui/Panel";
-import { apiGet, apiPost } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { formatINR, formatTime } from "@/lib/format";
+import {
+  HERO_INTENT,
+  useDemoOrchestrator,
+  type DemoPaymentMode,
+  type DemoStepRow,
+} from "@/lib/useDemoOrchestrator";
 
-/* ------------------------------------------------------- API shapes (local) */
+/* ------------------------------------------------------------ small parts */
 
-type CompileResponse = {
-  intent: { id: string; raw_text: string };
-  engine?: string;
-};
-type SearchResponse = {
-  intent: { id: string };
-  results: {
-    offer: { id: string; title: string; unit_amount_paise: number };
-    evaluation: { feasible: boolean; explanation?: string };
-  }[];
-};
-type SelectResponse = { contract: { id: string; status: string; sandbox_mode?: boolean } };
-type AuthorizeResponse = { contract: { id: string; status: string } };
-type PaymentOrderResponse = {
-  mode: "live-test-mode" | "sandbox";
-  checkout_config?: { key_id: string; order_id: string; amount_paise: number };
-  razorpay_order?: Record<string, unknown>;
-};
-type SimulateResponse = { delivered?: boolean };
-type DeliverResponse = {
-  breaches?: unknown[];
-  status?: string | null;
-  verification_error?: string | null;
-  synthetic?: boolean;
-};
-type RemediesResponse = {
-  proposals: { id: string; remedy_type: string; rank?: number | null; rejected_reason?: string | null }[];
-};
-type PolicyResponse = {
-  decision?: {
-    decision: string;
-    policy_ids?: string[];
-    reason_codes?: string[];
-    explanation?: string;
-  } | null;
-  money_action?: {
-    status?: string;
-    reason_code?: string;
-  } | null;
-};
-type ExecuteResponse = {
-  money_action?: {
-    result_ref?: string | null;
-    amount_paise?: number;
-    status?: string;
-    reason_code?: string;
-  } | null;
-  refund?: Record<string, unknown> | null;
-  error?: string;
-};
-
-const HERO_INTENT =
-  "Buy the Aster ANC Pro over-ear wireless headphones for ₹11,499 or less — must have " +
-  "active noise cancellation and a manufacturer warranty valid in India. Delivery within " +
-  "4 days. Do NOT substitute alternatives.";
-
-type StepStatus = "pending" | "running" | "ok" | "fail";
-
-interface Step {
-  label: string;
-  run: (ctx: Ctx) => Promise<string>;
+function RailBadge({ mode }: { mode: DemoPaymentMode | null | undefined }) {
+  if (!mode) return null;
+  return mode === "sandbox" ? (
+    <span className="inline-flex items-center rounded-sm border border-rule bg-paper-bright px-1.5 py-[1px] font-mono text-[0.5625rem] uppercase tracking-[0.12em] leading-none text-ink-soft">
+      SANDBOX
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-sm border border-success/40 bg-success/[0.07] px-1.5 py-[1px] font-mono text-[0.5625rem] uppercase tracking-[0.12em] leading-none text-success">
+      <span aria-hidden={true} className="inline-block h-1 w-1 rounded-full bg-success" />
+      RAZORPAY TEST MODE
+    </span>
+  );
 }
 
-/** One ticker row; timestamps are stamped once at each transition (#10). */
-interface StepState {
-  name: string;
-  status: StepStatus;
-  detail?: string;
-  startedAt?: string;
-  finishedAt?: string;
+const STATUS_GLYPH: Record<DemoStepRow["status"], { g: string; cls: string; label: string }> = {
+  ok: { g: "✓", cls: "text-success", label: "done" },
+  waiting: { g: "◔", cls: "text-warning", label: "waiting" },
+  fail: { g: "✗", cls: "text-danger", label: "failed" },
+  running: { g: "▸", cls: "animate-pulse text-signal", label: "running" },
+  pending: { g: "·", cls: "text-ink-soft", label: "pending" },
+};
+
+/** One timestamped mono ticker row (#10: stamped once at each transition). */
+function TickerRow({ s, rail }: { s: DemoStepRow; rail: DemoPaymentMode | null }) {
+  const st = STATUS_GLYPH[s.status];
+  const ts =
+    s.status === "ok" || s.status === "fail"
+      ? s.finishedAt ?? s.startedAt
+      : s.startedAt;
+  const dim = s.status === "pending";
+  return (
+    <li className="flex items-baseline gap-3 py-[3px]">
+      <time className="w-[4.5rem] shrink-0 tabular text-ink-soft" dateTime={ts}>
+        {ts ? formatTime(ts) : ""}
+      </time>
+      <span
+        className={cn("w-4 shrink-0 text-center font-bold", st.cls)}
+        aria-label={st.label}
+        role="img"
+      >
+        {st.g}
+      </span>
+      <span className={cn("font-medium tracking-[0.04em]", dim && "text-ink-soft")}>
+        {s.name}
+        {s.money && (
+          <span className="ml-2 inline-block align-middle">
+            <RailBadge mode={rail} />
+          </span>
+        )}
+      </span>
+      {s.failureCode && (
+        <span className="shrink-0 font-mono text-danger/80">[{s.failureCode}]</span>
+      )}
+      {s.detail && (
+        <span
+          className={cn(
+            "min-w-0 break-all",
+            s.status === "fail" ? "text-danger" : "text-ink-soft",
+          )}
+        >
+          — {s.detail}
+        </span>
+      )}
+    </li>
+  );
 }
 
-/** Shared mutable context threaded through orchestrator steps. */
-interface Ctx {
-  intentId?: string;
-  offerId?: string;
-  contractId?: string;
-  orderId?: string;
-  paymentId?: string;
-  mode?: "live-test-mode" | "sandbox";
-  proposalId?: string;
-}
+/* --------------------------------------------------------------- the page */
 
 export default function DemoPage() {
-  const [contractInput, setContractInput] = useState("");
-  const [deliverScenario, setDeliverScenario] = useState<"correct" | "wrong_variant" | "late">("wrong_variant");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [flash, setFlash] = useState<{ tone: "ok" | "fail"; text: string } | null>(null);
-
-  // Orchestrator state
-  const [running, setRunning] = useState(false);
-  const [steps, setSteps] = useState<StepState[]>([]);
-  const ctxRef = useRef<Ctx>({});
-  const logRef = useRef<HTMLOListElement>(null);
+  const orch = useDemoOrchestrator();
   const reduceMotion = useReducedMotion();
+  const logRef = useRef<HTMLOListElement>(null);
 
-  function setStep(i: number, patch: Partial<Omit<StepState, "name">>) {
-    setSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  }
+  // Auto-scroll the ticker as new rows land.
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [orch.steps.length]);
 
-  /* ------------------------------------------------- manual controls */
+  const busy = orch.phase === "running" || orch.phase === "waiting_payment";
+  const anyBusy = busy;
+
+  /* --------------------------------------------------- manual controls */
+
+  const [contractInput, setContractInput] = useState("");
+  const [deliverScenario, setDeliverScenario] = useState<"correct" | "wrong_variant" | "late">(
+    "wrong_variant",
+  );
+  const [manualFlash, setManualFlash] = useState<{ tone: "ok" | "fail"; text: string } | null>(
+    null,
+  );
 
   async function manual(path: string, body?: unknown, tag?: string) {
-    setBusy(tag ?? path);
-    setFlash(null);
+    setManualFlash(null);
     try {
-      const res = await apiPost<Record<string, unknown>>(path, body);
-      setFlash({ tone: "ok", text: `${path} → ${JSON.stringify(res).slice(0, 220)}` });
+      const res = await apiPost<Record<string, unknown>>(path, body, {
+        headers: orch.opHeaders(),
+      });
+      setManualFlash({
+        tone: "ok",
+        text: `${tag ?? path} → ${JSON.stringify(res).slice(0, 220)}`,
+      });
     } catch (e) {
-      setFlash({ tone: "fail", text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(null);
+      const msg =
+        e instanceof ApiError
+          ? `${e.status ? `HTTP ${e.status}: ` : ""}${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setManualFlash({ tone: "fail", text: `${tag ?? path} → ${msg}` });
     }
   }
-
-  /* ------------------------------------------------- hero orchestrator */
-
-  const stepsDef: Step[] = [
-    {
-      label: `compile hero intent`,
-      run: async (c) => {
-        const r = await apiPost<CompileResponse>("/api/intents/compile", { raw_text: HERO_INTENT });
-        c.intentId = r.intent.id;
-        return `intent ${r.intent.id.slice(0, 18)}… engine=${r.engine ?? "rules"}`;
-      },
-    },
-    {
-      label: "search merchant catalog",
-      run: async (c) => {
-        if (!c.intentId) throw new Error("no intent");
-        const r = await apiPost<SearchResponse>(`/api/intents/${c.intentId}/search`);
-        const feasible = r.results.filter((x) => x.evaluation.feasible);
-        if (feasible.length === 0) throw new Error("no feasible offer");
-        c.offerId = feasible[0].offer.id;
-        return `${r.results.length} candidates · ${feasible.length} feasible → ${feasible[0].offer.title}`;
-      },
-    },
-    {
-      label: "select first feasible offer",
-      run: async (c) => {
-        if (!c.intentId || !c.offerId) throw new Error("no intent/offer");
-        const r = await apiPost<SelectResponse>(`/api/intents/${c.intentId}/select-offer`, {
-          offer_id: c.offerId,
-        });
-        c.contractId = r.contract.id;
-        return `contract ${r.contract.id.slice(0, 18)}… status=${r.contract.status}`;
-      },
-    },
-    {
-      label: "authorize (buyer authority envelope)",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        const r = await apiPost<AuthorizeResponse>(`/api/contracts/${c.contractId}/authorize`, {});
-        return `status=${r.contract.status}`;
-      },
-    },
-    {
-      label: "create Razorpay payment-order",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        const r = await apiPost<PaymentOrderResponse>(
-          `/api/contracts/${c.contractId}/payment-order`,
-          {}
-        );
-        c.mode = r.mode;
-        c.orderId =
-          (r.checkout_config?.order_id as string) ??
-          ((r.razorpay_order as { id?: string })?.id ?? "");
-        return `mode=${r.mode} order=${c.orderId}`;
-      },
-    },
-    {
-      label: "capture payment",
-      run: async (c) => {
-        if (!c.contractId || !c.orderId) throw new Error("no contract/order");
-        if (c.mode === "sandbox") {
-          const payId = `pay_sbx_${Date.now().toString(36)}`;
-          await apiPost<SimulateResponse>("/api/demo/razorpay/simulate-event", {
-            event_type: "payment.captured",
-            order_id: c.orderId,
-            payment_id: payId,
-          });
-          c.paymentId = payId;
-          return `SANDBOX simulated capture ${payId} via real signed webhook`;
-        }
-        // Live test-mode: a human must complete Razorpay Checkout.
-        return (
-          `LIVE TEST-MODE — open Razorpay Checkout on the contract page and pay order ${c.orderId}; ` +
-          `the webhook will confirm server-side. Continuing fulfillment steps anyway.`
-        );
-      },
-    },
-    {
-      label: "ship (SYNTHETIC fulfillment)",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        await apiPost(`/api/demo/contracts/${c.contractId}/ship`);
-        return `FULFILLMENT_SHIPPED recorded`;
-      },
-    },
-    {
-      label: "deliver wrong_variant (SYNTHETIC)",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        const r = await apiPost<DeliverResponse>(
-          `/api/demo/contracts/${c.contractId}/deliver`,
-          { scenario: "wrong_variant" }
-        );
-        return `${(r.breaches ?? []).length} breach(es) · contract_status=${r.status ?? "?"}`;
-      },
-    },
-    {
-      label: "mark replacement unavailable",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        await apiPost(`/api/demo/contracts/${c.contractId}/replacement-unavailable`);
-        return `replacement inventory = 0 recorded`;
-      },
-    },
-    {
-      label: "plan remedies",
-      run: async (c) => {
-        if (!c.contractId) throw new Error("no contract");
-        const r = await apiGet<RemediesResponse>(`/api/contracts/${c.contractId}/remedies`);
-        const live = r.proposals.filter((p) => !p.rejected_reason);
-        if (live.length === 0) throw new Error("planner returned no viable proposal");
-        live.sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
-        c.proposalId = live[0].id;
-        return `rank #1 → ${live[0].remedy_type} (${live[0].id.slice(0, 16)}…)`;
-      },
-    },
-    {
-      label: "policy verdict",
-      run: async (c) => {
-        if (!c.proposalId) throw new Error("no proposal");
-        const r = await apiPost<PolicyResponse>(`/api/remedies/${c.proposalId}/policy`);
-        const d = r.decision?.decision;
-        // A DENY is a real policy refusal, not a step success — halt the
-        // chain with the reason codes so the ticker can't read as green (#6).
-        if (d === "DENY" || !r.decision || r.money_action?.status === "denied") {
-          throw new Error(
-            `policy DENIED — reasons: ${(r.decision?.reason_codes ?? ["unknown"]).join(", ")}` +
-              (r.decision?.explanation ? ` · ${r.decision.explanation.slice(0, 140)}` : ""),
-          );
-        }
-        if (d === "REQUIRE_APPROVAL") {
-          return `REQUIRE_APPROVAL (${(r.decision?.policy_ids ?? []).join(",")}) — approving`;
-        }
-        return `ALLOW by ${(r.decision?.policy_ids ?? []).join(", ")}`;
-      },
-    },
-    {
-      label: "execute refund",
-      run: async (c) => {
-        if (!c.proposalId) throw new Error("no proposal");
-        const r = await apiPost<ExecuteResponse>(`/api/remedies/${c.proposalId}/execute`);
-        if (r.error && !r.money_action) throw new Error(r.error);
-        const status = r.money_action?.status;
-        // executed:false / failed money action must fail the step — the hero
-        // arc only reports success when the refund actually went through (#6).
-        if (status === "failed" || status === "denied") {
-          throw new Error(
-            `refund did not execute — money_action=${status}` +
-              (r.money_action?.reason_code ? ` · ${r.money_action.reason_code}` : ""),
-          );
-        }
-        const ref = r.money_action?.result_ref ?? (r.refund as { id?: string })?.id;
-        if (!ref && status !== "executed") {
-          throw new Error(`refund not confirmed — no result_ref, money_action=${status ?? "?"}`);
-        }
-        return `refund ${ref ?? "confirmed"} · money_action=${status ?? "executed"}`;
-      },
-    },
-  ];
-
-  const runHero = useCallback(async () => {
-    setRunning(true);
-    setFlash(null);
-    ctxRef.current = {};
-    const now = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
-    // Each step carries its own timestamp, stamped at transition (#10).
-    setSteps(
-      stepsDef.map((s) => ({
-        name: s.label,
-        status: "pending" as StepStatus,
-        startedAt: now(),
-      })),
-    );
-
-    let halted = false;
-    for (let i = 0; i < stepsDef.length; i++) {
-      if (halted) {
-        setStep(i, { status: "pending", detail: "skipped — chain halted" });
-        continue;
-      }
-      const startedAt = now();
-      setStep(i, { status: "running", startedAt });
-      try {
-        const detail = await stepsDef[i].run(ctxRef.current);
-        setStep(i, { status: "ok", detail, finishedAt: now() });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setStep(i, { status: "fail", detail: msg, finishedAt: now() });
-        setFlash({ tone: "fail", text: `Chain halted at "${stepsDef[i].label}": ${msg}` });
-        halted = true;
-      }
-      logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-    }
-    if (!halted) {
-      const cid = ctxRef.current.contractId;
-      setFlash({
-        tone: "ok",
-        text: `HERO ARC COMPLETE — contract ${cid?.slice(0, 18)}… remediated.`,
-      });
-    }
-    setRunning(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const anyBusy = busy !== null || running;
 
   return (
     <main className="min-h-screen bg-paper">
@@ -353,7 +159,7 @@ export default function DemoPage() {
           <span className="rounded-sm border border-warning px-1.5 py-[2px]">DEMO SIMULATION CONTROL</span>
           <span className="normal-case tracking-normal">
             Fulfillment events are SYNTHETIC; payment/refund actions execute against
-            Razorpay (sandbox adapter unless live keys configured).
+            Razorpay (sandbox adapter unless test keys configured).
           </span>
         </p>
       </div>
@@ -361,82 +167,120 @@ export default function DemoPage() {
       <div className="dante-container py-8 md:py-12">
         <Folio issue="ISSUE 00 / CONTROL ROOM" running="PRIVATE PANEL / OPERATOR" />
 
+        {/* ---------------------------------------------- hero arc header */}
         <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
           <div className="md:col-span-7">
-            <SectionLabel>THE FIVE-MINUTE ARC</SectionLabel>
+            <SectionLabel>THE FIVE-MINUTE ARC · RESUMABLE</SectionLabel>
             <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
               One click buys it, breaks it,
               <br />
               and makes it right.
             </h1>
             <p className="mt-4 max-w-prose text-sm leading-relaxed text-ink-soft">
-              The hero scenario runs the entire thesis in sequence: intent → frozen
-              promises → authorization → Razorpay order → capture → wrong variant
-              delivered → material breach → refund remedy planned, policy-gated,
-              executed. Watch the ticker.
+              The hero scenario runs the entire thesis in fifteen recorded steps:
+              intent → frozen promises → authorization → Razorpay order →{" "}
+              <em className="not-italic text-warning">WAITING on your checkout</em> →
+              capture → wrong variant delivered → material breach → rights evaluated →
+              replacement unavailable → refund planned → policy ALLOW → refund executed.
+              Refresh the page mid-arc and the console picks up where it left off.
             </p>
           </div>
-          <div className="flex items-start md:col-span-5 md:justify-end">
-            <Button onClick={runHero} disabled={anyBusy} size="lg" data-testid="run-hero">
-              {running ? "RUNNING ARC…" : "▶ RUN HERO SCENARIO"}
-            </Button>
+          <div className="flex items-start gap-3 md:col-span-5 md:justify-end">
+            {!anyBusy && (
+              <Button onClick={orch.startNewRun} size="lg" data-testid="run-hero">
+                ▶ RUN HERO SCENARIO
+              </Button>
+            )}
           </div>
         </header>
 
-        {/* Ticker */}
-        {steps.length > 0 && (
-          <motion.ol
-            ref={logRef}
-            initial={reduceMotion ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            aria-label="Hero scenario step log"
-            className="mt-8 max-h-96 overflow-y-auto rounded-md border border-rule bg-paper-bright p-4 font-mono text-xs leading-relaxed"
+        {/* ------------------------------------------------- posture strip */}
+        <section aria-label="Payment rail posture" className="mt-8">
+          <Panel
+            tone="bright"
+            label="RAIL POSTURE"
+            aside={
+              orch.demoStatus ? (
+                <RailBadge mode={orch.railMode} />
+              ) : (
+                <span className="folio-label text-ink-soft">probing…</span>
+              )
+            }
           >
-            {steps.map((s, i) => (
-              <li key={i} className="flex items-baseline gap-3 py-0.5">
-                <time className="shrink-0 text-ink-soft">
-                  {s.status === "ok" || s.status === "fail" ? (s.finishedAt ?? s.startedAt ?? "") : s.status === "running" ? s.startedAt ?? "" : ""}
-                </time>
-                <span
-                  className={cn(
-                    "w-4 shrink-0 text-center",
-                    s.status === "ok" && "text-success",
-                    s.status === "fail" && "text-danger",
-                    s.status === "running" && "animate-pulse text-signal",
-                    s.status === "pending" && "text-ink-soft"
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <p className="text-sm leading-relaxed text-ink-soft">
+                  {orch.railMode === "live-test-mode"
+                    ? "Real Razorpay TEST MODE keys configured: checkout collects a real (non-money) test payment; refunds execute through Razorpay's test refund API."
+                    : orch.railMode === "sandbox"
+                      ? "No Razorpay keys configured: payments run on Dante's sandbox adapter via real signed webhooks — identical verification path, no gateway."
+                      : "Posture unknown until the API answers."}
+                </p>
+                <dl className="mt-3 grid max-w-xs grid-cols-2 gap-x-4 gap-y-1 font-mono text-[0.6875rem] uppercase tracking-[0.08em] text-ink-soft">
+                  <dt>Demo endpoints</dt>
+                  <dd className={cn(orch.demoStatus?.demo_mode === false && "text-danger")}>
+                    {orch.demoStatus?.demo_mode === false ? "DISABLED" : "enabled"}
+                  </dd>
+                  <dt>Operator token</dt>
+                  <dd>{orch.tokenRequired ? "required" : "not required"}</dd>
+                </dl>
+                {orch.demoStatus?.operator_token_required &&
+                  !orch.demoStatus.operator_token_configured && (
+                    <p role="status" className="mt-2 font-mono text-xs text-warning">
+                      Token gate armed but no token configured server-side — demo writes stay
+                      LOCKED until DEMO_OPERATOR_TOKEN is set on the API.
+                    </p>
                   )}
-                  aria-label={s.status}
-                >
-                  {s.status === "ok" ? "✓" : s.status === "fail" ? "✗" : s.status === "running" ? "▸" : "·"}
-                </span>
-                <span className={cn("font-medium uppercase tracking-[0.04em]", s.status === "pending" && "text-ink-soft")}>
-                  {s.name}
-                </span>
-                {s.detail && (
-                  <span className={cn("min-w-0 break-all", s.status === "fail" ? "text-danger" : "text-ink-soft")}>
-                    — {s.detail}
-                  </span>
-                )}
-              </li>
-            ))}
-          </motion.ol>
-        )}
+              </div>
 
-        {flash && (
+              {/* operator token input */}
+              <div>
+                <label htmlFor="demo-operator-token" className="folio-label block">
+                  OPERATOR TOKEN{" "}
+                  <span className="normal-case tracking-normal">
+                    {orch.tokenRequired ? "(required)" : "(optional)"} — never stored server-side by this page
+                  </span>
+                </label>
+                <input
+                  id="demo-operator-token"
+                  type="password"
+                  autoComplete="off"
+                  value={orch.operatorToken}
+                  onChange={(e) => orch.setOperatorToken(e.target.value)}
+                  placeholder={
+                    orch.tokenRequired ? "X-Demo-Operator-Token value…" : "only needed when test keys are live"
+                  }
+                  className="mt-1 w-full rounded-md border border-rule bg-paper-bright px-3 py-2 font-mono text-xs text-ink outline-none focus:border-ink"
+                />
+                <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+                  Sent as <code className="font-mono">X-Demo-Operator-Token</code> on every
+                  state-changing demo call while real test keys are configured. Kept in this
+                  tab&apos;s session storage only.
+                </p>
+              </div>
+            </div>
+          </Panel>
+        </section>
+
+        {/* ------------------------------------------------------- flash */}
+        {orch.flash && (
           <p
-            role="status"
+            role="alert"
             className={cn(
-              "mt-4 break-all rounded-md border p-3 font-mono text-xs",
-              flash.tone === "ok"
+              "mt-6 break-all rounded-md border p-3 font-mono text-xs",
+              orch.flash.tone === "ok"
                 ? "border-success bg-success/[0.07] text-success"
-                : "border-danger bg-danger/[0.06] text-danger"
+                : "border-danger bg-danger/[0.06] text-danger",
             )}
           >
-            {flash.text}
-            {ctxRef.current.contractId && (
+            {orch.flash.text}
+            {orch.ctx.contractId && (
               <>
                 {" "}
-                <Link href={`/contract/${ctxRef.current.contractId}`} className="underline underline-offset-4">
+                <Link
+                  href={`/contract/${orch.ctx.contractId}`}
+                  className="underline underline-offset-4"
+                >
                   open dossier →
                 </Link>
               </>
@@ -444,16 +288,141 @@ export default function DemoPage() {
           </p>
         )}
 
-        {/* Manual controls */}
+        {/* ------------------------------------------------ WAITING card */}
+        {orch.waiting && (
+          <section aria-label="Awaiting checkout completion" className="mt-6">
+            <Panel
+              tone="bright"
+              className="border-warning"
+              label={`STEP 6 / 15 · AWAITING CHECKOUT · ${orch.waiting.mode === "live-test-mode" ? "RAZORPAY TEST MODE" : "SANDBOX"}`}
+              aside={<RailBadge mode={orch.waiting.mode} />}
+            >
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-12">
+                <div className="md:col-span-8">
+                  <h2 className="font-display text-3xl leading-tight">
+                    {orch.waiting.mode === "live-test-mode"
+                      ? "Complete the real test-mode checkout."
+                      : "Sandbox capture fired — or pay manually."}
+                  </h2>
+                  <p className="mt-2 max-w-prose text-sm leading-relaxed text-ink-soft">
+                    {orch.waiting.mode === "live-test-mode" ? (
+                      <>
+                        Open the contract page and pay order{" "}
+                        <code className="font-mono">{orch.waiting.orderId ?? "—"}</code> through
+                        Razorpay Checkout. This console polls server-side webhook truth every 2s
+                        and continues steps 7–15 the moment the contract reads PAID.
+                      </>
+                    ) : (
+                      <>
+                        A signed-webhook capture was already fired for order{" "}
+                        <code className="font-mono">{orch.waiting.orderId ?? "—"}</code>. If you
+                        want the human-in-the-loop path instead, pay on the contract page — the
+                        first PAID reading wins either way.
+                      </>
+                    )}
+                  </p>
+                  <ul className="mt-3 space-y-1 font-mono text-xs text-ink-soft">
+                    <li>
+                      contract <span className="text-ink">{orch.waiting.contractId}</span>
+                    </li>
+                    <li>
+                      amount{" "}
+                      <span className="text-ink">
+                        {formatINR(orch.waiting.amountPaise)}
+                      </span>
+                    </li>
+                    <li>polling GET /api/contracts/&#123;id&#125; every 2s · webhook truth only</li>
+                  </ul>
+                </div>
+                <div className="md:col-span-4 md:text-right">
+                  <ButtonLink
+                    href={`/contract/${orch.waiting.contractId}`}
+                    size="lg"
+                    data-testid="open-contract-pay"
+                  >
+                    OPEN CONTRACT &amp; PAY →
+                  </ButtonLink>
+                  <p className="mt-2 text-xs text-ink-soft">
+                    /contract/{orch.waiting.contractId.slice(0, 14)}…
+                  </p>
+                </div>
+              </div>
+            </Panel>
+          </section>
+        )}
+
+        {/* --------------------------------------------------- ticker */}
+        {orch.steps.length > 0 && (
+          <motion.ol
+            ref={logRef}
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            aria-label="Hero scenario step log"
+            data-testid="hero-ticker"
+            className="mt-6 max-h-96 overflow-y-auto rounded-md border border-rule bg-paper-bright p-4 font-mono text-xs leading-relaxed"
+          >
+            {orch.steps.map((s, i) => (
+              <TickerRow
+                key={s.key}
+                s={{ ...s, name: `${String(i + 1).padStart(2, "0")} ${s.name}` }}
+                rail={orch.railMode}
+              />
+            ))}
+          </motion.ol>
+        )}
+
+        {/* ------------------------------------------- halted retry strip */}
+        {orch.failedIndex != null && orch.phase === "halted" && (
+          <section aria-label="Retry failed step" className="mt-4 flex flex-wrap items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={orch.retryFailedStep}>
+              ↻ RETRY STEP {orch.failedIndex + 1}/15 ONLY
+            </Button>
+            <p className="font-mono text-xs text-ink-soft">
+              resume semantics: completed steps stay checked; the chain re-enters at the failed
+              row.
+            </p>
+          </section>
+        )}
+
+        {/* -------------------------------------------------- run controls */}
+        {orch.steps.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-ink-soft">
+              run {orch.runId ?? "—"} · phase {orch.phase}
+            </span>
+            {!busy && (
+              <Button variant="ghost" size="sm" onClick={orch.clearConsole}>
+                clear console &amp; forget run
+              </Button>
+            )}
+            {!busy && orch.runId && orch.phase !== "complete" && (
+              <Button variant="secondary" size="sm" onClick={orch.startNewRun}>
+                start fresh run
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* --------------------------------------------- manual controls */}
         <section className="mt-14" aria-label="Manual demo controls">
           <SectionLabel>MANUAL CONTROLS</SectionLabel>
           <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Panel label="SEED" aside={<SyntheticBadge synthetic />}>
               <p className="text-sm leading-relaxed text-ink-soft">
-                Reset catalog + stores to fixture seed. Wipes every contract.
+                Reset catalog + stores to fixture seed. Wipes every contract (and any
+                persisted orchestrator run).
               </p>
               <div className="mt-3">
-                <Button variant="secondary" size="sm" disabled={anyBusy} onClick={() => manual("/api/demo/reset")}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={anyBusy}
+                  data-testid="manual-reset"
+                  onClick={() => {
+                    orch.clearConsole();
+                    void manual("/api/demo/reset", undefined, "POST /demo/reset");
+                  }}
+                >
                   POST /demo/reset
                 </Button>
               </div>
@@ -477,7 +446,13 @@ export default function DemoPage() {
                   variant="secondary"
                   size="sm"
                   disabled={anyBusy || !contractInput.trim()}
-                  onClick={() => manual(`/api/demo/contracts/${contractInput.trim()}/ship`)}
+                  onClick={() =>
+                    manual(
+                      `/api/demo/contracts/${contractInput.trim()}/ship`,
+                      undefined,
+                      "ship",
+                    )
+                  }
                 >
                   Ship
                 </Button>
@@ -500,9 +475,11 @@ export default function DemoPage() {
                   size="sm"
                   disabled={anyBusy || !contractInput.trim()}
                   onClick={() =>
-                    manual(`/api/demo/contracts/${contractInput.trim()}/deliver`, {
-                      scenario: deliverScenario,
-                    })
+                    manual(
+                      `/api/demo/contracts/${contractInput.trim()}/deliver`,
+                      { scenario: deliverScenario },
+                      `deliver:${deliverScenario}`,
+                    )
                   }
                 >
                   Deliver
@@ -515,14 +492,40 @@ export default function DemoPage() {
                   size="sm"
                   disabled={anyBusy || !contractInput.trim()}
                   onClick={() =>
-                    manual(`/api/demo/contracts/${contractInput.trim()}/replacement-unavailable`)
+                    manual(
+                      `/api/demo/contracts/${contractInput.trim()}/replacement-unavailable`,
+                      undefined,
+                      "replacement-unavailable",
+                    )
                   }
                 >
                   Mark replacement unavailable
                 </Button>
               </div>
+
+              {manualFlash && (
+                <p
+                  role="status"
+                  className={cn(
+                    "mt-3 break-all rounded-md border p-2 font-mono text-[0.6875rem]",
+                    manualFlash.tone === "ok"
+                      ? "border-success bg-success/[0.07] text-success"
+                      : "border-danger bg-danger/[0.06] text-danger",
+                  )}
+                >
+                  {manualFlash.text}
+                </p>
+              )}
             </Panel>
           </div>
+        </section>
+
+        {/* --------------------------------------------------- brief note */}
+        <section className="mt-10 border-t border-rule pt-4" aria-label="Hero brief">
+          <SectionLabel>THE COMPILED BRIEF</SectionLabel>
+          <p className="mt-2 max-w-prose font-mono text-xs leading-relaxed text-ink-soft">
+            “{HERO_INTENT}”
+          </p>
         </section>
       </div>
     </main>

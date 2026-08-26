@@ -1,3 +1,15 @@
+# ======================================================================
+# Project Dante — Web image (Next.js 15, standalone-friendly)
+# ----------------------------------------------------------------------
+# Build (from repo root):
+#   docker build -f infra/docker/Dockerfile.web \
+#     --build-arg NEXT_PUBLIC_API_URL=https://<api-host> -t dante-web ./apps/web
+#
+# NEXT_PUBLIC_* is inlined into the client bundle at BUILD time, so the API
+# URL must be passed as a build arg, not just runtime env. PORT is env-aware
+# for PaaS platforms; runs as a non-root user.
+# ======================================================================
+
 FROM node:22-alpine AS deps
 WORKDIR /srv/web
 COPY package.json package-lock.json* ./
@@ -9,10 +21,15 @@ COPY --from=deps /srv/web/node_modules ./node_modules
 COPY . .
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:22-alpine AS run
 WORKDIR /srv/web
-COPY --from=build /srv/web ./
+ENV NODE_ENV=production
+ENV PORT=3000
+RUN addgroup -g 10001 dante && adduser -D -u 10001 -G dante dante
+COPY --from=build --chown=dante:dante /srv/web ./
+USER dante
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["sh", "-c", "npm run start -- --port ${PORT:-3000}"]

@@ -114,6 +114,20 @@ constraints, hashes, transitions, amounts, idempotency, and own execution. Every
 money action carries reason codes, evidence IDs, a policy snapshot hash, and an
 idempotency key `project-dante:{contract}:{remedy}:v1`.
 
+**The machine-readable merchant**
+
+The AI buyer never scrapes human-facing pages: Aster Electronics exposes itself
+as explicit machine-readable statements. `GET /api/merchant/profile` reports the
+merchant's capabilities — catalog search, structured warranty metadata, delivery
+promises, return policies, Razorpay checkout, post-purchase resolution — with
+every flag *computed* from measurable reality (metadata coverage shares over the
+committed fixture, live gateway-client construction, rights-engine availability),
+not asserted; `POST /api/merchant/offers/freeze` snapshots an offer into hashed,
+structured evidence at purchase time; `GET /api/merchant/orders/{id}/status`
+projects fulfillment state purely from stored facts and audit events — synthetic
+observations stay labeled, nothing is invented. The buyer agent reads these
+endpoints to decide what it can hold the merchant to.
+
 ---
 
 ## Screenshots
