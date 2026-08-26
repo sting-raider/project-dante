@@ -107,9 +107,12 @@ Note: the intake also tolerates `refund.completed` aliases and dedupes by
 
 1. Sign in at [vercel.com](https://vercel.com) → **Add New → Project** →
    import this repository.
-2. **Framework Preset**: Next.js (auto-detected; `infra/deploy/vercel.json`
-   pins `framework: nextjs`, root dir `apps/web`).
-3. **Root Directory**: `apps/web`.
+2. **Framework Preset**: Next.js (auto-detected; `apps/web/vercel.json`
+   pins `framework: nextjs` — the file lives inside the web app because
+   Vercel reads it from the project root directory, and `rootDirectory` is
+   a dashboard/CLI setting, not a supported vercel.json key).
+3. **Root Directory**: `apps/web` (set in the dashboard — required so
+   Vercel finds both the app and its vercel.json).
 4. **Environment Variables**:
 
 | Variable | Secret? | Value / notes |

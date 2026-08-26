@@ -221,16 +221,19 @@ def _resolve_path(offer: dict[str, Any], key: str) -> Any:
 def _actual_for_key(offer: dict[str, Any], key: str) -> tuple[Any, bool]:
     """Resolve a constraint key onto the offer.
 
-    Returns (actual, title_fallback). ``title_fallback`` is True only when the
-    category key was resolved from the TITLE because the offer had no category
+    Returns (actual, title_fallback). ``title_fallback`` is True ONLY for the
+    category key resolved from the TITLE because the offer had no category
     field — the one case where containment matching is allowed (see
-    _check_scalar).
+    _check_scalar). All other keys resolve strictly; no title stand-in.
     """
     attrs = offer.get("attributes") or {}
     variant = offer.get("variant") or {}
     terms = offer.get("terms") or {}
     category = offer.get("category")
-    if not category:
+    # NOTE(final-assault [12]): the title stand-in applies ONLY to the
+    # category key. Returning it for every missing field let titles satisfy
+    # brand/warranty/feature hard constraints via whole-word containment.
+    if not category and key == "category":
         return offer.get("title"), True
     if str(category).strip().lower() == "mice":
         # catalog stores plural 'mice'; the buyer-facing value is 'mouse'

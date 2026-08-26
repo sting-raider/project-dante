@@ -7,6 +7,7 @@ warranty constraints (absence of evidence cannot satisfy).
 
 from __future__ import annotations
 
+import unittest
 from datetime import UTC, datetime, timedelta
 
 from project_dante.agents.evaluator import OfferEvaluatorAgent
@@ -528,3 +529,55 @@ def test_select_stamps_evaluation_for_verifier_floor():
         STORE.delete(rec["id"])
     STORE.delete(cid)
     STORE.delete(iid)
+
+class TitleFallbackScopingTests(unittest.TestCase):
+    """Final-assault [12]: the title stand-in must apply ONLY to category.
+    A missing brand/warranty/feature field must never be satisfied by
+    whole-word containment against the product title."""
+
+    def _offer(self):
+        return {
+            "id": "off_tf_1",
+            "sku": "AST-TF-001",
+            # No 'brand', no terms.warranty_type, no attributes.anc — but the
+            # title mentions all of them.
+            "title": "Sony Wireless ANC Over-Ear Headphones with Manufacturer Warranty",
+            "category": "",  # missing -> title fallback territory for category only
+            "unit_amount_paise": 500000,
+            "attributes": {},
+            "terms": {},
+        }
+
+    def test_title_cannot_satisfy_non_category_hard_constraints(self):
+        from project_dante.agents.evaluator import OfferEvaluatorAgent
+
+        ev = OfferEvaluatorAgent()
+        intent = {
+            "hard_constraints": [
+                {"key": "brand", "op": "eq", "value": "Sony", "critical": True},
+                {"key": "warranty.type", "op": "eq", "value": "manufacturer", "critical": True},
+                {"key": "attributes.anc", "op": "eq", "value": True, "critical": True},
+            ],
+            "soft_preferences": [],
+        }
+        results = ev.evaluate(intent, [self._offer()])
+        fails = {f["key"] for f in results[0]["evaluation"]["hard_failures"]}
+        self.assertEqual(
+            fails,
+            {"brand", "warranty.type", "attributes.anc"},
+            "title containment must not satisfy non-category hard gates",
+        )
+        self.assertFalse(results[0]["evaluation"]["feasible"])
+
+    def test_category_still_usable_from_title(self):
+        from project_dante.agents.evaluator import OfferEvaluatorAgent
+
+        ev = OfferEvaluatorAgent()
+        intent = {
+            "hard_constraints": [
+                {"key": "category", "op": "eq", "value": "headphones", "critical": True},
+            ],
+            "soft_preferences": [],
+        }
+        results = ev.evaluate(intent, [self._offer()])
+        self.assertTrue(results[0]["evaluation"]["feasible"])

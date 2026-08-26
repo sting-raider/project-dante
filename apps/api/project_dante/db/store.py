@@ -10,10 +10,10 @@ Every record carries its type under `_type`; `id` is unique across the store.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import threading
+import time
 from typing import Any
 
 _STORE_PATH = os.environ.get("DANTE_STORE_PATH", ".dante-store.json")
@@ -160,8 +160,25 @@ def _resolve_store() -> Any:
         from project_dante.db.pg_store import PostgresStore
 
         store = PostgresStore(os.environ.get("DATABASE_URL") or None)
-        with contextlib.suppress(Exception):
-            store.ensure_schema()
+        # Final-assault [14]: when the operator explicitly selects the
+        # postgres backend, an unreachable DB must fail STARTUP loudly —
+        # deferring to first use hides misconfiguration until a money
+        # mutation, and a silently-fallen-back store would split money state.
+        # A short retry window absorbs transient DB cold-starts (Railway).
+        last_exc: Exception | None = None
+        for _attempt in range(5):
+            try:
+                store.ensure_schema()
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 - re-raised below
+                last_exc = exc
+                time.sleep(1.5)
+        if last_exc is not None:
+            raise RuntimeError(
+                "DANTE_STORE_BACKEND=postgres but the database is not "
+                f"reachable (ensure_schema failed after retries): {last_exc}"
+            ) from last_exc
         return store
     return Store()
 

@@ -85,11 +85,29 @@ def _contract_for_order(order_id: str | None, notes: dict[str, Any] | None) -> d
             return rec
     if notes and notes.get("contract_id"):
         cand = STORE.get(str(notes["contract_id"]))
-        if cand is not None:
+        # Final-assault finding [03]: the fallback previously accepted ANY
+        # record id and any unbound contract — a signature-valid envelope
+        # could graft a foreign payment onto a pre-order contract. Now:
+        # 1. the candidate must genuinely be a contract record;
+        # 2. it must be bound to THIS order id (primary path already covers
+        #    that), OR be unbound while a Dante-ISSUED razorpay_order record
+        #    exists whose notes name this contract (provenance check);
+        # 3. otherwise the claim is refused — orphaned captures are recorded
+        #    upstream, never grafted.
+        if cand is not None and cand.get("_type") == "contract":
             bound = cand.get("razorpay_order_id")
-            # Accept only if unbound (about to be walked) or genuinely ours.
-            if not bound or str(bound) == str(order_id):
+            if bound and str(bound) == str(order_id):
                 return cand
+            if not bound and order_id:
+                issued = STORE.get(order_id)
+                if (
+                    issued is not None
+                    and issued.get("_type") == "razorpay_order"
+                    and isinstance(issued.get("notes"), dict)
+                    and str(issued["notes"].get("contract_id") or "")
+                    == str(notes["contract_id"])
+                ):
+                    return cand
         return None
     return None
 
