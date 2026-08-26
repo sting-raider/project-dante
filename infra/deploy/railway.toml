@@ -1,0 +1,43 @@
+# ======================================================================
+# Project Dante — API service on Railway (Nixpacks builder)
+# ----------------------------------------------------------------------
+# Deploy: railway up  (or connect the GitHub repo in the dashboard and
+# select this file as the service config). One service = the FastAPI app;
+# the web tier deploys separately to Vercel (see vercel.json).
+#
+# SINGLE REPLICA IS MANDATORY (master plan §11.4): idempotency dedupe and
+# webhook ordering live in the process-wide JSON-snapshot store, so two
+# replicas would double-process concurrent first-time events. Keep
+# replica count at exactly 1; scale vertically, not horizontally.
+#
+# Required environment variables (set in the Railway dashboard -> Variables):
+#   APP_ENV                  — set to "production"
+#   RAZORPAY_KEY_ID          — rzp_test_* only (live keys fail closed)  [SECRET]
+#   RAZORPAY_KEY_SECRET      — Razorpay test secret                  [SECRET]
+#   RAZORPAY_WEBHOOK_SECRET  — must match the dashboard webhook      [SECRET]
+#   DEMO_MODE                — "true" for the buildathon demo posture
+#   DEMO_OPERATOR_TOKEN      — required when real test keys are set  [SECRET]
+#   LLM_PROVIDER             — "" | anthropic | openai-compatible
+#   LLM_MODEL                — model name when a provider is set
+#   LLM_API_KEY              — provider key (omit => rules engine)   [SECRET]
+#   PUBLIC_APP_URL           — https://<web-app>.vercel.app (CORS origin)
+#   API_BASE_URL             — public https URL of THIS service
+#
+# Optional:
+#   DANTE_STORE_PATH         — default ".dante-store.json" in the deploy
+#                              root; mount a volume for persistence across
+#                              restarts.
+# ======================================================================
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "cd apps/api && python -m pip install --upgrade pip && pip install uv && uv sync --frozen --no-dev"
+
+[deploy]
+# $PORT is injected by Railway; uvicorn binds to it explicitly.
+startCommand = "cd apps/api && uv run uvicorn project_dante.api.app:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/api/ready"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+numReplicas = 1

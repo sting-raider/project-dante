@@ -1,15 +1,40 @@
+# ======================================================================
+# Project Dante — API image (uv-based, production-safe)
+# ----------------------------------------------------------------------
+# Build (from repo root):
+#   docker build -f infra/docker/Dockerfile.api -t dante-api ./apps/api
+# Run:
+#   docker run -p 8000:8000 -e PORT=8000 dante-api
+#
+# PORT is env-aware: defaults to 8000, override for PaaS platforms that
+# inject their own. Runs as a non-root user.
+# ======================================================================
+
 FROM python:3.12-slim AS base
+
 WORKDIR /srv/api
 
-# uv for fast installs
+# uv for fast, lock-respecting installs.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY pyproject.toml ./
-RUN uv venv .venv && uv pip install --python .venv/bin/python .
+# Dependencies first for layer caching. Install from uv.lock (--frozen) so
+# builds are reproducible; --no-dev keeps test tooling out of the image.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
+# Then the application source (hatchling packages project_dante/).
 COPY project_dante ./project_dante
 COPY alembic ./alembic
+
 ENV PATH="/srv/api/.venv/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
+
+# Non-root runtime user owning nothing it doesn't need.
+RUN useradd --create-home --uid 10001 dante && chown -R dante:dante /srv/api
+USER dante
 
 EXPOSE 8000
-CMD ["uvicorn", "project_dante.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# $PORT lets PaaS platforms (Railway/Fly) bind their injected port; docker
+# users get the 8000 default via shell expansion.
+CMD ["sh", "-c", "uvicorn project_dante.api.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -40,3 +40,5 @@ evals/reports/*.json
 .dante-redteam-store.json
 .dante-evalstore.json
 .dante-debug*.json
+test-results/
+playwright-report/
