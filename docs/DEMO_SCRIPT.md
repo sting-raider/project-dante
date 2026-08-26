@@ -5,11 +5,17 @@
 
 ## Pre-flight (before recording)
 
-1. `docker compose up -d postgres redis`
-2. API: `cd apps/api && uv run uvicorn project_dante.api.app:app --port 8000`
-3. Web: `cd apps/web && npm run dev`
-4. Verify (from `apps/api`, with the API running): `.venv/Scripts/python.exe ../../scripts/verify_e2e.py` → must print PASSED
-5. Browser: open `http://localhost:3000`, keep `/demo` panel open in second tab.
+1. **One process per port — check first.** The API's store is in-memory
+   per-process, so a second uvicorn that fails to bind :8000 leaves the
+   first process serving an EMPTY store while your browser talks to it —
+   contracts vanish ("Unknown contract") and demo calls 404. On Windows:
+   `netstat -ano | findstr ":8000 :3000"`, kill stale PIDs
+   (`taskkill /PID <pid> /F`) before starting anything.
+2. `docker compose up -d postgres redis`
+3. API: `cd apps/api && uv run uvicorn project_dante.api.app:app --port 8000`
+4. Web: `cd apps/web && npm run dev`
+5. Verify (from `apps/api`, with the API running): `.venv/Scripts/python.exe ../../scripts/verify_e2e.py` → must print PASSED
+6. Browser: open `http://localhost:3000`, keep `/demo` panel open in second tab.
 
 ## Shot list
 

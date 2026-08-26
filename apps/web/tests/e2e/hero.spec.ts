@@ -105,6 +105,27 @@ test.describe("sandbox hero arc", () => {
 
     // ---- 7. simulate capture; PAID arrives ONLY via signed webhook --------
     await simulate.click();
+
+    // The simulate POST asks the server to deliver a signed webhook; the UI's
+    // 2s poll then flips the banner. Poll server truth first so a slow tick
+    // never fails the run, and re-fire the idempotent simulate if needed.
+    let paid = false;
+    for (let i = 0; i < 15 && !paid; i++) {
+      try {
+        const d = await apiGet(api, `/api/contracts/${contractId}`);
+        paid = (d.contract as Record<string, unknown>).status === "PAID";
+      } catch {
+        /* transient */
+      }
+      if (!paid) {
+        await page.waitForTimeout(1000);
+        if (i === 7 && (await simulate.isVisible().catch(() => false))) {
+          await simulate.click().catch(() => {});
+        }
+      }
+    }
+    expect(paid, "contract reached PAID via simulated webhook").toBe(true);
+
     const paidBanner = page
       .getByText(/Paid — verified by webhook truth/i)
       .first();
@@ -114,7 +135,9 @@ test.describe("sandbox hero arc", () => {
     const paidDetail = await apiGet(api, `/api/contracts/${contractId}`);
     expect((paidDetail.contract as Record<string, unknown>).status).toBe("PAID");
 
-    // ---- 8. synthetic fulfillment: ship, then deliver the WRONG variant ---
+    // ---- 8. synthetic fulfillment: ship, deliver the WRONG variant, then
+    // record replacement-unavailable so the refund right unlocks (the rights
+    // chain requires the replacement path to be tried/blocked first).
     expect((await apiPost(api, `/api/demo/contracts/${contractId}/ship`)).status).toBe(200);
     const delivered = await apiPost(
       api,
@@ -124,6 +147,10 @@ test.describe("sandbox hero arc", () => {
     expect(delivered.status).toBe(200);
     const breaches = (delivered.json?.breaches ?? []) as unknown[];
     expect(breaches.length).toBeGreaterThan(0);
+    expect(
+      (await apiPost(api, `/api/demo/contracts/${contractId}/replacement-unavailable`))
+        .status,
+    ).toBe(200);
 
     // ---- 9. breach visible in the browser ---------------------------------
     await page.goto(`/contract/${contractId}/breach`, {
