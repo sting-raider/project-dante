@@ -7,7 +7,8 @@ Nothing else blocks autonomous progress. When you can, provide:
 Copy `.env.example` → `.env` at repo root and fill:
 
 ```dotenv
-RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx      # dashboard -> Settings -> API Keys -> Test
+RAZORPAY_KEY_ID=(paste your Test key id — looks like rzp_test_ + 14 chars)
+RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxxxxxxxx # the paired secret
 RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxxxxxxxx # the paired secret
 RAZORPAY_WEBHOOK_SECRET=xxxxxxxxxxxxxxxx   # dashboard -> Settings -> Webhooks
 DEMO_OPERATOR_TOKEN=<any long random string>
