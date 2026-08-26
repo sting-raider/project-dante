@@ -1,18 +1,18 @@
 # Eval report: offer_evals
 
-**Status:** `PASS`  ·  **Generated:** 2026-08-26T00:16:08.720155+00:00
+**Status:** `PASS`  ·  **Generated:** 2026-08-26T07:50:09.653849+00:00
 
 ## Metrics
 
 | metric | value |
 |---|---|
-| scenarios_run | 26 |
+| scenarios_run | 3 |
 | catalog_products_seeded | 112 |
-| feasibility_checks | 116 |
+| feasibility_checks | 22 |
 | hard_constraint_violations | 0 |
 | hard_constraint_violation_rate | 0.0 |
 | false_negative_skus | 1 |
-| scenario_accuracy | 0.9615 |
+| scenario_accuracy | 0.6667 |
 | failures | 1 |
 
 ## Failures (1)

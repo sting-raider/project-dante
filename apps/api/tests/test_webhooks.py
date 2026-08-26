@@ -491,8 +491,10 @@ def test_simulate_event_full_flow_contract_to_paid(client):
 
 
 def test_simulate_event_guarded_off_when_live_keys_present(client, monkeypatch):
-    # Deliberately NOT key-shaped: keeps the tree grep-clean for secrets scans.
-    monkeypatch.setenv("RAZORPAY_KEY_ID", "dummy-key-id-for-guard-test")
+    # Key-shaped but clearly fake (test-mode prefix + placeholder secret):
+    # real-key detection now requires the rzp_test_ prefix, while staying
+    # grep-clean for secrets scans.
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_DUMMYKEYGUARD00")
     monkeypatch.setenv("RAZORPAY_KEY_SECRET", "dummy-secret-value-for-guard-test")
     get_settings.cache_clear()
     try:
