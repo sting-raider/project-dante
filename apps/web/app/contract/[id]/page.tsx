@@ -249,7 +249,12 @@ export default function ContractPage() {
   }
 
   const paid = contract.status === "PAID";
-  const awaitingAuth = contract.status === "AWAITING_BUYER_AUTH";
+  // The §52 gate is open for a freshly-frozen contract too: the server
+  // accepts CONTRACT_FROZEN → AWAITING_BUYER_AUTH, so Stage 1's card must
+  // render there or the buyer can never authorize (chicken-and-egg).
+  const awaitingAuth =
+    contract.status === "AWAITING_BUYER_AUTH" ||
+    contract.status === "CONTRACT_FROZEN";
   const authorized = contract.buyer_authority != null;
 
   return (

@@ -37,13 +37,26 @@ test.describe("sandbox hero arc", () => {
     expect(reset.status, "POST /api/demo/reset").toBe(200);
 
     // ---- 1. the brief -----------------------------------------------------
-    await page.goto("/buy", { waitUntil: "domcontentloaded" });
+    // networkidle: Next dev hydration must be complete before the first click,
+    // otherwise the click lands on the pre-hydration DOM and is swallowed.
+    await page.goto("/buy", { waitUntil: "networkidle" });
     const brief = page.getByLabel("Your buying brief, in your own words");
     await expect(brief).toBeVisible();
     await brief.fill(HERO_BRIEF);
 
     // ---- 2. compile + search ---------------------------------------------
-    await page.getByRole("button", { name: "Compile intent" }).click();
+    const compileBtn = page.getByRole("button", { name: "Compile intent" });
+    await expect(compileBtn).toBeEnabled();
+    await compileBtn.click();
+    // Hydration race safety net: if this click was swallowed, click again.
+    await expect
+      .poll(
+        async () =>
+          page.getByRole("button", { name: /Compiling|Searching/ }).count(),
+        { timeout: 5_000, intervals: [250] },
+      )
+      .toBeGreaterThan(0);
+    // The compile button flips to "Compiling…" / "Searching…" while busy.
 
     // The parsed typed constraints appear BEFORE any product is shown.
     const briefPanel = page.getByText("Buying brief", { exact: true }).first();
@@ -75,9 +88,13 @@ test.describe("sandbox hero arc", () => {
     ).toBeVisible({ timeout: 30_000 });
 
     // ---- 6. authorize -> sandbox order ------------------------------------
-    await page
-      .getByRole("button", { name: "Authorize & create payment order" })
-      .click();
+    // The §52 sticky authorization card can take a poll tick (2s) to appear
+    // after the dossier's first paint — poll, don't assume.
+    const authorizeBtn = page.getByRole("button", {
+      name: "Authorize & create payment order",
+    });
+    await expect(authorizeBtn).toBeVisible({ timeout: 30_000 });
+    await authorizeBtn.click();
 
     // Sandbox rail: no Razorpay keys configured — the simulate affordance
     // must appear (either in the §7 panel or the sticky hand-off bar).
@@ -88,7 +105,9 @@ test.describe("sandbox hero arc", () => {
 
     // ---- 7. simulate capture; PAID arrives ONLY via signed webhook --------
     await simulate.click();
-    const paidBanner = page.getByText(/Paid — verified by webhook truth/i);
+    const paidBanner = page
+      .getByText(/Paid — verified by webhook truth/i)
+      .first();
     await expect(paidBanner).toBeVisible({ timeout: 20_000 });
 
     // Server truth agrees.
