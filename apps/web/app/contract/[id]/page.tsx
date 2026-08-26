@@ -300,6 +300,36 @@ export default function ContractPage() {
         </div>
       )}
 
+      {/* Breach banner — the breach spread was an orphan route (final-assault
+          finding [17]); this surfaces it exactly when the lifecycle enters
+          breach/remedy territory. */}
+      {(contract.status === "BREACH_DETECTED" ||
+        contract.status === "REMEDIATED") && (
+        <div
+          className={`mt-6 rounded-[2px] border px-5 py-4 ${
+            contract.status === "BREACH_DETECTED"
+              ? "border-signal/60 bg-paper-bright"
+              : "border-success/50 bg-paper-bright"
+          }`}
+        >
+          <span
+            className={`font-mono text-[12px] uppercase tracking-[0.22em] ${
+              contract.status === "BREACH_DETECTED" ? "text-signal" : "text-success"
+            }`}
+          >
+            {contract.status === "BREACH_DETECTED"
+              ? "Material breach detected — observed reality contradicts a frozen promise"
+              : "Remediated — buyer made whole through a policy-gated remedy"}
+          </span>{" "}
+          <Link
+            href={`/contract/${contract.id}/breach`}
+            className="ml-2 font-body text-[13px] underline underline-offset-4 hover:text-ink"
+          >
+            Open the PROMISED vs OBSERVED breach dossier →
+          </Link>
+        </div>
+      )}
+
       {dismissedNote && !paid && (
         <div className="mt-6 rounded-[2px] border border-warning/50 bg-paper-bright px-5 py-3 font-body text-[13px] leading-snug text-warning">
           {dismissedNote}
