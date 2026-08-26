@@ -74,3 +74,15 @@ failing noisily.
   transient 500s (`Cannot find module './NNN.js'`). If specs skip or fail with
   those signatures, wait for the build to finish, restart `npm run dev`, and
   re-run.
+- **EADDRINUSE on restart means an orphan still owns :3000.** Killing the
+  terminal that launched `npm run dev` does not always kill its child compile
+  workers — a restarted server can silently no-op with EADDRINUSE while your
+  tests keep hitting the old (possibly broken) instance, so failures look
+  like code regressions when they aren't. Before concluding anything about
+  failures: `netstat -ano | findstr ":3000"` → `taskkill /PID <pid> /F`,
+  start fresh, re-run.
+- **WorkerError 500s on one route = dead compile workers, not bad code.**
+  Signature: every request to one page returns
+  `500 "Jest worker encountered N child process exceptions"` while other
+  routes render fine. The fix is to restart `npm run dev` — do not go looking
+  for a bug in the failing route first.

@@ -42,3 +42,4 @@ evals/reports/*.json
 .dante-debug*.json
 test-results/
 playwright-report/
+apps/api/.dante-store.json

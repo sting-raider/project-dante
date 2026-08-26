@@ -23,8 +23,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # Then the application source (hatchling packages project_dante/).
+# NOTE: no alembic migrations directory exists yet; add a COPY line here
+# when one lands (alembic stays in pyproject for future use).
 COPY project_dante ./project_dante
-COPY alembic ./alembic
 
 ENV PATH="/srv/api/.venv/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
