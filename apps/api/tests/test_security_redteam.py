@@ -257,6 +257,7 @@ class TestSecretsHygiene:
     # NOTE: literals are assembled via concatenation so this file does not
     # itself contain matchable secret-shaped strings.
     _SANDBOX_KEY_PREFIX = "rzp_" + "test_1DP" + "m" * 11
+    _GUARD_TEST_KEY = "rzp_" + "test_DUMMYKEY" + "GUA" + "RD00"
     ALLOWLIST: set[tuple[str, str]] = {
         # Synthetic SandboxClient credential (integrations/razorpay/client.py).
         # Marked "NOT-A-REAL-CREDENTIAL"; shape kept Razorpay-like so HMAC paths
@@ -264,6 +265,13 @@ class TestSecretsHygiene:
         (
             "apps/api/project_dante/integrations/razorpay/client.py",
             _SANDBOX_KEY_PREFIX,
+        ),
+        # Guard-test fixture in test_webhooks.py: real-key DETECTION requires
+        # the test-mode prefix, so the fixture is prefix-shaped but obviously
+        # fake. Verified inert.
+        (
+            "apps/api/tests/test_webhooks.py",
+            _GUARD_TEST_KEY,
         ),
         # NOTE: former entries for tests/test_webhooks.py and docs/RAZORPAY.md
         # were removed after owners replaced secret-shaped literals with
