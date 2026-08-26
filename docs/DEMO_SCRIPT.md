@@ -8,7 +8,7 @@
 1. `docker compose up -d postgres redis`
 2. API: `cd apps/api && uv run uvicorn project_dante.api.app:app --port 8000`
 3. Web: `cd apps/web && npm run dev`
-4. Verify: `python scripts/verify_e2e.py` → must print PASSED
+4. Verify (from `apps/api`, with the API running): `.venv/Scripts/python.exe ../../scripts/verify_e2e.py` → must print PASSED
 5. Browser: open `http://localhost:3000`, keep `/demo` panel open in second tab.
 
 ## Shot list
@@ -28,4 +28,4 @@
 
 - If checkout.js is flaky on camera: sandbox simulate button does the same signed-webhook path.
 - If live keys absent: say "sandbox adapter, identical signature-verified flow" — honest badge is visible.
-- Backup recording: run `scripts/verify_e2e.py` output as terminal proof.
+- Backup recording: the `verify_e2e.py` terminal output (see pre-flight step 4 for the exact invocation) is your proof.
