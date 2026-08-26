@@ -1,0 +1,40 @@
+# BLOCKERS — human input required
+
+Nothing else blocks autonomous progress. When you can, provide:
+
+## 1. Razorpay Test Mode credentials (needed for real-money-path proof)
+
+Copy `.env.example` → `.env` at repo root and fill:
+
+```dotenv
+RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxx      # dashboard -> Settings -> API Keys -> Test
+RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxxxxxxxx # the paired secret
+RAZORPAY_WEBHOOK_SECRET=xxxxxxxxxxxxxxxx   # dashboard -> Settings -> Webhooks
+DEMO_OPERATOR_TOKEN=<any long random string>
+```
+
+Then:
+```bash
+cd apps/api && .venv/Scripts/python.exe ../../scripts/verify_real_integration.py
+```
+The script pauses once for the one human step (completing the test payment in
+the Razorpay window) and does everything else automatically.
+
+## 2. LLM API key (optional but recommended for the final demo)
+
+Any one of:
+```dotenv
+LLM_PROVIDER=anthropic
+LLM_API_KEY=sk-ant-...
+# or
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=https://api.openai.com/v1     # or any compatible endpoint
+LLM_MODEL=gpt-4o                            # or your gateway's model id
+LLM_API_KEY=sk-...
+```
+
+## 3. Deployment authorization
+
+If I cannot authenticate to Railway/Vercel from this environment, either run
+the deploy steps in docs/DEPLOYMENT.md yourself or grant access. All
+deployment config files are prepared so this is copy-paste.

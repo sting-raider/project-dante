@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     app_env: str = "development"
     demo_mode: bool = True
 
+    # Operator gate for the HYBRID demo (real Razorpay Test Mode payment +
+    # synthetic fulfillment steps). While real test keys are configured, the
+    # state-changing /api/demo/* endpoints require the X-Demo-Operator-Token
+    # header to match this value. Empty string => those endpoints stay LOCKED
+    # whenever real test keys are present.
+    demo_operator_token: str = ""
+
     database_url: str = ""
     redis_url: str = ""
 

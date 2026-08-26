@@ -194,15 +194,33 @@ export type RazorpayHandlerResponse = {
   razorpay_signature: string;
 };
 
-/** Standard Checkout options we pass (subset of Razorpay's full shape). */
+/**
+ * Razorpay Standard Checkout options (checkout.js v1: new Razorpay(options)).
+ * Every field below is on the documented Standard Checkout surface:
+ * - key             : the PUBLIC key id VALUE (rzp_test_…) — checkout.js reads
+ *                     the option named `key`, never `key_id`
+ * - order_id        : order created server-side via the Orders API; when
+ *                     present Razorpay reconciles amount/currency against it
+ * - amount/currency : integer paise + ISO currency, matching the order
+ * - name/description: merchant and item lines shown on the payment sheet
+ * - prefill         : optional buyer name/email/contact hints
+ * - notes           : key/value metadata echoed onto the payment record
+ * - theme.color     : checkout widget accent color
+ * - handler         : success callback — response carries exactly
+ *                     razorpay_order_id, razorpay_payment_id, razorpay_signature
+ *                     (signature is verified SERVER-side, never trusted here)
+ * - modal.ondismiss : buyer closed the window — resume webhook polling; it is
+ *                     a normal outcome, not an error
+ */
 export type RazorpayCheckoutOptions = {
-  key_id: string;
+  key: string;
   order_id: string;
   amount: number;
   currency: string;
   name: string;
   description?: string;
-  prefill?: Record<string, string>;
+  prefill?: { name?: string; email?: string; contact?: string };
+  notes?: Record<string, string>;
   theme?: { color?: string };
   handler: (response: RazorpayHandlerResponse) => void;
   modal?: { ondismiss?: () => void };
@@ -210,7 +228,18 @@ export type RazorpayCheckoutOptions = {
 
 declare global {
   interface Window {
-    Razorpay?: new (options: RazorpayCheckoutOptions) => { open: () => void };
+    Razorpay?: new (options: RazorpayCheckoutOptions) => {
+      /** Present the checkout sheet. Must run inside a user-gesture call stack. */
+      open: () => void;
+      /**
+       * checkout.js event subscription; `payment.failed` carries
+       * { error: { description } } from the gateway.
+       */
+      on?: (
+        event: "payment.failed",
+        handler: (resp: { error?: { description?: string } }) => void,
+      ) => void;
+    };
   }
 }
 
@@ -227,7 +256,7 @@ export type FlowPhase =
   // contract pipeline
   | "awaiting_authorization"
   | "opening_checkout" // authorize + payment-order in flight
-  | "checkout_ready" // live-test-mode: Razorpay window open/available
+  | "checkout_ready" // live-test-mode: order created; awaiting the explicit Pay click
   | "sandbox_ready" // sandbox: awaiting simulated capture
   | "payment_pending" // verify sent / capture delivered; waiting on webhook truth
   | "paid"
@@ -250,7 +279,7 @@ export const PHASE_TICKER: Partial<Record<FlowPhase, string>> = {
   freezing: "Freezing promises…",
   awaiting_authorization: "Contract frozen. Awaiting your authorization.",
   opening_checkout: "Opening checkout…",
-  checkout_ready: "Checkout open — complete the test payment.",
+  checkout_ready: "Order created — complete payment via the Pay button.",
   sandbox_ready: "SANDBOX MODE — no Razorpay keys configured. Simulate below.",
   payment_pending: "Confirming against server-side webhook truth…",
   paid: "PAID — verified by webhook truth.",
@@ -512,6 +541,11 @@ export function useContractFlow() {
         );
         if (!mountedRef.current) return null;
         setOrderInfo(order);
+        // Pull server truth (contract.status → PAYMENT_ORDER_CREATED) now so
+        // Stage 2's Pay affordance gates on fresh state instead of waiting
+        // for the first 2s poll tick.
+        await refreshContract(id);
+        if (!mountedRef.current) return null;
         setPhase(order.mode === "sandbox" ? "sandbox_ready" : "checkout_ready");
         return order;
       } catch (e) {
@@ -519,7 +553,7 @@ export function useContractFlow() {
         return null;
       }
     },
-    [fail],
+    [fail, refreshContract],
   );
 
   /**
@@ -623,42 +657,62 @@ export function useContractFlow() {
   );
 
   /**
-   * §52 gate, full sequence: POST authorize → POST payment-order → hand the
-   * order to the caller's checkout opener (Razorpay JS for live-test-mode;
-   * nothing to open for sandbox). The opener is injected because the hook is
-   * DOM-free; it receives mode + checkout_config.
+   * STAGE 1 of the two-stage §52 gate: POST authorize → POST payment-order,
+   * persisting the checkout_config snapshot. It deliberately does NOT open
+   * any checkout window — Stage 2's "Pay" button must call rzp.open()
+   * directly from its own onClick handler with no await between click and
+   * open, so the popup survives the browser's user-gesture requirement.
    *
-   * Idempotent: a re-entrant call while one is already in flight (or once the
-   * order exists) is a no-op — no double POSTs, no double Razorpay orders.
-   * The server also refuses a second authorize (409 invalid_transition), but
-   * the client must never fire the duplicate request in the first place.
+   * Idempotent: a re-entrant call while one is already in flight is a no-op —
+   * no double POSTs, no double Razorpay orders. The server also refuses a
+   * second authorize (409 invalid_transition), but the client must never fire
+   * the duplicate request in the first place.
    */
-  const authorizeAndOpenCheckout = useCallback(
-    async (
-      id: string,
-      openCheckout: (order: PaymentOrderResponse) => void,
-    ): Promise<void> => {
-      if (authorizeInFlightRef.current) return; // click already in flight
+  const authorizeContract = useCallback(
+    async (id: string): Promise<PaymentOrderResponse | null> => {
+      if (authorizeInFlightRef.current) return null; // click already in flight
       setError(null);
       setRecheckNote(null);
       setPhase("opening_checkout");
       authorizeInFlightRef.current = true;
       try {
         const ok = await authorize(id);
-        if (!ok) return; // authorize() set error_authorize
+        if (!ok) return null; // authorize() set error_authorize
         const order = await createPaymentOrder(id);
-        if (!order) return; // createPaymentOrder() set error_order
+        if (!order) return null; // createPaymentOrder() set error_order
         persistOrderSnapshot(id, order); // survives refresh (#3)
-        if (order.mode === "sandbox") {
-          return; // sandbox_ready already set by createPaymentOrder
-        }
-        openCheckout(order); // live path: page opens Razorpay Standard Checkout
+        return order;
       } finally {
         authorizeInFlightRef.current = false;
       }
     },
     [authorize, createPaymentOrder],
   );
+
+  /**
+   * STAGE 2: open Razorpay Standard Checkout for an existing order. The page
+   * calls this synchronously from the explicit Pay button's onClick handler
+   * (no await before it) so `rzp.open()` runs inside the user gesture and the
+   * checkout window is never popup-blocked. Returns true when the window was
+   * opened; false when checkout.js wasn't ready yet (caller surfaces a note).
+   */
+  const openCheckout = useCallback((): boolean => {
+    if (!contractId || !orderInfo || orderInfo.mode !== "live-test-mode") {
+      return false;
+    }
+    if (typeof window === "undefined" || !window.Razorpay) return false;
+    startPollingUntilResolved(contractId); // webhook flips PAID while sheet is up
+    setPhase("checkout_ready");
+    return true;
+  }, [contractId, orderInfo, startPollingUntilResolved]);
+
+  /** True when Stage 2's live Pay button can open checkout right now. */
+  const canOpenCheckout =
+    !!contractId &&
+    !!orderInfo &&
+    orderInfo.mode === "live-test-mode" &&
+    typeof orderInfo.checkout_config.key_id === "string" &&
+    orderInfo.checkout_config.key_id !== "";
 
   /**
    * Public wrapper: resume 2s polling without changing phase (§33.5 —
@@ -701,7 +755,10 @@ export function useContractFlow() {
     loadContract,
     refreshContract,
     authorize,
-    authorizeAndOpenCheckout,
+    // two-stage gate: Stage 1 creates the order, Stage 2 opens the window
+    authorizeContract,
+    openCheckout,
+    canOpenCheckout,
     createPaymentOrder,
     verifyClient,
     simulateSandboxCapture,
