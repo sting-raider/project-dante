@@ -42,25 +42,36 @@ const MOCK_ORDER_ID = "order_e2eN0key1d";
 const MOCK_KEY_ID = "rzp_test_DUMMY_E2E_KEY"; // dummy stand-in for a real test key id
 const MOCK_AMOUNT_PAISE = 899900;
 
-function contractPayload(status: string) {
+function contractPayload(
+  status: string,
+  overrides?: { authorized?: boolean; razorpay_order_id?: string | null },
+) {
+  const authorized = overrides?.authorized ?? status !== "AWAITING_BUYER_AUTH";
   return {
     contract: {
       id: MOCK_CONTRACT_ID,
       display_code: "E2E-0001",
       intent_id: "intent_e2e",
       offer_id: "off_e2e",
-      buyer_authority: {
-        max_amount_paise: MOCK_AMOUNT_PAISE,
-        currency: "INR",
-        authorized_at: new Date().toISOString(),
-        authorized_by: "demo-buyer",
-        scope: "single_purchase",
-        contract_hash_at_authorization: "deadbeef",
-      },
+      buyer_authority: authorized
+        ? {
+            max_amount_paise: MOCK_AMOUNT_PAISE,
+            currency: "INR",
+            authorized_at: new Date().toISOString(),
+            authorized_by: "demo-buyer",
+            scope: "single_purchase",
+            contract_hash_at_authorization: "deadbeef",
+          }
+        : null,
       offer_hash: "hash_offer",
       promise_set_hash: "hash_promises",
-      contract_hash: "hash_contract",
-      razorpay_order_id: MOCK_ORDER_ID,
+      contract_hash: authorized ? "deadbeef" : "hash_contract",
+      razorpay_order_id:
+        overrides?.razorpay_order_id !== undefined
+          ? overrides.razorpay_order_id
+          : status === "AWAITING_BUYER_AUTH"
+            ? null
+            : MOCK_ORDER_ID,
       razorpay_payment_id: null,
       amount_paise: MOCK_AMOUNT_PAISE,
       status,
@@ -94,6 +105,9 @@ test.describe("razorpay checkout options", () => {
     await requireServers(api, test.skip);
 
     // ---- route mocks: the whole page talks to mocked API shapes ----------
+    let authorizeCalls = 0;
+    let orderCalls = 0;
+    let contractGets = 0;
     const orderResponse = {
       mode: "live-test-mode",
       razorpay_order: {
@@ -123,12 +137,27 @@ test.describe("razorpay checkout options", () => {
               merchant_id: "aster-electronics",
               sku: "AST-E2E-001",
               title: "Zephyr QuietMax 45 Wireless ANC Over-Ear Headphones",
+              brand: "Zephyr",
+              category: "headphones",
               variant: {},
               unit_amount_paise: 899900,
               currency: "INR",
               inventory: 58,
-              delivery_promise: {},
-              terms: {},
+              delivery_promise: {
+                min_days: 1,
+                max_days: 3,
+                promised_by_date: null,
+                service: "AsterExpress",
+              },
+              terms: {
+                warranty_type: "manufacturer",
+                warranty_duration_months: 24,
+                warranty_region: "IN",
+                return_window_days: 10,
+                replacement_window_days: 10,
+                condition: "new",
+                region: "IN",
+              },
             },
             explanation: "all hard constraints hold",
             softScores: [],
@@ -146,24 +175,46 @@ test.describe("razorpay checkout options", () => {
       },
     );
 
+    // NOTE route order: Playwright matches patterns LIFO, so the more
+    // specific /authorize and /payment-order routes are registered AFTER the
+    // bare contract-id route. Each mock flips the contract status the way the
+    // real server would as the buyer walks Stage 1.
     await page.route("**/api/intents/**", (route) => route.fulfill({ status: 404, body: "{}" }));
-    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}`, async (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(contractPayload("PAYMENT_ORDER_CREATED")) }),
-    );
-    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}/authorize`, async (route) =>
-      route.fulfill({
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}/authorize`, async (route) => {
+      authorizeCalls += 1;
+      await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(contractPayload("AWAITING_BUYER_AUTH")),
-      }),
-    );
-    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}/payment-order`, async (route) =>
-      route.fulfill({
+        body: JSON.stringify(
+          contractPayload("PAYMENT_ORDER_CREATED", {
+            authorized: true,
+            razorpay_order_id: MOCK_ORDER_ID,
+          }),
+        ),
+      });
+    });
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}/payment-order`, async (route) => {
+      orderCalls += 1;
+      await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(orderResponse),
-      }),
-    );
+      });
+    });
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}`, async (route) => {
+      contractGets += 1;
+      const authorized = authorizeCalls > 0;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          contractPayload(authorized ? "PAYMENT_ORDER_CREATED" : "AWAITING_BUYER_AUTH", {
+            authorized,
+            razorpay_order_id: authorized ? MOCK_ORDER_ID : null,
+          }),
+        ),
+      });
+    });
 
     // ---- the point of the whole spec: stub checkout.js -------------------
     await page.route(

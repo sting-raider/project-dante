@@ -23,16 +23,17 @@ def make_store() -> Any:
     """Resolve the store backend from DANTE_STORE_BACKEND.
 
     Kept in db/__init__ so both this factory and db.store's module-level
-    STORE share one resolution path. Postgres connection problems surface on
-    first use rather than at import time.
+    STORE share one resolution path.
+
+    Failure postures: missing DATABASE_URL under the postgres backend
+    raises immediately (operator misconfiguration must be loud); an
+    unreachable-but-configured database defers its error to first use.
     """
     backend = (os.environ.get("DANTE_STORE_BACKEND") or "json").strip().lower()
     if backend in ("postgres", "pg"):
         from project_dante.db.pg_store import PostgresStore
 
         store = PostgresStore(os.environ.get("DATABASE_URL") or None)
-        # DB may not be up yet at import time; first real use re-raises a
-        # clear PostgresStoreError instead of crashing imports.
         with contextlib.suppress(Exception):
             store.ensure_schema()
         return store
