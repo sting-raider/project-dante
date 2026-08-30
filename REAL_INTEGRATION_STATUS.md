@@ -47,7 +47,7 @@ gateway is on the other end:
 
 | Claim about the real world | Sandbox can prove it? | What could still break for real |
 | --- | --- | --- |
-| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (and they do — 470 tests green; Postgres integration is skipped when unavailable) | nothing code-level, but see every row below |
+| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (and they do — 475 tests green; Postgres integration is skipped when unavailable) | nothing code-level, but see every row below |
 | Request/response shapes match Razorpay's actual REST API | No — shapes follow current docs, unverified against the service | undocumented required fields; error envelopes we don't map |
 | Auth works with a real account's credentials | No — synthetic key only | revoked/wrong keys, IP rules, account holds |
 | A browser can complete Standard Checkout against OUR order id | No — no real checkout session exists | key/amount/currency mismatches rejected client-side |
@@ -108,10 +108,12 @@ BEGIN-RUN / END-RUN blocks below.
 
 ## Where the keys go
 
-**No Razorpay credentials are present in this repository or environment**
-(and live `rzp_live_*` keys would be hard-rejected at startup anyway per
-`LiveKeyRejected`). To enable real-integration mode, create/edit the env files
-that `apps/api/project_dante/settings.py` reads (later entries win):
+**No Razorpay credentials are committed to this repository or persisted in its
+env files.** The currently running local API may receive Test Mode credentials
+through its process environment; live `rzp_live_*` keys would be hard-rejected
+at startup anyway per `LiveKeyRejected`. To enable real-integration mode for a
+fresh process, create/edit the env files that
+`apps/api/project_dante/settings.py` reads (later entries win):
 
 - Repo root: `X:/RazorPay Buildathon/.env` (general), and/or
 - App-local: `X:/RazorPay Buildathon/apps/api/.env` (overrides root)

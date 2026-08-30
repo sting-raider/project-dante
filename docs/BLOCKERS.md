@@ -1,8 +1,13 @@
-# BLOCKERS — human input required
+# BLOCKERS — human action required for final proof
 
-Nothing else blocks autonomous progress. When you can, provide:
+The local API is currently configured with Razorpay Test Mode and Groq in
+process memory, and a real Razorpay order already exists. The only remaining
+requirement-5 action that cannot be completed headlessly is the human Standard
+Checkout payment that must cause Razorpay's webhook to reach the public HTTPS
+endpoint; after that, the verifier can finish the synthetic breach, rights,
+remedy, refund, replay, and evidence checks.
 
-## 1. Razorpay Test Mode credentials (needed for real-money-path proof)
+## 1. If starting a fresh API process: Razorpay Test Mode credentials
 
 Copy `.env.example` → `.env` at repo root and fill:
 
