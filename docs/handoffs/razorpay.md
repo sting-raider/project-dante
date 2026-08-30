@@ -51,7 +51,8 @@ gate, tests, and the Test Mode setup guide.
   malformed or conflicting captures are audited and withheld; fast ACK, no
   external calls beyond verification.
 - `docs/RAZORPAY.md`: Test Mode keys, env vars, dashboard webhook setup,
-  test cards (`4111 1111 1111 1111`), localhost tunnel note, troubleshooting.
+  UPI `success@razorpay` / domestic test-card guidance, localhost tunnel note,
+  troubleshooting.
 
 ## Files changed
 

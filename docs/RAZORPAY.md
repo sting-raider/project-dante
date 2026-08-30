@@ -100,13 +100,19 @@ The endpoint:
 
 ## 4. Test cards
 
+For a domestic Indian Test Mode payment, the most reliable path is UPI
+`success@razorpay`. Razorpay's current test-card matrix should be used for
+card-specific coverage; do not assume an international Visa number works on a
+domestic-only account.
+
 | Card | Behaviour |
 |---|---|
-| `4111 1111 1111 1111` — any future expiry, any CVV | success |
+| A domestic Indian test card from Razorpay's current matrix — any future expiry, any CVV | success |
 | Any VISA test number ending `0000` with failure method below | forced failure |
 
-Other useful instruments in Test Mode: netbanking "success" bank, UPI
-`success@razorpay`. Full matrix: <https://razorpay.com/docs/payments/payments/test-card-details/>
+Other useful instruments in Test Mode: netbanking "success" bank. Full card
+matrix: <https://razorpay.com/docs/payments/payments/test-card-details/>.
+UPI details: <https://razorpay.com/docs/payments/payments/test-upi-details/>.
 
 ## 5. Refunds
 
