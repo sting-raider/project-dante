@@ -583,9 +583,11 @@ export function useContractFlow() {
   );
 
   /**
-   * Live-test-mode path: verify the Standard Checkout handler payload
-   * server-side. Client success alone is NOT treated as final truth —
-   * the caller then polls until the webhook confirms PAID.
+   * Legacy compatibility path for callers that still submit the Standard
+   * Checkout callback. Client success alone is NOT treated as final truth —
+   * the signature-verified webhook owns PAID. The contract page intentionally
+   * does not call this endpoint in the live-test flow, so a clean checkout
+   * leaves no client-verification audit event behind.
    */
   const verifyClient = useCallback(
     async (
