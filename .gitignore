@@ -43,3 +43,4 @@ evals/reports/.pytest-subsets/
 
 test-results/
 playwright-report/
+graphify-out/
