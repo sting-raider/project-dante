@@ -242,7 +242,8 @@ cd apps/api && DANTE_STORE_PATH=/tmp/e.json .venv/Scripts/python.exe ../../evals
 2. Dashboard → Settings → Webhooks → add `https://your-domain/api/webhooks/razorpay`,
    event `payment.captured`, `refund.processed`; set secret as `RAZORPAY_WEBHOOK_SECRET`
 3. Restart — health endpoint flips to `"razorpay": "live-test-mode"`, UI badges change
-4. Pay with test card `4111 1111 1111 1111` (any future expiry/CVV)
+4. Complete Test Mode checkout with UPI `success@razorpay`, or a domestic
+   Indian test card from Razorpay's current matrix
 
 Full guide: docs/RAZORPAY.md.
 

@@ -492,7 +492,8 @@ def run_flow(
         print("ACTION REQUIRED (human): complete the REAL Razorpay Standard Checkout")
         print(f"  Open: {pay_url}")
         print(f"  Order: {order_id}  Amount: {amount_paise} paise")
-        print("  (use a TEST card, e.g. 4111 1111 1111 1111 - never a real card)")
+        print("  (use UPI success@razorpay, or a domestic Indian Test Mode card")
+        print("   from Razorpay's current test-card matrix - never a real card)")
         print(f"  Waiting up to {int(wait_s)}s for the signature-verified webhook to grant PAID...")
         print("=" * 78)
         if open_browser:
