@@ -20,18 +20,19 @@ Exit code 0 iff violations == 0.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import (  # noqa: E402
+    exact,
     load_dataset,
     print_case,
     require_modules,
     summarize,
     threshold_check,
-    exact,
     write_report,
 )
 
@@ -54,18 +55,23 @@ def _seed_contract(
             "status": status or ("PAID" if captured > 0 else "PAYMENT_ORDER_CREATED"),
             "intent_id": "int_eval",
             "offer_id": "off_eval",
-            "amount_paise": contract_amount,
+            "amount_paise": captured,
             "razorpay_payment_id": f"pay_eval_{contract_id}" if captured > 0 else None,
         }
     )
 
 
-# module-level so _seed_contract can read the per-case contract amount
-contract_amount = 1149900
-
-
 def run(limit: int | None = None) -> dict:
-    global contract_amount
+    # This runner exercises policy/executor safety with synthetic gateway
+    # records.  The repository may also have real Razorpay Test Mode keys in
+    # its root .env for the integration verifier; never let those credentials
+    # turn an eval case's fake payment id into a provider money call.
+    os.environ["RAZORPAY_KEY_ID"] = ""
+    os.environ["RAZORPAY_KEY_SECRET"] = ""
+    from project_dante.settings import get_settings
+
+    get_settings.cache_clear()
+
     ok, missing = require_modules(IMPORTS)
     if not ok:
         return _not_run(missing)
@@ -88,7 +94,9 @@ def run(limit: int | None = None) -> dict:
     failures: list[dict] = []
     violations = 0  # unauthorized ALLOWs / over-executions
 
-    def _run_executor_case(case: dict, cid: str, case_failures: list[str]) -> tuple[int, dict | None]:
+    def _run_executor_case(
+        case: dict, cid: str, case_failures: list[str]
+    ) -> tuple[int, dict | None]:
         """Seed contract+remedy(+payment owner), run execute_remedy; count refund records."""
         from project_dante.domain.money.policy import execute_remedy
 
@@ -101,7 +109,6 @@ def run(limit: int | None = None) -> dict:
         pay_id = prop.get("razorpay_payment_id") or f"pay_eval_{contract_id}"
         owner_cid = prop.get("payment_owner_contract_id")
 
-        contract_amount = captured
         STORE.reset()
         # The executor is a post-breach path. Starting at PAID would be an
         # impossible lifecycle fixture (PAID cannot jump to REMEDY_PLANNING)
@@ -143,7 +150,8 @@ def run(limit: int | None = None) -> dict:
             seed_gateway_payment(pay_id, captured)
         else:
             STORE.update(contract_id, razorpay_payment_id=pay_id)
-            seed_gateway_payment(pay_id, captured)
+            if case.get("seed_gateway_payment", True):
+                seed_gateway_payment(pay_id, captured)
 
         breach_id = "br_eval"
         STORE.put(
@@ -204,7 +212,8 @@ def run(limit: int | None = None) -> dict:
                     if n_refunds > 0:
                         violations += n_refunds
                         case_failures.append(
-                            f"{n_refunds} refund effect(s) produced for a proposal that must not execute"
+                            f"{n_refunds} refund effect(s) produced for a proposal "
+                            "that must not execute"
                         )
                 elif expect == "EXACTLY_ONE_REFUND":
                     max_exec = int(case.get("expect_max_executions", 1))
@@ -222,7 +231,13 @@ def run(limit: int | None = None) -> dict:
                     case_failures.append(f"unhandled executor-path expectation {expect}")
                 passed = not case_failures
                 results.append({"id": cid, "passed": passed, "expect": expect})
-                print_case(cid, passed, ("; ".join(case_failures)[:200] if case_failures else f"refunds={n_refunds}"))
+                print_case(
+                    cid,
+                    passed,
+                    "; ".join(case_failures)[:200]
+                    if case_failures
+                    else f"refunds={n_refunds}",
+                )
                 if not passed:
                     failures.append({"case_id": cid, "reason": "; ".join(case_failures)})
                 STORE.reset()
@@ -259,13 +274,12 @@ def run(limit: int | None = None) -> dict:
             elif expect == "ALLOW_OR_APPROVAL":
                 if raised is None and decision is not None:
                     d = decision.get("decision")
-                    if d == "ALLOW" and case.get("allow_allowed"):
-                        pass
-                    elif d in ("ALLOW", "REQUIRE_APPROVAL"):
+                    if d in ("ALLOW", "REQUIRE_APPROVAL"):
                         pass
                     else:
                         case_failures.append(
-                            f"expected ALLOW/REQUIRE_APPROVAL, got {d} ({decision.get('reason_codes')})"
+                            f"expected ALLOW/REQUIRE_APPROVAL, got {d} "
+                            f"({decision.get('reason_codes')})"
                         )
             else:  # exact expectation: ALLOW | REQUIRE_APPROVAL | DENY
                 if raised is not None:
@@ -286,14 +300,22 @@ def run(limit: int | None = None) -> dict:
             )
             passed = not case_failures
             results.append({"id": cid, "passed": passed, "expect": expect})
-            print_case(cid, passed, ("; ".join(case_failures)[:180] if case_failures else detail[:120]))
+            print_case(
+                cid,
+                passed,
+                "; ".join(case_failures)[:180]
+                if case_failures
+                else detail[:120],
+            )
             if not passed:
                 failures.append({"case_id": cid, "reason": "; ".join(case_failures)})
             STORE.reset()
 
         except Exception as exc:  # harness-level failure, never swallow
             results.append({"id": cid, "passed": False})
-            failures.append({"case_id": cid, "reason": f"harness error {exc.__class__.__name__}: {exc}"})
+            failures.append(
+                {"case_id": cid, "reason": f"harness error {exc.__class__.__name__}: {exc}"}
+            )
             print_case(cid, False, f"harness error: {exc}")
 
     summarize(results)

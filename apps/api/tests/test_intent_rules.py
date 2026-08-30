@@ -444,6 +444,115 @@ def test_llm_schema_allows_none_and_flat_scalar_lists():
     assert s.hard_constraints[0].value is None
 
 
+def test_llm_schema_valid_but_semantically_wrong_keys_fall_back_to_rules():
+    """A provider alias must not turn a valid request into zero offers."""
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+    from project_dante.domain.events import LOG
+
+    class StubProvider:
+        retries = 0
+
+        def __init__(self, draft):
+            self.draft = draft
+
+        async def structured(self, **_kwargs):
+            return self.draft
+
+    # This is the schema-valid shape returned by the failing Groq run.  None
+    # of these aliases are evaluator paths, so accepting them would make all
+    # 112 catalog offers fail despite the buyer request being feasible.
+    draft = CompiledIntentSchema.model_validate(
+        {
+            "hard_constraints": [
+                {"key": "price", "op": "lte", "value": 1_200_000},
+                {"key": "delivery_time", "op": "lte", "value": 3},
+                {
+                    "key": "warranty",
+                    "op": "eq",
+                    "value": "Indian manufacturer warranty",
+                },
+                {"key": "headphone_type", "op": "eq", "value": "over-ear ANC"},
+            ],
+            "max_total_amount_paise": 1_200_000,
+            "substitutions_allowed": True,
+        }
+    )
+
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=StubProvider(draft)).compile(HERO)
+    )
+    try:
+        assert intent.compiler_version == "rules-v1"
+        keys = {c.key for c in intent.hard_constraints}
+        assert {
+            "max_price_paise",
+            "category",
+            "attributes.form_factor",
+            "attributes.anc",
+            "warranty.type",
+            "warranty.region",
+            "delivery_deadline",
+        } <= keys
+        assert not keys & {"price", "delivery_time", "warranty", "headphone_type"}
+
+        compiled = next(
+            event
+            for event in reversed(LOG.for_aggregate(intent.id))
+            if event["event_type"] == "INTENT_COMPILED"
+        )
+        assert compiled["payload"]["engine"] == "rules"
+    finally:
+        STORE.delete(intent.id)
+
+
+def test_llm_schema_valid_and_semantically_matching_keeps_llm_path():
+    """A canonical provider response remains usable after the semantic gate."""
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+    from project_dante.domain.events import LOG
+
+    class StubProvider:
+        retries = 0
+
+        def __init__(self, draft):
+            self.draft = draft
+
+        async def structured(self, **_kwargs):
+            return self.draft
+
+    rules = rule_compile(HERO)
+    draft = CompiledIntentSchema.model_validate(
+        {
+            "hard_constraints": [
+                c.model_dump(mode="json") for c in rules.hard_constraints
+            ],
+            "soft_preferences": [
+                p.model_dump(mode="json") for p in rules.soft_preferences
+            ],
+            "max_total_amount_paise": rules.max_total_amount_paise,
+            "substitutions_allowed": rules.substitutions_allowed,
+        }
+    )
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=StubProvider(draft)).compile(HERO)
+    )
+    try:
+        assert intent.compiler_version == "llm-v1"
+        compiled = next(
+            event
+            for event in reversed(LOG.for_aggregate(intent.id))
+            if event["event_type"] == "INTENT_COMPILED"
+        )
+        assert compiled["payload"]["engine"] == "llm"
+    finally:
+        STORE.delete(intent.id)
+
+
 # ------------------------------------------------- hardening wave (input sanitization)
 
 

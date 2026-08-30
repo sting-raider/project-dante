@@ -47,7 +47,7 @@ gateway is on the other end:
 
 | Claim about the real world | Sandbox can prove it? | What could still break for real |
 | --- | --- | --- |
-| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (and they do — 475 tests green; Postgres integration is skipped when unavailable) | nothing code-level, but see every row below |
+| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (and they do — 478 passed, 15 skipped, 1 warning, 4 subtests passed; Postgres integration is skipped when unavailable) | nothing code-level, but see every row below |
 | Request/response shapes match Razorpay's actual REST API | No — shapes follow current docs, unverified against the service | undocumented required fields; error envelopes we don't map |
 | Auth works with a real account's credentials | No — synthetic key only | revoked/wrong keys, IP rules, account holds |
 | A browser can complete Standard Checkout against OUR order id | No — no real checkout session exists | key/amount/currency mismatches rejected client-side |
@@ -234,3 +234,158 @@ successful complete runs.)*
 - RUN RESULT: FAILED - timed out after 600s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
 - RUN ENDED: 2026-08-30T12:58:31+05:30
 <!-- END-RUN 2026-08-30T12-48-30+05-30 -->
+
+<!-- BEGIN-RUN 2026-08-30T14-37-48+05-30 -->
+- RUN STARTED: 2026-08-30T14:37:48+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T14:37:48+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T14:37:48+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:37:48+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T14:37:48+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:37:48+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+- RUN RESULT: FAILED
+- RUN ENDED: 2026-08-30T14:39:49+05:30
+<!-- END-RUN 2026-08-30T14-37-48+05-30 -->
+
+<!-- BEGIN-RUN 2026-08-30T14-41-05+05-30 -->
+- RUN STARTED: 2026-08-30T14:41:05+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T14:41:05+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T14:41:05+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:41:05+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T14:41:05+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:41:05+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+
+<!-- BEGIN-RUN 2026-08-30T14-55-56+05-30 -->
+- RUN STARTED: 2026-08-30T14:55:56+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T14:55:56+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T14:55:56+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:55:56+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T14:55:56+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T14:55:56+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+
+<!-- BEGIN-RUN 2026-08-30T15-04-54+05-30 -->
+- RUN STARTED: 2026-08-30T15:04:54+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T15:04:54+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T15:04:54+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T15:04:54+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T15:04:54+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T15:04:54+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+
+<!-- BEGIN-RUN 2026-08-30T15-05-22+05-30 -->
+- RUN STARTED: 2026-08-30T15:05:22+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T15:05:22+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T15:05:22+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T15:05:22+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T15:05:22+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T15:05:22+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+  - 2026-08-30T15:20:23+05:30 FAIL: timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+- RUN RESULT: FAILED - timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+- RUN ENDED: 2026-08-30T15:20:23+05:30
+<!-- END-RUN 2026-08-30T15-05-22+05-30 -->
+
+<!-- BEGIN-RUN 2026-08-30T17-42-52+05-30 -->
+- RUN STARTED: 2026-08-30T17:42:52+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T17:42:52+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T17:42:53+05:30 resume: contract=con_288908861666 status=PAYMENT_ORDER_CREATED existing_order=order_TVrsw4Cp8pHSm0
+  - 2026-08-30T17:42:53+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T17:42:53+05:30 ORDER (REAL): order_TVrsw4Cp8pHSm0
+  - 2026-08-30T17:42:53+05:30 checkout: browser open disabled; manual URL is http://100.127.204.6:3000/contract/con_288908861666
+  - 2026-08-30T17:57:53+05:30 FAIL: timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TVrsw4Cp8pHSm0 (amount 649900 paise, checkout key rzp_test_<redacted>) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+- RUN RESULT: FAILED - timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+- RUN ENDED: 2026-08-30T17:57:53+05:30
+<!-- END-RUN 2026-08-30T17-42-52+05-30 -->
+
+<!-- BEGIN-RUN 2026-08-30T18-10-47+05-30 -->
+- RUN STARTED: 2026-08-30T18:10:47+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T18:10:47+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T18:10:47+05:30 reset: products=112 (clean store for unambiguous evidence)
+  - 2026-08-30T18:10:55+05:30 compile: intent=int__d82df73151a2 engine=llm hard_constraints=4 (LLM never executes money)
+  - 2026-08-30T18:11:20+05:30 FAIL: no feasible offers found
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | NOT_RUN | - |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+- RUN RESULT: FAILED - no feasible offers found
+- RUN ENDED: 2026-08-30T18:11:20+05:30
+<!-- END-RUN 2026-08-30T18-10-47+05-30 -->
+
+<!-- BEGIN-RUN 2026-08-30T18-22-27+05-30 -->
+- RUN STARTED: 2026-08-30T18:22:27+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-08-30T18:22:27+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-08-30T18:22:27+05:30 reset: products=112 (clean store for unambiguous evidence)
+  - 2026-08-30T18:22:40+05:30 compile: intent=int__0967132ae934 engine=rules hard_constraints=7 (LLM never executes money)
+  - 2026-08-30T18:22:44+05:30 search: 13 results, 2 feasible; sku=AST-HP-005 amount_paise=649900
+  - 2026-08-30T18:22:44+05:30 freeze: contract=con_504234196339 promises=14 psh=8bcb22b2a7c4
+  - 2026-08-30T18:22:44+05:30 authorize: hash=0334c5b31019 scope=single_purchase
+  - 2026-08-30T18:22:44+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TVzJFFW0vGooyP (amount 649900 paise, checkout key rzp_test_<redacted>)
+  - 2026-08-30T18:22:44+05:30 ORDER (REAL): order_TVzJFFW0vGooyP
+  - 2026-08-30T18:22:44+05:30 checkout: browser open disabled; manual URL is http://localhost:3000/contract/con_504234196339
+  - 2026-08-30T18:37:44+05:30 FAIL: timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TVzJFFW0vGooyP (amount 649900 paise, checkout key rzp_test_<redacted>) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+- RUN RESULT: FAILED - timed out after 900s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+- RUN ENDED: 2026-08-30T18:37:44+05:30
+<!-- END-RUN 2026-08-30T18-22-27+05-30 -->

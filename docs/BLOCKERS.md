@@ -43,7 +43,7 @@ LLM_API_KEY=sk-...
 # or Groq's OpenAI-compatible endpoint
 LLM_PROVIDER=groq
 LLM_BASE_URL=https://api.groq.com/openai/v1
-LLM_MODEL=groq/compound
+LLM_MODEL=qwen/qwen3.8-27b
 LLM_API_KEY=<groq-api-key>
 ```
 
