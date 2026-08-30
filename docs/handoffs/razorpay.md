@@ -14,8 +14,8 @@ gate, tests, and the Test Mode setup guide.
   - **LiveTestModeClient**: real Razorpay Test Mode REST via httpx (Basic auth,
     `https://api.razorpay.com/v1`); orders / payments / refunds; secrets never
     logged or serialized into exceptions.
-  - **SandboxClient**: zero network; mints Razorpay-shaped ids
-    (`order_`/`pay_`/`rf_` + 14 alphanumerics); persists STORE records
+  - **SandboxClient**: zero network; mints clearly synthetic Razorpay-shaped ids
+    (`order_`/`pay_`/`rf_` + 14 alphanumerics; real provider refunds use `rfnd_`); persists STORE records
     (`razorpay_order`/`razorpay_payment`/`razorpay_refund`) all flagged
     `"sandbox": true`; computes REAL HMAC-SHA256 signatures under a clearly
     synthetic key so verification paths are genuinely exercised.
@@ -46,8 +46,10 @@ gate, tests, and the Test Mode setup guide.
   zero domain effect; `payment.captured` is the ONLY grantor of PAID with
   amount-tampering guard; out-of-order captures walk the legal transition path
   to PAID logging STATE_RECONCILED hops (forced reconciliation documented if no
-  legal path exists); post-PAID states never regress; fast ACK, no external
-  calls beyond verification.
+  legal path exists); post-PAID states never regress; capture payment ids and
+  known order/payment projections must agree before any PAID transition;
+  malformed or conflicting captures are audited and withheld; fast ACK, no
+  external calls beyond verification.
 - `docs/RAZORPAY.md`: Test Mode keys, env vars, dashboard webhook setup,
   test cards (`4111 1111 1111 1111`), localhost tunnel note, troubleshooting.
 
@@ -91,6 +93,9 @@ POST /api/demo/razorpay/simulate-event    {delivered:true, synthetic:true, event
 
 Notes for consumers:
 - sandbox `checkout_config.key_id` is `""` by design (honest UI signal).
+- The API's `checkout_config.key_id` is mapped to Standard Checkout's public
+  `key` option by the browser; `key_id` must never be passed to
+  `new Razorpay(...)`.
 - refunds raise `client.RazorpayError` (with `.status_code`) on provider-side
   failure and `ValueError` on non-positive/non-integer amounts.
 - `capture_sandbox_payment` raises `RazorpayError(404)` for unknown orders.
@@ -106,9 +111,11 @@ ruff check <all Agent B files> => All checks passed!
 Coverage highlights: signature happy+forged+tamper+empty-inputs; webhook
 duplicate x5 ⇒ single domain effect + 4 audited ignores; forged webhook ⇒ 401
 and nothing stored; out-of-order captured-before-pending reconciles to PAID;
-amount-mismatch capture never grants PAID; late capture after FULFILLING does
-not regress state; sandbox refund idempotency (identical refund id, single
+amount-mismatch or malformed/conflicting capture identity never grants PAID;
+late capture after FULFILLING does not regress state; sandbox refund idempotency (identical refund id, single
 STORE record, distinct keys distinct effects, over-refund rejected);
+refund payment/order binding conflicts are audited and withheld while
+refund-before-capture remains supported by the issued order;
 contract-drift blocks order with zero gateway records; full HTTP flow
 contract → order → simulate-event → PAID; simulate-event guard 403 when real
 keys present.
@@ -119,7 +126,8 @@ the suite stays green independently of other agents' modules.
 ## Post-review fixes (integration + red team)
 
 **CLOSED by security-lead after re-verification:** 72/0/0 on security suites,
-303 passed full API tree. Two permanent regression attacks added to
+470 passed full API tree (15 Postgres/Docker skips). Capture-binding regression coverage was added alongside the
+two permanent regression attacks in
 test_webhook_chaos.py (graft-block on non-payable contracts, post-paid
 idempotency under late redelivery). Secrets allowlist pruned to a single
 entry: the clearly-labelled synthetic sandbox key in client.py

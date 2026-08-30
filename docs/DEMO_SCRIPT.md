@@ -1,7 +1,8 @@
 # DEMO SCRIPT — Project Dante (5 minutes)
 
-> Fulfillment events are SYNTHETIC. Razorpay payment/refund run against Test Mode
-> (or the clearly-badged sandbox adapter when no keys are configured).
+> Fulfillment events are SYNTHETIC. When `rzp_test_*` keys are configured,
+> payment/refund use Razorpay Test Mode; otherwise the clearly-badged sandbox
+> adapter is the active rail.
 
 ## Pre-flight (before recording)
 
@@ -11,10 +12,13 @@
    contracts vanish ("Unknown contract") and demo calls 404. On Windows:
    `netstat -ano | findstr ":8000 :3000"`, kill stale PIDs
    (`taskkill /PID <pid> /F`) before starting anything.
-2. `docker compose up -d postgres redis`
+2. Optional: start `docker compose up -d postgres redis` only when exercising
+   the reserved infrastructure. The default JSON-store demo needs neither
+   Docker nor Redis.
 3. API: `cd apps/api && uv run uvicorn project_dante.api.app:app --port 8000`
 4. Web: `cd apps/web && npm run dev`
-5. Verify (from `apps/api`, with the API running): `.venv/Scripts/python.exe ../../scripts/verify_e2e.py` → must print PASSED
+5. Verify (from the **repository root**, with the API running):
+   `apps/api/.venv/Scripts/python.exe scripts/verify_e2e.py` → must print PASSED
 6. Browser: open `http://localhost:3000`, keep `/demo` panel open in second tab.
 
 ## Shot list
@@ -24,7 +28,7 @@
 | 0:00–0:25 | `/` | Landing | Thesis: payments remember that you paid; Dante remembers what you paid for. |
 | 0:25–1:05 | `/buy` | Paste hero brief, Compile | Intent becomes typed constraints; merchant searched; offers ranked with visible failures. |
 | 1:05–1:40 | `/contract/[id]` | Select offer | Promise Ledger freezes warranty/region/delivery; hashes shown; why each promise was material. |
-| 1:40–2:25 | contract page | Authorize & pay | Policy ALLOW → real Razorpay test order → checkout → webhook flips PAID from server truth. |
+| 1:40–2:25 | contract page | Authorize & pay | Policy ALLOW → order on the active rail (real Razorpay Test Mode or sandbox adapter) → checkout/simulate → signed webhook flips PAID from server truth. |
 | 2:25–3:10 | `/demo` then breach | Ship + deliver wrong_variant | Observed facts contradict frozen promises → MATERIAL BREACH spread. |
 | 3:10–4:00 | `/contract/[id]/remedy` | Rights graph + remedy | Replacement tried first → inventory unavailable → refund ranks first → policy ALLOW → execute refund. |
 | 4:00–4:35 | `/audit/[id]` + tests | Audit trail | Full event stream; webhook chaos + injection tests green. |
@@ -34,4 +38,4 @@
 
 - If checkout.js is flaky on camera: sandbox simulate button does the same signed-webhook path.
 - If live keys absent: say "sandbox adapter, identical signature-verified flow" — honest badge is visible.
-- Backup recording: the `verify_e2e.py` terminal output (see pre-flight step 4 for the exact invocation) is your proof.
+- Backup recording: the `verify_e2e.py` terminal output (see pre-flight step 5 for the exact invocation) is your proof.

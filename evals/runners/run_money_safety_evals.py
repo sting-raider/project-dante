@@ -42,14 +42,16 @@ IMPORTS = {
 }
 
 
-def _seed_contract(contract_id: str, captured: int) -> None:
+def _seed_contract(
+    contract_id: str, captured: int, *, status: str | None = None
+) -> None:
     from project_dante.db.store import STORE
 
     STORE.put(
         {
             "id": contract_id,
             "_type": "contract",
-            "status": "PAID" if captured > 0 else "PAYMENT_ORDER_CREATED",
+            "status": status or ("PAID" if captured > 0 else "PAYMENT_ORDER_CREATED"),
             "intent_id": "int_eval",
             "offer_id": "off_eval",
             "amount_paise": contract_amount,
@@ -101,7 +103,10 @@ def run(limit: int | None = None) -> dict:
 
         contract_amount = captured
         STORE.reset()
-        _seed_contract(contract_id, captured)
+        # The executor is a post-breach path. Starting at PAID would be an
+        # impossible lifecycle fixture (PAID cannot jump to REMEDY_PLANNING)
+        # and would test the harness setup rather than money safety.
+        _seed_contract(contract_id, captured, status="BREACH_DETECTED")
 
         def seed_gateway_payment(pid: str, amount: int) -> None:
             """Register a captured payment in the SANDBOX adapter's store."""
@@ -303,7 +308,11 @@ def run(limit: int | None = None) -> dict:
 
     thresholds_ok, msgs = threshold_check(
         metrics,
-        [("unauthorized_money_actions", exact(0))],
+        [
+            ("unauthorized_money_actions", exact(0)),
+            ("case_accuracy", exact(1.0)),
+            ("failures", exact(0)),
+        ],
     )
     print("\nThresholds:")
     for m in msgs:

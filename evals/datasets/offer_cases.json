@@ -10,11 +10,11 @@
   "scenarios": [
     {
       "id": "OFF-001",
-      "intent_text": "Buy me over-ear ANC headphones under ₹12,000 with Indian manufacturer warranty, delivered by Thursday.",
+      "intent_text": "Buy me over-ear ANC headphones under ₹12,000 with Indian manufacturer warranty, delivered within 2 days.",
       "catalog_filter": {
         "category": "headphones"
       },
-      "notes": "Hero scenario, Thursday deadline enforced as calendar date (+2 days from run day). Only max_days<=2 units can meet it; hero AST-HP-ANC-001 (4d) legitimately fails delivery. Decoys still fail on warranty/region/price keys where applicable.",
+      "notes": "Hero scenario, relative deadline is deterministic across run dates. Only max_days<=2 units can meet it; hero AST-HP-ANC-001 (4d) legitimately fails delivery. Decoys still fail on warranty/region/price keys where applicable.",
       "expect_feasible_skus": [
         "AST-HP-005"
       ],
@@ -125,7 +125,7 @@
           "failing_key": "max_price_paise"
         }
       ],
-      "notes": "On-ear under ₹3,000 new: HP-018 and HP-024 (both new) qualify; refurb HP-019 must fail condition (compiler gap C-3 means it currently passes — known failure)."
+      "notes": "On-ear under ₹3,000 new: HP-018 and HP-024 (both new) qualify; refurb HP-019 fails the condition gate."
     },
     {
       "id": "OFF-005",
@@ -219,7 +219,7 @@
       "catalog_filter": {
         "category": "routers"
       },
-      "notes": "RT-003 satisfies India-manufacturer-warranty (its stock region is AE but buyer constrained warranty, not stock). RT-011 is refurbished and must fail condition (compiler gap C-3: currently passes — known failure).",
+      "notes": "RT-003 satisfies India-manufacturer-warranty (its stock region is AE but buyer constrained warranty, not stock). RT-011 fails the new-only condition gate.",
       "expect_feasible_skus": [
         "AST-RT-004"
       ],
@@ -420,7 +420,7 @@
           "failing_key": "brand"
         }
       ],
-      "notes": "Brand constraint: rules path currently lacks catalog brands in _BRAND_CANON (gap C-4) — kept as ground truth; brand-key failures advisory until fixed."
+      "notes": "Explicit Zephyr brand phrasing is a hard constraint; non-Zephyr decoys fail the brand gate."
     },
     {
       "id": "OFF-017",
@@ -561,6 +561,10 @@
       ],
       "expect_infeasible": [
         {
+          "sku": "AST-CB-003",
+          "failing_key": "brand"
+        },
+        {
           "sku": "AST-CB-008",
           "failing_key": "max_price_paise"
         },
@@ -569,7 +573,7 @@
           "failing_key": "max_price_paise"
         }
       ],
-      "notes": "Brand constraint not parsed by rules path (gap C-4); ground truth kept minimal to price/cable category. CB-006 excluded via stock filter (advisory)."
+      "notes": "Aster brand-only gating keeps the two in-budget Aster cables; Voltaq CB-003 fails brand and CB-006 is excluded by inventory."
     },
     {
       "id": "OFF-024",
@@ -598,8 +602,7 @@
           "sku": "AST-MN-007",
           "failing_key": "condition"
         }
-      ],
-      "keep_known_failure": true
+      ]
     },
     {
       "id": "OFF-025",

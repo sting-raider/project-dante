@@ -13,7 +13,7 @@ plan: never fabricate results — skipped = skipped, fail = fail.
   T5 buyer prose / T6 merchant text / T7 evidence); STRIDE-per-boundary table;
   8 agent-specific threat classes with mitigations mapped to `file:function`;
   honest residual risks (best-effort persistence, single-process idempotency, dev
-  webhook-secret default, no edge rate limiting/auth).
+  webhook-secret default, no general edge authentication or distributed rate limiting).
 - **Red team suites** (`apps/api/tests/test_security_redteam.py`, `apps/api/tests/test_webhook_chaos.py`)
   covering all requested vectors a–j plus extras found valuable in review:
   client-payment-verification abuse, amount-mismatched capture guard, terminal-state
@@ -85,7 +85,9 @@ rejects all illegal transitions tested.
    storing frozen payload hashes at freeze time (integration wave item).
 3. Dev default webhook secret ships in settings; production must set env var.
 4. Single-process idempotency until Postgres unique constraints land; deploy single-replica.
-5. No rate limiting/auth on API edge (demo posture).
+5. Production has a bounded process-local API limiter (120 reads / 30 writes per client address
+   per rolling 60 seconds); health/readiness and signed webhook intake are exempt. There is still
+   no general API authentication or distributed limiter, so deployment remains single-replica.
 
 ## Integration notes
 
@@ -150,6 +152,6 @@ edits. Server boot-tested on port 8001: `/api/health` returned OK JSON
 (sandbox-adapter, deterministic-fallback), then killed cleanly. README eval command
 executed verbatim: all five suites PASS. No git commits made.
 
-Flagged for owners (outside this task's file scope): docs/DEMO_SCRIPT.md pre-flight
-step 4 says `python scripts/verify_e2e.py` without stating the cwd must be repo root —
-same relative-path hazard class as finding 1.
+Previously flagged runbook issue closed on 2026-08-29: docs/DEMO_SCRIPT.md now makes
+Docker/Postgres optional for the default JSON-store demo and states that the verifier
+must be invoked from the repository root with its exact path.

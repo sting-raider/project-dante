@@ -59,8 +59,8 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
 | `RAZORPAY_KEY_ID` | **SECRET** | `rzp_test_…` from Razorpay Test Mode. Live `rzp_live_…` keys are REJECTED at boot. |
 | `RAZORPAY_KEY_SECRET` | **SECRET** | Test-mode key secret (shown once — copy immediately). |
 | `RAZORPAY_WEBHOOK_SECRET` | **SECRET** | The secret you type into the Razorpay webhook form (§2). Must match exactly. |
-| `DEMO_OPERATOR_TOKEN` | **SECRET** | Required once real test keys exist: `/api/demo/*` state changes demand `X-Demo-Operator-Token`. Empty ⇒ endpoints LOCKED. Generate with `openssl rand -hex 32`. |
-| `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible`. Empty ⇒ deterministic rules engine. |
+| `DEMO_OPERATOR_TOKEN` | **SECRET** | Required for `/api/demo/*` state changes and human remedy approvals (`/api/remedies/{proposal_id}/approve`) via `X-Demo-Operator-Token`. Empty ⇒ those writes are LOCKED. Generate with `openssl rand -hex 32`. |
+| `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible` \| `groq` (`groq` uses the OpenAI-compatible adapter). Empty ⇒ deterministic rules engine. |
 | `LLM_MODEL` | no | Model name when a provider is configured. |
 | `LLM_API_KEY` | **SECRET** | Provider credential. Omit for rules engine. |
 | `PUBLIC_APP_URL` | no | Vercel web URL, e.g. `https://dante-web.vercel.app`. Used as the CORS allow-listed origin. |
@@ -73,6 +73,15 @@ The API allows origins from `settings.public_app_url` plus
 `http://localhost:3000`. Set `PUBLIC_APP_URL` to the exact Vercel production
 URL (scheme + host, no trailing slash). For Vercel preview deployments add
 the preview origin too or test preview features against localhost.
+
+### 1.3 API edge limits
+
+In production, the API applies a process-local rolling-window limiter per client
+address: 120 read requests and 30 write requests per 60 seconds. Health and
+readiness probes, CORS preflights, and the HMAC-verified Razorpay webhook path
+are exempt so provider retries are not throttled. The limiter is intentionally
+single-process; deploy one API replica for this buildathon and use a shared
+gateway limiter plus general authentication for a multi-replica deployment.
 
 ---
 
@@ -128,6 +137,9 @@ Note: the intake also tolerates `refund.completed` aliases and dedupes by
 
 Docker alternative: `docker build -f infra/docker/Dockerfile.web
 --build-arg NEXT_PUBLIC_API_URL=https://<api-host> -t dante-web ./apps/web`.
+The API and web build contexts include narrowly scoped `.dockerignore` files;
+local env files, runtime snapshots, virtualenvs, dependencies, and build
+caches are excluded before a remote builder receives the context.
 
 ---
 
@@ -171,5 +183,9 @@ Run these in order after both deploys land.
   snapshot lost). Mount the volume before demo day.
 - **Rollback**: Railway/Vercel both keep per-deploy snapshots — redeploy the
   previous build from their timelines.
+- **Request tracing**: each response exposes `X-Trace-Id` and
+  `X-Correlation-Id` (and `X-Contract-Id` on contract paths); the API emits a
+  structured `http_request_completed` JSON log without bodies, query strings,
+  credentials, or exception text.
 - **Local parity**: `.env.example` mirrors every variable above; docker
   images live under `infra/docker/`.

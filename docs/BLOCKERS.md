@@ -20,6 +20,10 @@ cd apps/api && .venv/Scripts/python.exe ../../scripts/verify_real_integration.py
 The script pauses once for the one human step (completing the test payment in
 the Razorpay window) and does everything else automatically.
 
+If that wait expires after an order was created, use
+`--resume-contract con_... --wait 600` to continue the same contract without
+resetting the store or creating a second Razorpay order.
+
 ## 2. LLM API key (optional but recommended for the final demo)
 
 Any one of:
@@ -31,6 +35,11 @@ LLM_PROVIDER=openai-compatible
 LLM_BASE_URL=https://api.openai.com/v1     # or any compatible endpoint
 LLM_MODEL=gpt-4o                            # or your gateway's model id
 LLM_API_KEY=sk-...
+# or Groq's OpenAI-compatible endpoint
+LLM_PROVIDER=groq
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=groq/compound
+LLM_API_KEY=<groq-api-key>
 ```
 
 ## 3. Deployment authorization

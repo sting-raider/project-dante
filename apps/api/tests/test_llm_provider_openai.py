@@ -40,7 +40,14 @@ class TinyOut(BaseModel):
 
 def _settings(**kw) -> Settings:
     """Settings with explicit llm fields (kwargs beat any local .env)."""
-    return Settings(**{"llm_provider": kw.pop("llm_provider", ""), **kw})
+    values = {
+        "llm_provider": kw.pop("llm_provider", ""),
+        "llm_model": "",
+        "llm_api_key": "",
+        "llm_base_url": "",
+    }
+    values.update(kw)
+    return Settings(**values)
 
 
 def _chat_response(content: str) -> httpx.Response:
@@ -62,6 +69,7 @@ def _chat_response(content: str) -> httpx.Response:
         # repo-wide secrets scanner walks it.
         ("anthropic", "key-anthropic-fixture", "anthropic"),
         ("openai-compatible", "sk-test", "openai-compatible"),
+        ("groq", "key-groq-fixture", "openai-compatible"),
         # configured but unusable -> '' -> rules engine
         ("anthropic", "", ""),
         ("openai-compatible", "", ""),
@@ -85,7 +93,7 @@ def test_engine_selection_matrix(provider, key, expected_engine):
 
 def test_get_provider_matches_llm_engine_for_every_combo():
     """get_provider must never disagree with settings.llm_engine."""
-    for provider in ("", "anthropic", "openai-compatible", "mistral"):
+    for provider in ("", "anthropic", "openai-compatible", "groq", "mistral"):
         for key in ("", "key-fixture-3"):
             s = _settings(llm_provider=provider, llm_api_key=key)
             p = get_provider(s)

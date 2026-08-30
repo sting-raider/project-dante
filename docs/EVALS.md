@@ -20,8 +20,8 @@ its output, transcribed.
 | Suite | Cases | Status | Headline metrics |
 |---|---|---|---|
 | Intent compilation | 68 | **PASS** | critical-constraint recall **1.0**, overall accuracy **1.0** |
-| Offer evaluation | 26 scenarios / 116 SKU checks | **PASS** | hard-constraint violation rate **0.0**, scenario accuracy **1.0** |
-| Breach verification | 25 | **PASS** | F1 **1.0** on supported keys / 0.75 all-keys, precision 1.0, FP 0 |
+| Offer evaluation | 26 scenarios / 117 SKU checks | **PASS** | hard-constraint violation rate **0.0**, scenario accuracy **1.0** |
+| Breach verification | 25 | **PASS** | F1 **1.0** across all exercised keys, precision 1.0, recall 1.0, FP 0 |
 | Money-action safety | 28 | **PASS** | unauthorized money actions **0**, case accuracy 1.0 |
 | Prompt-injection defense | 50 payloads | **PASS** | violations **0**, treated_as_data rate **1.0** |
 
@@ -43,7 +43,7 @@ warranty constraint), and empty input. Critical-recall gate: **100%**.
 
 26 scenarios keyed to the real catalog fixture (`fixtures/catalog/
 aster_catalog.json`, 112 products). The absolute bar from plan §30.2 — zero
-hard-constraint-violating selections — is met: **0 violations across 116
+hard-constraint-violating selections — is met: **0 violations across 117
 feasibility checks**, scenario accuracy 1.0. The evaluator now also treats
 zero/negative inventory as a hard failure, so out-of-stock SKUs can never be
 selected.
@@ -54,12 +54,11 @@ selected.
 `project_dante.domain.promises.verifier.evaluate_contract`: wrong-region
 (IN→AE) and warranty flips → material `MATERIAL_VARIANT_MISMATCH`; ~2h late →
 minor vs ~25h late → material `DELIVERY_SLA_MISS`; condition downgrade →
-critical; identical/cosmetic/early/improved values → no breach (10 true
-negatives, **0 false positives**). Within the verifier's observable surface
-F1 is **1.0**; six cases exercise keys outside that surface (`sku`, `brand`,
-`attributes.anc`, `warranty.duration_months`, `returns.window_days`,
-`accessories.included`) and are reported as an explicit coverage backlog rather
-than hidden — all-keys F1 counting them as misses is 0.75.
+critical; delivered-SKU, brand, ANC, warranty-duration, return-window, and
+accessory regressions are also checked; identical/cosmetic/early/improved
+values → no breach (10 true negatives, **0 false positives**). The current
+run records 15 true positives, 10 true negatives, 0 false positives, 0 false
+negatives: precision, recall, and F1 are all **1.0**.
 
 ### Money-action safety — PASS
 
@@ -87,13 +86,7 @@ are ever created.
 
 Honest boundaries that remain (none currently fail a gate):
 
-1. **Breach verifier coverage backlog**: delivered-SKU, brand, ANC-feature,
-   warranty-duration, return-window, and accessory observations are not
-   compared because those keys have no fact→promise mapping yet.
-2. **Multi-brand or-chains** reduce to the first-stated brand in the rules
-   compiler; full list parsing would need an evaluator-side multi-value match
-   to matter (it already supports `in` lists).
-3. **Calendar-sensitive demo deadlines**: weekday phrases resolve at run time;
+1. **Calendar-sensitive demo deadlines**: weekday phrases resolve at run time;
    a hero query said on the wrong day can legitimately yield zero feasible
    offers (fail-closed evaluator behavior, not a bug).
 
@@ -124,5 +117,6 @@ The eval loop caught and tracked real integration bugs during the build:
   module changes behavior, expectations are updated only when the change is
   semantically correct (e.g. brands as soft preferences per §12.1), never to
   mask bugs.
-- Run pytest before `run_all.py` if you want the reports to hold full-suite
-  numbers: the wrapper runs subsets and rewrites the same report files.
+- The pytest wrapper runs curated subsets and writes to the ignored
+  `evals/reports/.pytest-subsets/` directory; canonical full-suite reports are
+  written by `run_all.py` and are not overwritten by pytest.

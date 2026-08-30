@@ -77,7 +77,12 @@ def _promise_value(promises: list[dict[str, Any]], key: str) -> Any:
 
 
 def _reason_codes(breaches: list[dict[str, Any]]) -> set[str]:
-    return {b.get("reason_code") for b in breaches if b.get("reason_code")}
+    reasons: set[str] = set()
+    for breach in breaches:
+        reason_code = breach.get("reason_code")
+        if isinstance(reason_code, str) and reason_code:
+            reasons.add(reason_code)
+    return reasons
 
 
 # Material-breach reason codes the demo/verifier emits. A rights set is only
@@ -103,7 +108,8 @@ SLA_REASONS = {"DELIVERY_SLA_MISS", "DELIVERY_SLA_MINOR", "LATE_DELIVERY"}
 def _eval_predicate(pred: dict[str, Any], ctx: dict[str, Any]) -> bool:
     """Evaluate one frozen Predicate against the resolution context."""
     op = pred.get("op", "eq")
-    actual = ctx.get(pred.get("key"))
+    key = pred.get("key")
+    actual = ctx.get(key) if isinstance(key, str) else None
     expected = pred.get("value")
     try:
         if op == "eq":
@@ -141,9 +147,13 @@ def resolve_ctx(
     """
     ctx: dict[str, Any] = {}
     for p in promises:
-        ctx[p.get("key")] = p.get("value")
+        key = p.get("key")
+        if isinstance(key, str):
+            ctx[key] = p.get("value")
     for f in facts:
-        ctx[f.get("key")] = f.get("value")
+        key = f.get("key")
+        if isinstance(key, str):
+            ctx[key] = f.get("value")
 
     reasons = sorted(_reason_codes(breaches))
     ctx["breach.reason_codes"] = reasons

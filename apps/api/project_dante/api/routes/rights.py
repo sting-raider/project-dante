@@ -12,9 +12,10 @@ POST /api/remedies/{proposal_id}/execute  -> {money_action, refund|null, decisio
 from __future__ import annotations
 
 import contextlib
+import hmac
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from project_dante.db.store import STORE
 from project_dante.domain.remedies.planner import get_proposals, plan_remedies
@@ -23,8 +24,30 @@ from project_dante.domain.rights.engine import (
     evaluate_eligibility,
     get_breaches,
 )
+from project_dante.settings import get_settings
 
 router = APIRouter(tags=["rights"])
+
+
+def _require_human_approval_operator(token: str | None) -> None:
+    """Authenticate the operator who is allowed to approve money actions.
+
+    The domain approval gate still verifies the policy decision, amount, and
+    drift. This header gate supplies the missing request-level identity check;
+    an unconfigured token fails closed even in the offline sandbox.
+    """
+    configured = (get_settings().demo_operator_token or "").strip()
+    presented = token.strip() if isinstance(token, str) else ""
+    if not configured:
+        raise HTTPException(
+            status_code=503,
+            detail="human approval is not configured",
+        )
+    if not presented or not hmac.compare_digest(presented, configured):
+        raise HTTPException(
+            status_code=403,
+            detail="human approval requires a valid X-Demo-Operator-Token",
+        )
 
 
 def _strip(rec: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -143,10 +166,14 @@ async def remedy_execute(proposal_id: str) -> dict[str, Any]:
 
 
 @router.post("/remedies/{proposal_id}/approve")
-async def remedy_approve(proposal_id: str) -> dict[str, Any]:
+async def remedy_approve(
+    proposal_id: str,
+    x_demo_operator_token: str | None = Header(default=None),
+) -> dict[str, Any]:
     """Human approval path for REQUIRE_APPROVAL decisions, then executes."""
     from project_dante.domain.money.policy import approve_remedy
 
+    _require_human_approval_operator(x_demo_operator_token)
     _load_proposal(proposal_id)
     try:
         result = approve_remedy(proposal_id)

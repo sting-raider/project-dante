@@ -193,6 +193,29 @@ class PlannerRankingTests(unittest.TestCase):
         for p in others:
             self.assertEqual(p.get("rejected_reason"), "ranked_lower")
 
+    def test_ranked_lower_refund_is_not_an_executable_sibling(self):
+        _seed_breach_contract()
+        STORE.put(
+            {"_type": "fact", "id": "obs_repl_available_guard", "contract_id": "con_rem_1",
+             "key": "replacement.available", "value": True, "synthetic": True}
+        )
+        result = plan_remedies("con_rem_1")
+        # The planner may omit alternatives when replacement inventory is
+        # available, so model the persisted ranked-lower sibling that a
+        # previously generated plan or stale client could still address.
+        lower_refund = {
+            **result["chosen"],
+            "id": "rem_ranked_lower_refund",
+            "remedy_type": "refund_full",
+            "rank": 2,
+            "rejected_reason": "ranked_lower",
+        }
+        STORE.put(lower_refund)
+
+        with self.assertRaises(ValueError):
+            execute_remedy(lower_refund["id"])
+        self.assertEqual(STORE.count("razorpay_refund"), 0)
+
     def test_refund_first_when_replacement_unavailable(self):
         _seed_breach_contract()
         STORE.put(

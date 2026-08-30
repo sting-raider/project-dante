@@ -224,6 +224,10 @@ _BRAND_CANON = {
     "lumenx": "LumenX",
     "quanta": "Quanta",
     "nucleon": "Nucleon",
+    # Aster is both the demo merchant name and a catalog brand.  The parser
+    # treats the unqualified phrase "Aster Electronics" as the merchant, but
+    # still supports explicit "Aster brand" buyer constraints below.
+    "aster": "Aster",
 }
 
 def _repair_mojibake(text: str) -> str:
@@ -699,13 +703,13 @@ def extract_delivery(text_l: str, now: datetime | None = None) -> list[Constrain
 
 def extract_brands(text_l: str) -> tuple[list[Constraint], list[Preference]]:
     """Brand mentions -> hard constraints when phrased as a qualifier
-    ('Zephyr brand', 'Aster electronics', 'X brands only', 'only X',
+    ('Zephyr brand', 'Aster brand', 'X brands only', 'only X',
     'must be X'); ungated mentions become soft preferences (weight 0.8).
 
-    Multi-brand gating ('Orbio or Soniq brands only') reduces to the
-    FIRST-STATED brand as an ``in``-list — the dataset ground truth (INT-055)
-    freezes this documented reduction. Flagged for dataset revision since the
-    evaluator fully supports longer ``in`` lists.
+    Multi-brand gating ('Orbio or Soniq brands only') becomes a complete
+    ``in``-list in text order.  Independent, contradictory gated brand clauses
+    remain separate ``eq`` constraints, so the evaluator does not silently
+    broaden an AND into an OR.
 
     'noise' is never treated as a brand — in practice it appears only inside
     'noise cancelling'.
@@ -732,18 +736,33 @@ def extract_brands(text_l: str) -> tuple[list[Constraint], list[Preference]]:
         )
         after = (window.group(2) or "").lower() if window else ""
         before = (window.group(1) or "").lower() if window else ""
+
+        # "Aster Electronics" is normally the fictional merchant name, not a
+        # buyer brand requirement.  Do not invent a hard brand gate for that
+        # phrase; an explicit "Aster brand/branded" qualifier still passes
+        # through the normal gating rules.
+        if (
+            token == "aster"
+            and re.match(r"\s*electronics\b", after)
+            and not re.search(r"\bbrands?\b|\bbranded\b", after)
+        ):
+            continue
+
         gated = bool(
-            re.match(r"\s*(?:brand|brands|electronics)\b", after)
+            re.match(r"\s*(?:brand|brands|electronics|branded)\b", after)
+            or re.match(r"\s*[- ]?branded\b", after)
             or re.search(r"\b(?:only|must\s+be|exclusively)\b[^.,;]*$", before.strip())
             # "...or Soniq brands only": the trailing 'brands only' gates the
             # whole or-chain, so an earlier mention followed by ' or <brand>'
             # is part of the same accepted set
-            or re.match(r"\s*or\b", after)
-            and re.search(
-                rf"{re.escape(token)}\b[^.;]{{0,40}}\bbrands?\s+only", text_nc[window.start():]
+            or (
+                window is not None
+                and re.match(r"\s*or\b", after)
+                and re.search(
+                    rf"{re.escape(token)}\b[^.;]{{0,40}}\bbrands?\s+only",
+                    text_nc[window.start():],
+                )
             )
-            # bare "aster" is the store itself: buying from Aster = Aster brand
-            or token == "aster"
         )
         if gated:
             mentions.append((m.start(), token))
@@ -753,8 +772,26 @@ def extract_brands(text_l: str) -> tuple[list[Constraint], list[Preference]]:
     mentions.sort()
     hard: list[Constraint] = []
     if len(mentions) > 1:
-        # first-stated gated brand wins (dataset-documented reduction)
-        hard.append(Constraint(key="brand", op="in", value=[mentions[0][1]]))
+        values: list[str] = []
+        for _pos, token in mentions:
+            if token not in values:
+                values.append(token)
+
+        # Only an explicit "or" chain denotes alternatives.  Multiple
+        # independent gated clauses are conjunctive and therefore remain
+        # separate equality constraints (which safely becomes infeasible when
+        # the catalog cannot satisfy both).
+        has_or_chain = any(
+            re.search(
+                r"\bor\b",
+                text_nc[mentions[i][0] + len(mentions[i][1]) : mentions[i + 1][0]],
+            )
+            for i in range(len(mentions) - 1)
+        )
+        if has_or_chain:
+            hard.append(Constraint(key="brand", op="in", value=values))
+        else:
+            hard.extend(Constraint(key="brand", op="eq", value=value) for value in values)
     elif len(mentions) == 1:
         hard.append(Constraint(key="brand", op="eq", value=mentions[0][1]))
 

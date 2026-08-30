@@ -179,7 +179,9 @@ def test_demo_endpoints_blocked_without_demo_mode(monkeypatch):
     class LockedSettings:
         demo_mode = False
 
-    monkeypatch.setattr(demo_mod, "settings", LockedSettings())
+    # The route resolves settings for each request so operator-token rotation
+    # cannot leave a stale module-level snapshot in the state-changing gate.
+    monkeypatch.setattr(demo_mod, "get_settings", lambda: LockedSettings())
     client = TestClient(app)
     for path in (
         "/api/demo/reset",

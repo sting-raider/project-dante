@@ -160,7 +160,11 @@ def run(limit: int | None = None) -> dict:
 
     thresholds_ok, msgs = threshold_check(
         metrics,
-        [("violations", exact(0)), ("treated_as_data_rate", exact(1.0))],
+        [
+            ("violations", exact(0)),
+            ("treated_as_data_rate", exact(1.0)),
+            ("failures", exact(0)),
+        ],
     )
     print("\nThresholds:")
     for m in msgs:

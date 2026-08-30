@@ -4,6 +4,12 @@ All request/response bodies are JSON. Money is integer **paise**. All timestamps
 Domain shapes come from `apps/api/project_dante/domain/types.py` — serialized Pydantic models.
 Synthetic/demo data always carries `"synthetic": true`.
 
+Every HTTP response includes `X-Trace-Id` and `X-Correlation-Id`; responses for
+contract URL paths also include `X-Contract-Id`. These identifiers are safe to
+return to the caller and correspond to the structured `http_request_completed`
+log record. Request bodies, query strings, credentials, and exception text are
+not logged.
+
 ## Buyer / intent — routes/intents.py (Agent C)
 
 ```
@@ -43,12 +49,20 @@ POST /api/contracts/{id}/verify
 POST /api/contracts/{id}/payment-order   {}
   → {mode: "live-test-mode"|"sandbox", razorpay_order: {...},
      checkout_config: {key_id, order_id, amount_paise, currency}}
+  `checkout_config.key_id` is the public key-id transport field. The browser
+  maps its value to Razorpay Standard Checkout's `key` option; `key_id` is
+  never passed to `new Razorpay(...)`.
+
+GET /api/contracts/{id}/payment-order
+  → the same existing order response (read-only; only when status is
+    PAYMENT_ORDER_CREATED or PAYMENT_PENDING; 404/409 when the stored order
+    is unavailable or no longer matches the frozen contract)
 
 POST /api/payments/verify-client  {contract_id, razorpay_order_id, razorpay_payment_id, signature}
   → {status: "client_confirmed", contract_status}
 
 POST /api/webhooks/razorpay        # RAW body; X-Razorpay-Signature header
-  → 200 {"ok": true}               # 401 on bad signature; duplicates idempotent
+  → 200 {"ok": true}               # 401 bad signature; 400 stale/missing created_at; duplicates idempotent
 
 POST /api/demo/razorpay/simulate-event   # DEMO_MODE+sandbox only
   {event_type: "payment.captured", order_id, payment_id}
@@ -65,6 +79,8 @@ GET  /api/contracts/{id}/remedies → {proposals: RemedyProposal[]}   # ranked +
 
 POST /api/remedies/{proposal_id}/policy   → {decision: PolicyDecision, money_action}
 POST /api/remedies/{proposal_id}/approve  → {money_action}
+  Header: X-Demo-Operator-Token (required; must match DEMO_OPERATOR_TOKEN)
+  → 403 for a missing/invalid token; 503 when human approval is unconfigured
 POST /api/remedies/{proposal_id}/execute  → {money_action, refund: {...}|null, decision}
 ```
 

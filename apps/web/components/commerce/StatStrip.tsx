@@ -52,7 +52,16 @@ export default function StatStrip() {
     ],
     ["Intents evaluated", analytics?.evaluated_intents != null ? String(analytics.evaluated_intents) : "—"],
     ["API", health ? "online" : "offline"],
-    ["Rail", health?.razorpay === "sandbox-adapter" ? "sandbox" : health ? "live · test mode" : "—"],
+    [
+      "Rail",
+      health?.razorpay === "sandbox-adapter"
+        ? "sandbox"
+        : health?.razorpay === "live-test-mode"
+          ? "live · test mode"
+          : health
+            ? "unknown"
+            : "—",
+    ],
   ];
 
   return (

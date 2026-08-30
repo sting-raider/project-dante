@@ -16,7 +16,7 @@ Flow (money actions are REAL Test Mode - small real amounts, test cards):
     webhook evidence from the timeline -> ship -> deliver WRONG VARIANT
     (X-Demo-Operator-Token from $DEMO_OPERATOR_TOKEN) -> breach detected ->
     rights graph -> remedies planned -> policy ALLOW -> execute [prints REAL
-    rf_... refund id] -> repeat execute [asserts IDENTICAL refund id] ->
+    rfnd_... refund id] -> repeat execute [asserts IDENTICAL refund id] ->
     REMEDIATED + audit trail.
 
 Every step appends a timestamped evidence line to REAL_INTEGRATION_STATUS.md
@@ -25,6 +25,8 @@ between BEGIN-RUN/END-RUN markers. Exit code 0 only when ALL criteria pass.
 Usage:
     python scripts/verify_real_integration.py [--api http://localhost:8000]
         [--web http://localhost:3000] [--wait 180]
+    python scripts/verify_real_integration.py --resume-contract con_...
+        [--api http://localhost:8000] [--web http://localhost:3000] [--wait 600]
 
 Environment:
     DEMO_OPERATOR_TOKEN   sent as X-Demo-Operator-Token on every /api/demo/*
@@ -63,7 +65,7 @@ CRITERIA: list[tuple[str, str]] = [
     ("breach", "promise breach detected from the wrong-variant fact"),
     ("rights", "rights graph built with eligible entitlements"),
     ("remedy", "remedy planned: refund_full chosen, policy decision ALLOW"),
-    ("refund", "real refund executed: Razorpay rf_... id returned"),
+    ("refund", "real refund executed: Razorpay rfnd_... id returned"),
     ("idempotent", "repeat execute returns the SAME refund id - no second refund"),
 ]
 
@@ -104,6 +106,53 @@ class Evidence:
         name = next(d for k, d in CRITERIA if k == cid)
         self.log(f"[criterion:{cid}] {label} -- {name} :: {detail}")
 
+    def promote_checklist(self) -> None:
+        """Promote the human-readable ledger after a complete real run.
+
+        Run blocks are append-only evidence, while the ten-row checklist is a
+        current projection of the strongest successful run. Keep the
+        projection fail-closed: a partial or failed run cannot mark anything
+        proven, and a later failed run does not erase an earlier success.
+        """
+        incomplete = [
+            cid for cid, _ in CRITERIA
+            if self.results.get(cid, ("NOT_RUN", ""))[0] != "PROVEN"
+        ]
+        if incomplete:
+            raise ValueError(
+                "cannot promote incomplete real-integration checklist: "
+                + ", ".join(incomplete)
+            )
+
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        missing_rows: list[str] = []
+        for row_number, (cid, _) in enumerate(CRITERIA, start=1):
+            row_prefix = f"| {row_number} |"
+            row_index = next(
+                (i for i, line in enumerate(lines) if line.startswith(row_prefix)),
+                None,
+            )
+            if row_index is None:
+                missing_rows.append(str(row_number))
+                continue
+
+            cells = lines[row_index].split("|")
+            if len(cells) < 7:
+                missing_rows.append(str(row_number))
+                continue
+            detail = self.results[cid][1].replace("|", "/").replace("\n", " ").strip()
+            cells[3] = " `PROVEN` "
+            cells[5] = f" {detail} "
+            lines[row_index] = "|".join(cells)
+
+        if missing_rows:
+            raise ValueError(
+                "cannot promote real-integration checklist; malformed/missing rows: "
+                + ", ".join(missing_rows)
+            )
+
+        self.path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+
     def end(self, ok: bool, fail_msg: str = "") -> bool:
         self._append("")
         self._append("  Criteria summary for this run:")
@@ -133,6 +182,15 @@ def log(msg: str) -> None:
         print(f"  - {msg}")
 
 
+def redact_checkout_key_id(key_id: str) -> str:
+    """Keep provider key identifiers out of durable evidence and logs."""
+    if key_id.startswith("rzp_test_"):
+        return "rzp_test_<redacted>"
+    if key_id.startswith("rzp_live_"):
+        return "rzp_live_<redacted>"
+    return "<redacted>"
+
+
 def expect(cond: Any, msg: str) -> None:
     if not cond:
         raise Fail(msg)
@@ -148,13 +206,13 @@ def load_settings_or_exit() -> Any:
     sys.path.insert(0, str(APPS_API))
     try:
         from project_dante.settings import get_settings
-    except Exception as exc:  # pragma: no cover - broken install
+    except Exception as exc:  # noqa: BLE001 - verifier must report broken installs
         print(f"Cannot import project_dante.settings ({exc}); "
               f"cannot confirm razorpay_mode. Run from the repo root.")
         sys.exit(1)
     try:
         return get_settings()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - preserve fail-closed settings diagnostics
         # Includes LiveKeyRejected: rzp_live_* credentials fail closed here too.
         print(f"Settings rejected: {exc}")
         sys.exit(1)
@@ -186,6 +244,55 @@ def preflight_settings(settings: Any) -> None:
     log("preflight: RAZORPAY_WEBHOOK_SECRET is configured (non-default)")
 
 
+def load_resume_context(
+    c: httpx.Client,
+    resume_id: str,
+) -> tuple[dict[str, Any], str, int, str, str, str]:
+    """Read and validate an existing real order for an interrupted run.
+
+    Returns ``(contract, contract_id, amount_paise, order_id, key_id, status)``.
+    This path is deliberately read-only: resuming must never reset the store,
+    re-authorize a contract, or mint a second Razorpay order.
+    """
+    r = c.get(f"/api/contracts/{resume_id}")
+    expect(r.status_code == 200, f"resume contract fetch failed: {r.status_code} {r.text[:300]}")
+    contract = r.json().get("contract") or {}
+    cid = str(contract.get("id") or "")
+    expect(cid == resume_id, f"resume returned unexpected contract id: {cid!r}")
+    status = str(contract.get("status") or "")
+    expect(
+        status in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING", "PAID"),
+        f"contract {cid} is not resumable from status {status!r}",
+    )
+    expect(contract.get("sandbox_mode") is False, "resume contract is not real Test Mode")
+    amount_paise = contract.get("amount_paise")
+    expect(
+        isinstance(amount_paise, int) and not isinstance(amount_paise, bool) and amount_paise > 0,
+        f"resume contract has invalid amount: {amount_paise!r}",
+    )
+    order_id = str(contract.get("razorpay_order_id") or "")
+    expect(order_id.startswith("order_"), f"resume order id not Razorpay-shaped: {order_id!r}")
+
+    key_id = ""
+    if status in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING"):
+        r = c.get(f"/api/contracts/{cid}/payment-order")
+        expect(
+            r.status_code == 200,
+            f"resume payment-order fetch failed: {r.status_code} {r.text[:300]}",
+        )
+        po = r.json()
+        expect(po.get("mode") == "live-test-mode", f"resume payment-order mode={po.get('mode')}")
+        checkout = po.get("checkout_config") or {}
+        expect(
+            checkout.get("order_id") == order_id,
+            "resume checkout order does not match contract",
+        )
+        key_id = str(checkout.get("key_id") or "")
+        expect(key_id.startswith("rzp_test_"), f"resume checkout key_id not rzp_test_*: {key_id!r}")
+
+    return contract, cid, amount_paise, order_id, key_id, status
+
+
 def main() -> None:
     global EV
 
@@ -193,6 +300,14 @@ def main() -> None:
     ap.add_argument("--api", default="http://localhost:8000")
     ap.add_argument("--web", default="", help="buyer web app base URL (default: PUBLIC_APP_URL)")
     ap.add_argument("--wait", type=float, default=180.0, help="seconds to wait for the payment")
+    ap.add_argument(
+        "--resume-contract",
+        default="",
+        help=(
+            "reuse an existing authorized PAYMENT_ORDER_CREATED/PAYMENT_PENDING "
+            "contract instead of resetting and creating a new order"
+        ),
+    )
     args = ap.parse_args()
 
     settings = load_settings_or_exit()
@@ -215,7 +330,7 @@ def main() -> None:
     fail_msg = ""
     ok = False
     try:
-        ok = run_flow(c, web_base, args.wait)
+        ok = run_flow(c, web_base, args.wait, args.resume_contract)
     except Fail as exc:
         fail_msg = str(exc)
         log(f"FAIL: {fail_msg}")
@@ -226,6 +341,14 @@ def main() -> None:
         all_proven = ok and all(
             EV.results.get(cid, ("NOT_RUN", ""))[0] == "PROVEN" for cid, _ in CRITERIA
         )
+        if all_proven:
+            try:
+                EV.promote_checklist()
+                EV.log("checklist: all ten real-integration rows promoted to PROVEN")
+            except Exception as exc:  # noqa: BLE001 - evidence must fail closed
+                all_proven = False
+                fail_msg = f"checklist promotion failed: {exc}"
+                log(f"FAIL: {fail_msg}")
         EV.end(all_proven, fail_msg)
 
     print()
@@ -239,7 +362,12 @@ def main() -> None:
     sys.exit(1)
 
 
-def run_flow(c: httpx.Client, web_base: str, wait_s: float) -> bool:
+def run_flow(
+    c: httpx.Client,
+    web_base: str,
+    wait_s: float,
+    resume_contract_id: str = "",
+) -> bool:
     # ---- 0. server truth ----------------------------------------------------
     r = c.get("/api/health")
     expect(r.status_code == 200, f"health check failed: {r.status_code} - is the API running?")
@@ -252,89 +380,114 @@ def run_flow(c: httpx.Client, web_base: str, wait_s: float) -> bool:
     log(f"health: api={health.get('service')} razorpay={health.get('razorpay')} "
         f"llm_engine={health.get('llm_engine')}")
 
-    r = c.post("/api/demo/reset")
-    if r.status_code == 403:
-        fail_msg = (
-            "demo reset refused (403): live-mode demo endpoints require a valid "
-            "X-Demo-Operator-Token - export DEMO_OPERATOR_TOKEN matching the server "
-            "configuration and rerun"
+    resume_id = resume_contract_id.strip()
+    if resume_id:
+        # A timed-out human checkout must be resumable without resetting the
+        # store or minting another payable order. Read the contract first, then
+        # read back the existing order through the same server-side gate used
+        # by a cold-refresh browser page.
+        contract, cid, amount_paise, order_id, key_id, status = load_resume_context(c, resume_id)
+        log(f"resume: contract={cid} status={status} existing_order={order_id}")
+    else:
+        r = c.post("/api/demo/reset")
+        if r.status_code == 403:
+            fail_msg = (
+                "demo reset refused (403): live-mode demo endpoints require a valid "
+                "X-Demo-Operator-Token - export DEMO_OPERATOR_TOKEN matching the server "
+                "configuration and rerun"
+            )
+            expect(False, fail_msg)
+        expect(r.status_code == 200, f"demo reset failed: {r.status_code} {r.text[:200]}")
+        log(f"reset: products={r.json().get('products')} (clean store for unambiguous evidence)")
+
+        # ---- 1-3. intent -> search -> freeze -------------------------------------
+        r = c.post("/api/intents/compile", json={"raw_text": HERO_TEXT})
+        expect(r.status_code == 200, f"compile failed: {r.status_code} {r.text[:300]}")
+        intent = r.json()["intent"]
+        engine = r.json().get("engine")
+        iid = intent["id"]
+        log(
+            f"compile: intent={iid} engine={engine} "
+            f"hard_constraints={len(intent.get('hard_constraints', []))} "
+            "(LLM never executes money)"
         )
-        expect(False, fail_msg)
-    expect(r.status_code == 200, f"demo reset failed: {r.status_code} {r.text[:200]}")
-    log(f"reset: products={r.json().get('products')} (clean store for unambiguous evidence)")
 
-    # ---- 1-3. intent -> search -> freeze -------------------------------------
-    r = c.post("/api/intents/compile", json={"raw_text": HERO_TEXT})
-    expect(r.status_code == 200, f"compile failed: {r.status_code} {r.text[:300]}")
-    intent = r.json()["intent"]
-    engine = r.json().get("engine")
-    iid = intent["id"]
-    log(f"compile: intent={iid} engine={engine} "
-        f"hard_constraints={len(intent.get('hard_constraints', []))} (LLM never executes money)")
+        r = c.post(f"/api/intents/{iid}/search")
+        expect(r.status_code == 200, f"search failed: {r.status_code} {r.text[:300]}")
+        results = r.json()["results"]
+        feasible = [x for x in results if x["evaluation"]["feasible"]]
+        expect(feasible, "no feasible offers found")
+        hero = next((x for x in feasible if x["offer"]["sku"] == "AST-HP-ANC-001"), feasible[0])
+        raw_amount = (
+            hero["evaluation"].get("total_paise")
+            or hero["offer"].get("unit_amount_paise")
+            or hero["offer"].get("price_paise")
+        )
+        expect(raw_amount is not None, "no price field on chosen offer")
+        amount_paise = int(raw_amount)
+        log(f"search: {len(results)} results, {len(feasible)} feasible; sku={hero['offer']['sku']} "
+            f"amount_paise={amount_paise}")
 
-    r = c.post(f"/api/intents/{iid}/search")
-    expect(r.status_code == 200, f"search failed: {r.status_code} {r.text[:300]}")
-    results = r.json()["results"]
-    feasible = [x for x in results if x["evaluation"]["feasible"]]
-    expect(feasible, "no feasible offers found")
-    hero = next((x for x in feasible if x["offer"]["sku"] == "AST-HP-ANC-001"), feasible[0])
-    raw_amount = (
-        hero["evaluation"].get("total_paise")
-        or hero["offer"].get("unit_amount_paise")
-        or hero["offer"].get("price_paise")
-    )
-    expect(raw_amount is not None, "no price field on chosen offer")
-    amount_paise = int(raw_amount)
-    log(f"search: {len(results)} results, {len(feasible)} feasible; sku={hero['offer']['sku']} "
-        f"amount_paise={amount_paise}")
+        r = c.post(f"/api/intents/{iid}/select-offer", json={"offer_id": hero["offer"]["id"]})
+        expect(r.status_code == 200, f"select-offer failed: {r.status_code} {r.text[:300]}")
+        body = r.json()
+        contract = body["contract"]
+        cid = contract["id"]
+        n_promises = len(body.get("promises", []))
+        expect(n_promises >= 5, f"frozen promises too few: {n_promises}")
+        expect(contract.get("promise_set_hash"), "promise_set_hash missing")
+        log(f"freeze: contract={cid} promises={n_promises} "
+            f"psh={str(contract.get('promise_set_hash'))[:12]}")
 
-    r = c.post(f"/api/intents/{iid}/select-offer", json={"offer_id": hero["offer"]["id"]})
-    expect(r.status_code == 200, f"select-offer failed: {r.status_code} {r.text[:300]}")
-    body = r.json()
-    contract = body["contract"]
-    cid = contract["id"]
-    n_promises = len(body.get("promises", []))
-    expect(n_promises >= 5, f"frozen promises too few: {n_promises}")
-    expect(contract.get("promise_set_hash"), "promise_set_hash missing")
-    log(f"freeze: contract={cid} promises={n_promises} "
-        f"psh={str(contract.get('promise_set_hash'))[:12]}")
+        # ---- 4. authorize ---------------------------------------------------------
+        r = c.post(f"/api/contracts/{cid}/authorize", json={})
+        expect(r.status_code == 200, f"authorize failed: {r.status_code} {r.text[:300]}")
+        log(f"authorize: hash={str(contract.get('contract_hash'))[:12]} scope=single_purchase")
 
-    # ---- 4. authorize ---------------------------------------------------------
-    r = c.post(f"/api/contracts/{cid}/authorize", json={})
-    expect(r.status_code == 200, f"authorize failed: {r.status_code} {r.text[:300]}")
-    log(f"authorize: hash={str(contract.get('contract_hash'))[:12]} scope=single_purchase")
+        # ---- 5. REAL payment order -------------------------------------------------
+        r = c.post(f"/api/contracts/{cid}/payment-order", json={})
+        expect(r.status_code == 200, f"payment-order failed: {r.status_code} {r.text[:300]}")
+        po = r.json()
+        order_id = po["checkout_config"]["order_id"]
+        key_id = po["checkout_config"]["key_id"]
+        expect(
+            po["mode"] == "live-test-mode",
+            f"payment-order mode={po['mode']} (wanted live-test-mode)",
+        )
+        expect(order_id.startswith("order_"), f"order id not Razorpay-shaped: {order_id}")
+        expect(key_id.startswith("rzp_test_"), f"checkout key_id not rzp_test_*: '{key_id}'")
 
-    # ---- 5. REAL payment order -------------------------------------------------
-    r = c.post(f"/api/contracts/{cid}/payment-order", json={})
-    expect(r.status_code == 200, f"payment-order failed: {r.status_code} {r.text[:300]}")
-    po = r.json()
-    order_id = po["checkout_config"]["order_id"]
-    key_id = po["checkout_config"]["key_id"]
-    expect(
-        po["mode"] == "live-test-mode",
-        f"payment-order mode={po['mode']} (wanted live-test-mode)",
-    )
-    expect(order_id.startswith("order_"), f"order id not Razorpay-shaped: {order_id}")
-    expect(key_id.startswith("rzp_test_"), f"checkout key_id not rzp_test_*: '{key_id}'")
-    EV.criterion("order", True, f"real Razorpay order id {order_id} (amount {amount_paise} paise, "
-                                f"checkout key {key_id})")
+    # A resumed run reuses the proof-producing order; a fresh run just minted
+    # it above. Either way, this criterion is recorded from a real API result.
+    order_detail = f"real Razorpay order id {order_id} (amount {amount_paise} paise"
+    if key_id:
+        order_detail += f", checkout key {redact_checkout_key_id(key_id)})"
+    else:
+        order_detail += "; checkout key was observed in the original run)"
+    EV.criterion("order", True, order_detail)
     log(f"ORDER (REAL): {order_id}")
 
     # ---- 6. human completes the REAL Standard Checkout payment -----------------
     pay_url = f"{web_base}/contract/{cid}"
-    print()
-    print("=" * 78)
-    print("ACTION REQUIRED (human): complete the REAL Razorpay Standard Checkout")
-    print(f"  Open: {pay_url}")
-    print(f"  Order: {order_id}  Amount: {amount_paise} paise")
-    print("  (use a TEST card, e.g. 4111 1111 1111 1111 - never a real card)")
-    print(f"  Waiting up to {int(wait_s)}s for the signature-verified webhook to grant PAID...")
-    print("=" * 78)
-    try:
-        opened = webbrowser.open(pay_url)
-    except Exception:  # pragma: no cover - headless hosts
-        opened = False
-    log(f"checkout: browser {'opened' if opened else 'NOT opened (headless?)'} at {pay_url}")
+    if str(contract.get("status")) != "PAID":
+        print()
+        print("=" * 78)
+        print("ACTION REQUIRED (human): complete the REAL Razorpay Standard Checkout")
+        print(f"  Open: {pay_url}")
+        print(f"  Order: {order_id}  Amount: {amount_paise} paise")
+        print("  (use a TEST card, e.g. 4111 1111 1111 1111 - never a real card)")
+        print(f"  Waiting up to {int(wait_s)}s for the signature-verified webhook to grant PAID...")
+        print("=" * 78)
+        try:
+            opened = webbrowser.open(pay_url)
+        except Exception:  # noqa: BLE001 - headless hosts may lack a browser handler
+            opened = False
+        log(f"checkout: browser {'opened' if opened else 'NOT opened (headless?)'} at {pay_url}")
+    else:
+        log(
+            "resume: contract already PAID; skipping checkout prompt and "
+            "validating downstream evidence"
+        )
 
     deadline = time.time() + wait_s
     final: dict = {}
@@ -372,7 +525,7 @@ def run_flow(c: httpx.Client, web_base: str, wait_s: float) -> bool:
         p = e.get("payload") or {}
         for k in ("webhook_event_id", "event_id"):
             v = p.get(k)
-            if isinstance(v, str) and (v.startswith("evt_") or v.startswith("sha256_")):
+            if isinstance(v, str) and v.startswith(("evt_", "sha256_")):
                 hook_ids.append((e.get("event_type"), v))
     hook_note = "; ".join(f"{t}:{i}" for t, i in hook_ids) if hook_ids else (
         "provider event id not surfaced on contract timeline; verification is structural: "
@@ -455,8 +608,14 @@ def run_flow(c: httpx.Client, web_base: str, wait_s: float) -> bool:
     expect(ex.get("executed") is True, f"not executed: {ex}")
     ma = ex.get("money_action") or {}
     refund_ref = ma.get("result_ref")
-    expect(isinstance(refund_ref, str) and refund_ref.startswith("rf_"),
-           f"refund id missing/not Razorpay rf_-shaped: {refund_ref!r}")
+    # This verifier has already proved live-test-mode above.  Accepting the
+    # sandbox adapter's ``rf_`` shape here would let a miswired live run be
+    # reported as real evidence, so the real-gateway ledger requires the
+    # provider's ``rfnd_`` refund resource id.
+    expect(
+        isinstance(refund_ref, str) and refund_ref.startswith("rfnd_"),
+        f"refund id missing/not a real Razorpay refund id (expected rfnd_): {refund_ref!r}",
+    )
     EV.criterion("refund", True, f"real Razorpay refund id {refund_ref} "
                                  f"(money_action={ma.get('id')})")
     log(f"REFUND (REAL): {refund_ref}")

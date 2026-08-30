@@ -297,11 +297,33 @@ def test_eval_catalog_brands():
     intent = rule_compile("Zephyr brand over-ear headphones")
     hard = [(c.key, c.value) for c in intent.hard_constraints]
     assert ("brand", "zephyr") in hard
-    # multi-brand 'brands only' reduces to first-stated brand (INT-055 rule)
+    # multi-brand 'brands only' preserves the complete accepted set
     intent2 = rule_compile("Orbio or Soniq brands only, any headphone")
     brand_cs = [c for c in intent2.hard_constraints if c.key == "brand"]
     assert len(brand_cs) == 1 and brand_cs[0].op == "in"
-    assert brand_cs[0].value == ["orbio"]
+    assert brand_cs[0].value == ["orbio", "soniq"]
+
+
+def test_aster_brand_is_explicit_but_merchant_name_is_not_invented():
+    explicit = rule_compile("Cable or hub from Aster brand only")
+    assert any(
+        c.key == "brand" and c.op == "eq" and c.value == "aster"
+        for c in explicit.hard_constraints
+    )
+
+    merchant_name = rule_compile("Aster Electronics product under 5000")
+    assert not [c for c in merchant_name.hard_constraints if c.key == "brand"]
+    assert not [p for p in merchant_name.soft_preferences if p.key == "brand"]
+
+
+def test_independent_gated_brands_remain_conjunctive():
+    intent = rule_compile("Zephyr brand and Orbio brand headphones")
+    assert [
+        (c.key, c.op, c.value) for c in intent.hard_constraints if c.key == "brand"
+    ] == [
+        ("brand", "eq", "zephyr"),
+        ("brand", "eq", "orbio"),
+    ]
 
 
 def test_ungated_brand_is_soft_preference():

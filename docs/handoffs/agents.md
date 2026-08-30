@@ -3,7 +3,8 @@
 ## Goal
 
 Build the buyer-side agent runtime for Project Dante: a typed model-provider
-abstraction with an Anthropic structured-output implementation, an
+abstraction with Anthropic and OpenAI-compatible structured-output
+implementations (including the Groq alias), an
 `IntentCompilerAgent` that turns raw buyer text into a validated `BuyerIntent`
 (LLM path plus an excellent deterministic rules path), a
 deterministic-authority `OfferEvaluatorAgent`, and the `/api/intents/*` routes
@@ -22,6 +23,8 @@ can mark an offer feasible while violating a hard constraint.
   `DeterministicProvider` raises `NotImplementedError` by design — the rules
   engines are the real fallback. `get_provider()` returns `None` unless
   `settings.llm_enabled`; every caller drops to rules when None.
+  `LLM_PROVIDER=groq` selects the OpenAI-compatible implementation with
+  Groq's `/openai/v1` base URL supplied through `LLM_BASE_URL`.
 - **IntentCompilerAgent** (`agents/compiler.py`): two paths producing the
   identical frozen `BuyerIntent` shape. LLM path uses the §51 prompt
   principles (untrusted-text framing, schema-only output, unknown > invented,
@@ -74,7 +77,8 @@ can mark an offer feasible while violating a hard constraint.
 
 ```python
 # project_dante.agents.provider
-get_provider(settings) -> AnthropicProvider | None   # None => rules engine
+get_provider(settings) -> AnthropicProvider | OpenAICompatibleProvider | None
+                       # None => rules engine
 class AgentValidationError(Exception)                # after 2 attempts
 _log_agent_run(**kwargs)                             # shared agent_run persistence
 
@@ -118,12 +122,14 @@ Changes beyond round 1:
   ("under twelve thousand rupees"), "spending no more than three thousand
   rupees", "budget around 25k"/"around X"; new `extract_price_range` handles
   "between 10k and 15k" -> min_price_paise gte + max_price_paise lte.
-- Brands: rewritten (`extract_brands`) — gated mentions ('Zephyr brand',
-  'Aster electronics', 'X brands only', 'only/must be/exclusively') become
+- Brands: rewritten (`extract_brands`) — explicit gated mentions ('Zephyr
+  brand', 'Aster brand', 'X brands only', 'only/must be/exclusively') become
   HARD `brand` constraints; ungated mentions become SOFT preferences at
-  weight 0.8 (was 0.6). 'noise' is never a brand token (it only appears in
-  'noise cancelling'). Multi-brand or-chains reduce to the first-stated
-  gated brand as an ``in`` list, matching the INT-055 dataset rule.
+  weight 0.8 (was 0.6). The unqualified phrase 'Aster Electronics' remains
+  the merchant name and is not invented as a product-brand constraint. 'noise'
+  is never a brand token (it only appears in 'noise cancelling'). Multi-brand
+  `or` chains preserve the complete accepted set as an ``in`` list; independent
+  gated clauses remain separate equality gates.
 - Warranty: clause-based proximity matching replaces substring lists — any
   clause containing both 'warrant' and 'manufactur'/'seller' parses in
   either word order; 'India warranty' maps to manufacturer+IN per market
@@ -140,11 +146,10 @@ Changes beyond round 1:
   `_catalog_titles()` and emits sku eq AST-... .
 - Delivery: '<weekday> deadline' phrasing; 'by tomorrow evening'.
 
-Dataset flags for Agent J / team-lead (no expectations changed on my side):
-INT-020 expects ONLY a sku constraint while its text also names category/
-form-factor/ANC facts (subset-match makes this pass, but it is the strictest
-interpretation); INT-055 freezes the first-brand reduction though the
-evaluator supports full in-lists. Both honored as-is.
+Dataset notes for Agent J / team-lead: INT-020 now asserts the catalog-resolved
+hero SKU in addition to its category/form-factor/ANC facts; INT-055 asserts the
+complete two-brand `in` list. Both are exercised by the rules compiler and
+evaluator.
 
 Round-1 notes (retained): trailing caps, word-number caps + duration guard,
 'bucks tops', warranty order variants, condition phrases, catalog brands,
@@ -167,7 +172,7 @@ bare 'over-ears', delivery verbs/qualifiers, 'Do NOT substitute'.
   instead of x100; currency-symbol ranges ('₹9,000–₹12,000') parse as
   min/max band; bare trailing ', new' / '(new)' now yields condition=new.
 - Final offer evals: scenario_accuracy=1.0, violation_rate=0.0 across 26
-  scenarios / 116 feasibility checks -> PASS; intent evals hold at 1.0.
+  scenarios / 117 feasibility checks -> PASS; intent evals hold at 1.0.
 
 Coverage highlights: hero query parses to category=headphones,
 form_factor=over-ear, anc=true, max price 1200000 paise, warranty
@@ -217,9 +222,10 @@ infeasible select attempt → HTTP 409.
   with `contract_id` and a `constraints` snapshot (critical hard constraints,
   frozen intent keys verbatim). `evaluate_contract`'s `_evaluation_floor`
   matches by `contract_id` and floors mismatch severity at material for those
-  keys. Known map gap flagged to D: `pipeline.CONSTRAINT_TO_PROMISE` lacks
-  entries for `attributes.form_factor` / `attributes.anc` (it holds bare
-  `form_factor` / `anc`), so those two floors need an alias on their side.
+  keys. `pipeline.CONSTRAINT_TO_PROMISE` includes aliases for both the compiler's
+  bare `form_factor` / `anc` keys and the dotted `attributes.form_factor` /
+  `attributes.anc` keys, so critical selection constraints receive the same
+  materiality floor during verification.
 - **Agent E** (rights/remedies): evaluation records (`_type=evaluation`) and
   the frozen contract's `promise_ids` are the materiality inputs; breach
   severity for a violated manufacturer-region warranty should be material+
@@ -292,20 +298,17 @@ tests added for every fix.
 - Pinned suites: `pytest tests/test_agents.py tests/test_intent_rules.py
   tests/test_eval_harness.py tests/test_security_redteam.py` → **162 passed**
   (was 134; +28 regression tests).
-- Full API suite: **352 passed**, ruff clean on all touched files.
+- Historical snapshot: the full API suite then had **352 passed**; the current
+  final hardening run is **470 passed, 15 skipped** for unavailable Postgres.
 - Eval runners (DANTE_STORE_PATH=.dante-fixstore.json):
   - `run_intent_evals.py`: PASS, 68/68 cases, critical_recall=1.0.
-  - `run_offer_evals.py`: thresholds PASS (violation_rate=0), but case count is
-    calendar-dependent — see known issue below.
+  - `run_offer_evals.py`: current final run PASS, 26/26 scenarios,
+    violation_rate=0.0; the former calendar-sensitive fixture is resolved below.
 
-### Known issue reported, NOT fixed (outside mandate)
+### Historical issue — subsequently resolved by the evals workstream
 
-**OFF-001 is calendar-sensitive (pre-existing, dataset-level).** Its intent
-says "delivered by Thursday"; HP-005 ships in 2 days. On Mon/Tue runs the
-deadline is >= 2 days out and HP-005 is feasible (ground truth); on Wed runs
-the deadline is tomorrow and HP-005 legitimately misses it → false-negative
-(safe direction: no hard-constraint violation ever occurs; the absolute bar
-violation_rate == 0 holds on any day). Verified identical code passed 26/26 on
-Tue 2026-08-25 and scored 25/26 on Wed 2026-08-26. Fix belongs with Agent J /
-dataset owner (e.g. pin promised_by_date in the fixture or use a
-deadline-relative expectation); datasets were not edited per instructions.
+The original OFF-001 fixture used a weekday-relative deadline and could change
+its expected feasibility with the run date. The dataset owner later replaced
+that case with the deterministic relative form "within 2 days"; the current
+full run passes 26/26 offer scenarios and keeps the hard-constraint violation
+rate at 0.0.

@@ -46,6 +46,8 @@ const WEIGHTS = [
 const INCONVENIENCE_WEIGHT = -0.1;
 
 type Phase = "idle" | "policy" | "approval" | "executing" | "done" | "error";
+type ReplayStatus = "idle" | "checking" | "confirmed" | "mismatch" | "error";
+const OPERATOR_TOKEN_KEY = "dante.demo.operatorToken";
 
 export default function RemedyPage() {
   const params = useParams<{ id: string }>();
@@ -59,10 +61,19 @@ export default function RemedyPage() {
   const [moneyAction, setMoneyAction] = useState<MoneyAction | null>(null);
   const [refund, setRefund] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [replayStatus, setReplayStatus] = useState<ReplayStatus>("idle");
+  const [replayResult, setReplayResult] = useState<string | null>(null);
+  const [operatorToken, setOperatorToken] = useState("");
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     let alive = true;
+    try {
+      const saved = window.sessionStorage.getItem(OPERATOR_TOKEN_KEY);
+      if (saved) setOperatorToken(saved);
+    } catch {
+      // Session storage is an optional convenience, never a prerequisite.
+    }
     apiGet<RemediesResponse>(`/api/contracts/${contractId}/remedies`)
       .then((d) => {
         if (!alive) return;
@@ -124,15 +135,21 @@ export default function RemedyPage() {
       setPhase("executing");
       setError(null);
       try {
-        await apiPost<ApproveResponse>(`/api/remedies/${proposalId}/approve`);
+        await apiPost<ApproveResponse>(`/api/remedies/${proposalId}/approve`, undefined, {
+          headers: operatorToken.trim()
+            ? { "x-demo-operator-token": operatorToken.trim() }
+            : {},
+        });
         await execute(proposalId);
       } catch (e) {
         setPhase("error");
         setError(e instanceof Error ? e.message : "approval failed");
       }
     },
+    // `execute` is declared immediately below; it is intentionally captured
+    // like the existing stable callback while the token remains reactive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [operatorToken]
   );
 
   const execute = useCallback(
@@ -157,6 +174,32 @@ export default function RemedyPage() {
       } catch (e) {
         setPhase("error");
         setError(e instanceof Error ? e.message : "execution failed");
+      }
+    },
+    []
+  );
+
+  const replayExecute = useCallback(
+    async (proposalId: string, expectedActionId: string, expectedRefundId: string) => {
+      setReplayStatus("checking");
+      setReplayResult(null);
+      try {
+        const res = await apiPost<ExecuteResponse>(
+          `/api/remedies/${proposalId}/execute`
+        );
+        const returnedRefundId =
+          res.money_action?.result_ref ??
+          (res.refund && typeof res.refund.id === "string" ? res.refund.id : null);
+        const identical =
+          res.money_action?.status === "executed" &&
+          res.money_action.id === expectedActionId &&
+          returnedRefundId === expectedRefundId;
+        setMoneyAction(res.money_action ?? null);
+        setRefund(res.refund ?? null);
+        setReplayResult(returnedRefundId);
+        setReplayStatus(identical ? "confirmed" : "mismatch");
+      } catch {
+        setReplayStatus("error");
       }
     },
     []
@@ -225,6 +268,9 @@ export default function RemedyPage() {
         <ol className="mt-10 space-y-6">
           {proposals.map((p) => {
             const isChosen = chosen ? p.id === chosen.id : false;
+            const settledRefundId =
+              moneyAction?.result_ref ??
+              (refund && typeof refund.id === "string" ? refund.id : null);
             return (
               <li key={p.id}>
                 <article
@@ -253,22 +299,22 @@ export default function RemedyPage() {
                   </header>
 
                   <div className="grid grid-cols-1 gap-6 px-5 py-5 md:grid-cols-2">
-                    {/* score breakdown bars — labels name the planner fields
+                      {/* score breakdown bars — labels name the planner fields
                         actually plotted (#8) */}
                     <div aria-label="Score breakdown">
                       <ScoreBar
-                        label="Value (weight .40)"
-                        weight={0.4}
+                        label={WEIGHTS[0].label}
+                        weight={WEIGHTS[0].weight}
                         value={clamp01(p.expected_buyer_value)}
                       />
                       <ScoreBar
-                        label="Confidence (.35 proxy)"
-                        weight={0.35}
+                        label={WEIGHTS[1].label}
+                        weight={WEIGHTS[1].weight}
                         value={clamp01(p.confidence)}
                       />
                       <ScoreBar
-                        label="Speed (.15)"
-                        weight={0.15}
+                        label={WEIGHTS[2].label}
+                        weight={WEIGHTS[2].weight}
                         value={speedScore(p.estimated_time_hours)}
                       />
                       <ScoreBar
@@ -310,6 +356,13 @@ export default function RemedyPage() {
                         <SuccessState
                           refund={refund}
                           moneyAction={moneyAction}
+                          onReplay={() => {
+                            if (settledRefundId && moneyAction) {
+                              void replayExecute(p.id, moneyAction.id, settledRefundId);
+                            }
+                          }}
+                          replayStatus={replayStatus}
+                          replayResult={replayResult}
                         />
                       ) : (
                         <>
@@ -330,14 +383,45 @@ export default function RemedyPage() {
                             </Button>
 
                             {phase === "approval" && (
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => approveThenExecute(p.id)}
-                              >
-                                {`Approve ${p.remedy_type === "refund_full" ? "refund" : "action"}`}
-                              </Button>
+                              <div className="w-full space-y-3">
+                                <div className="max-w-xl">
+                                  <label
+                                    htmlFor="remedy-operator-token"
+                                    className="folio-label block"
+                                  >
+                                    HUMAN APPROVAL TOKEN
+                                  </label>
+                                  <input
+                                    id="remedy-operator-token"
+                                    type="password"
+                                    autoComplete="off"
+                                    value={operatorToken}
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      setOperatorToken(value);
+                                      try {
+                                        window.sessionStorage.setItem(OPERATOR_TOKEN_KEY, value);
+                                      } catch {
+                                        // Optional persistence only.
+                                      }
+                                    }}
+                                    placeholder="X-Demo-Operator-Token value…"
+                                    className="mt-1 w-full rounded-md border border-rule bg-paper px-3 py-2 font-mono text-xs text-ink outline-none focus:border-ink"
+                                  />
+                                  <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+                                    Required by the server for a human money-action approval;
+                                    kept in this tab&apos;s session storage only.
+                                  </p>
+                                </div>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={busy || !operatorToken.trim()}
+                                  onClick={() => approveThenExecute(p.id)}
+                                >
+                                  {`Approve ${p.remedy_type === "refund_full" ? "refund" : "action"}`}
+                                </Button>
+                              </div>
                             )}
 
                             {moneyAction && phase !== "done" && (
@@ -428,9 +512,15 @@ export default function RemedyPage() {
   function SuccessState({
     refund: rf,
     moneyAction: ma,
+    onReplay,
+    replayStatus: rs,
+    replayResult: rr,
   }: {
     refund: Record<string, unknown> | null;
     moneyAction: MoneyAction | null;
+    onReplay: () => void;
+    replayStatus: ReplayStatus;
+    replayResult: string | null;
   }) {
     const refundId =
       (rf && typeof rf.id === "string" && rf.id) ||
@@ -470,6 +560,42 @@ export default function RemedyPage() {
                 <p className="text-sm leading-relaxed text-ink-soft">
                   {ma.human_explanation}
                 </p>
+              </div>
+              <div className="md:col-span-2 border-t border-rule pt-3">
+                <p className="folio-label">IDEMPOTENCY KEY</p>
+                <code className="break-all font-mono text-xs text-ink">
+                  {ma.idempotency_key}
+                </code>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={onReplay}
+                    disabled={rs === "checking"}
+                  >
+                    {rs === "checking" ? "Replaying execute…" : "Replay execute"}
+                  </Button>
+                  {rs === "confirmed" && (
+                    <span className="font-mono text-[0.625rem] uppercase tracking-[0.12em] text-success">
+                      REPLAY CONFIRMED — same refund id; one money effect
+                    </span>
+                  )}
+                  {rs === "mismatch" && (
+                    <span className="font-mono text-[0.625rem] uppercase tracking-[0.12em] text-danger">
+                      REPLAY MISMATCH — server returned different money data
+                    </span>
+                  )}
+                  {rs === "error" && (
+                    <span className="font-mono text-[0.625rem] uppercase tracking-[0.12em] text-danger">
+                      REPLAY CHECK FAILED — server did not confirm the replay
+                    </span>
+                  )}
+                </div>
+                {rr && (
+                  <p className="mt-2 break-all font-mono text-[0.625rem] uppercase tracking-[0.12em] text-ink-soft">
+                    replay result_ref {rr}
+                  </p>
+                )}
               </div>
             </>
           )}

@@ -64,22 +64,29 @@ def sign(body: bytes, secret: str = TEST_WEBHOOK_SECRET) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-def captured_envelope(order_id: str, payment_id: str, amount: int, event_id: str | None = None):
+def captured_envelope(
+    order_id: str,
+    payment_id: str,
+    amount: object,
+    event_id: str | None = None,
+    amount_refunded: object | None = None,
+):
+    entity = {
+        "id": payment_id,
+        "amount": amount,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": order_id,
+        "captured": True,
+    }
+    if amount_refunded is not None:
+        entity["amount_refunded"] = amount_refunded
     payload = {
         "event": "payment.captured",
         "id": event_id or f"evt_{uuid.uuid4().hex[:12]}",
         "created_at": int(time.time()),
         "payload": {
-            "payment": {
-                "entity": {
-                    "id": payment_id,
-                    "amount": amount,
-                    "currency": "INR",
-                    "status": "captured",
-                    "order_id": order_id,
-                    "captured": True,
-                }
-            }
+            "payment": {"entity": entity}
         },
     }
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -171,7 +178,12 @@ def test_missing_signature_header_is_401(client):
 
 def test_valid_webhook_accepted_and_parsed(client):
     body = json.dumps(
-        {"event": "payment.authorized", "payload": {"payment": {"entity": {}}}}
+        {
+            "event": "payment.authorized",
+            "id": "evt_valid_timestamp",
+            "created_at": int(time.time()),
+            "payload": {"payment": {"entity": {}}},
+        }
     ).encode()
     r = client.post(
         "/api/webhooks/razorpay", content=body, headers={"X-Razorpay-Signature": sign(body)}
@@ -179,6 +191,90 @@ def test_valid_webhook_accepted_and_parsed(client):
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     assert len(STORE.list("webhook_event")) == 1
+
+
+@pytest.mark.parametrize(
+    ("offset_seconds", "error"),
+    [
+        (301, "webhook_created_at_stale"),
+        (-301, "webhook_created_at_in_future"),
+    ],
+)
+def test_signed_webhook_outside_freshness_window_is_rejected_before_persistence(
+    client, offset_seconds, error
+):
+    body = json.dumps(
+        {
+            "event": "payment.authorized",
+            "id": "evt_stale_timestamp",
+            "created_at": int(time.time()) - offset_seconds,
+            "payload": {"payment": {"entity": {}}},
+        }
+    ).encode()
+
+    response = client.post(
+        "/api/webhooks/razorpay",
+        content=body,
+        headers={"X-Razorpay-Signature": sign(body)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == error
+    assert STORE.list("webhook_event") == []
+    assert not any(event["event_type"] == "WEBHOOK_RECEIVED" for event in LOG.all())
+
+
+def test_signed_webhook_without_created_at_is_rejected_before_persistence(client):
+    body = json.dumps(
+        {
+            "event": "payment.authorized",
+            "id": "evt_missing_timestamp",
+            "payload": {"payment": {"entity": {}}},
+        }
+    ).encode()
+
+    response = client.post(
+        "/api/webhooks/razorpay",
+        content=body,
+        headers={"X-Razorpay-Signature": sign(body)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "webhook_created_at_invalid"
+    assert STORE.list("webhook_event") == []
+
+
+def test_known_failed_stale_webhook_can_be_reclaimed(client):
+    """Freshness rejects new stale replays but not provider redelivery of a
+    previously claimed event whose domain dispatch failed."""
+    payload = {
+        "event": "payment.authorized",
+        "id": "evt_failed_stale_redelivery",
+        "created_at": int(time.time()) - 301,
+        "payload": {"payment": {"entity": {}}},
+    }
+    raw = json.dumps(payload).encode()
+    STORE.put(
+        {
+            "_type": "webhook_event",
+            "id": payload["id"],
+            "event_type": payload["event"],
+            "processing_status": "failed",
+            "processing_started_at": "2000-01-01T00:00:00+00:00",
+            "attempts": 1,
+            "payload": payload,
+        }
+    )
+
+    response = client.post(
+        "/api/webhooks/razorpay",
+        content=raw,
+        headers={"X-Razorpay-Signature": sign(raw)},
+    )
+
+    assert response.status_code == 200
+    assert STORE.get(payload["id"])["processing_status"] == "processed"
+    assert STORE.get(payload["id"])["attempts"] == 2
 
 
 # ------------------------------------------------------------------ duplicates
@@ -208,6 +304,11 @@ def test_duplicate_event_x5_single_domain_effect(client):
         if e.get("aggregate_id") == event_id and e.get("event_type") == "WEBHOOK_DUPLICATE_IGNORED"
     ]
     assert len(dup_markers) == 4, "4 replays ignored, each audited"
+    received = next(e for e in LOG.all() if e.get("event_type") == "WEBHOOK_RECEIVED")
+    assert received["correlation_id"] == contract["id"]
+    assert received["payload"]["event_id"] == event_id
+    assert {e["payload"]["event_id"] for e in dup_markers} == {event_id}
+    assert {e["correlation_id"] for e in dup_markers} == {contract["id"]}
 
     captures = events_for(contract["id"], "RAZORPAY_PAYMENT_CAPTURED")
     assert len(captures) == 1, "exactly one domain effect"
@@ -260,6 +361,133 @@ def test_captured_with_wrong_amount_never_grants_paid(client):
         if e["payload"].get("reason") == "captured_amount_mismatch"
     ]
     assert mismatch, "mismatch recorded for audit"
+
+
+@pytest.mark.parametrize(
+    ("wire_amount", "wire_currency", "reason"),
+    [
+        ("1149900", "INR", "captured_amount_invalid"),
+        (1149900.0, "INR", "captured_amount_invalid"),
+        (None, "INR", "captured_amount_invalid"),
+        (1149900, "USD", "captured_currency_mismatch"),
+    ],
+)
+def test_captured_requires_strict_amount_and_currency(
+    client, wire_amount, wire_currency, reason
+):
+    """Only a positive integer INR capture may grant the frozen contract."""
+    contract = make_authorized_contract()
+    order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
+    order_id = order_r.json()["checkout_config"]["order_id"]
+    STORE.update(contract["id"], status="PAYMENT_PENDING")
+
+    raw, sig, _ = captured_envelope(
+        order_id, "pay_StrictBoundary001", wire_amount
+    )
+    body = json.loads(raw)
+    body["payload"]["payment"]["entity"]["currency"] = wire_currency
+    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    sig = sign(raw)
+
+    response = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
+    assert response.status_code == 200
+    assert STORE.get(contract["id"])["status"] == "PAYMENT_PENDING"
+    assert any(
+        event["payload"].get("reason") == reason
+        for event in events_for(contract["id"], "STATE_RECONCILED")
+    )
+
+
+def test_captured_without_payment_id_never_grants_paid(client):
+    """A signed-but-malformed capture cannot create a paid contract."""
+    contract = make_authorized_contract()
+    order_id = client.post(
+        f"/api/contracts/{contract['id']}/payment-order"
+    ).json()["checkout_config"]["order_id"]
+    STORE.update(contract["id"], status="PAYMENT_PENDING")
+
+    raw, sig, _ = captured_envelope(order_id, "", 1149900)
+    response = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
+
+    assert response.status_code == 200
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == "PAYMENT_PENDING"
+    assert refreshed.get("razorpay_payment_id") is None
+    withheld = events_for(contract["id"], "STATE_RECONCILED")
+    assert any(
+        event["payload"].get("reason") == "captured_payment_id_invalid"
+        and event["payload"].get("action") == "paid_withheld"
+        for event in withheld
+    )
+
+
+def test_conflicting_capture_payment_id_never_grants_paid(client):
+    """A second payment id cannot change the contract's refund target."""
+    contract = make_authorized_contract()
+    order_id = client.post(
+        f"/api/contracts/{contract['id']}/payment-order"
+    ).json()["checkout_config"]["order_id"]
+    bound_payment = "pay_already_bound01"
+    observed_payment = "pay_conflicting01"
+    STORE.update(
+        contract["id"], status="PAYMENT_PENDING", razorpay_payment_id=bound_payment
+    )
+
+    raw, sig, _ = captured_envelope(order_id, observed_payment, 1149900)
+    response = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
+
+    assert response.status_code == 200
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == "PAYMENT_PENDING"
+    assert refreshed["razorpay_payment_id"] == bound_payment
+    assert STORE.get(observed_payment) is None
+    assert any(
+        event["payload"].get("reason") == "conflicting_payment_capture"
+        and event["payload"].get("action") == "paid_withheld"
+        for event in events_for(contract["id"], "STATE_RECONCILED")
+    )
+
+
+def test_capture_does_not_repoint_foreign_payment_projection(client):
+    """A payment id already attached to another order stays attached there."""
+    contract = make_authorized_contract()
+    order_id = client.post(
+        f"/api/contracts/{contract['id']}/payment-order"
+    ).json()["checkout_config"]["order_id"]
+    STORE.update(contract["id"], status="PAYMENT_PENDING")
+    payment_id = "pay_foreign_projection"
+    STORE.put(
+        {
+            "_type": "razorpay_payment",
+            "id": payment_id,
+            "amount": 1149900,
+            "currency": "INR",
+            "status": "captured",
+            "order_id": "order_owned_elsewhere",
+            "amount_refunded": 0,
+        }
+    )
+
+    raw, sig, _ = captured_envelope(order_id, payment_id, 1149900)
+    response = client.post(
+        "/api/webhooks/razorpay", content=raw, headers={"X-Razorpay-Signature": sig}
+    )
+
+    assert response.status_code == 200
+    assert STORE.get(contract["id"])["status"] == "PAYMENT_PENDING"
+    assert STORE.get(contract["id"]).get("razorpay_payment_id") is None
+    assert STORE.get(payment_id)["order_id"] == "order_owned_elsewhere"
+    assert any(
+        event["payload"].get("reason") == "payment_record_order_mismatch"
+        and event["payload"].get("action") == "paid_withheld"
+        for event in events_for(contract["id"], "STATE_RECONCILED")
+    )
 
 
 def test_captured_after_paid_is_idempotent_no_regression(client):
@@ -335,6 +563,7 @@ def test_refund_processed_webhook_appends_event(client):
     payload = {
         "event": "refund.processed",
         "id": f"evt_{uuid.uuid4().hex[:12]}",
+        "created_at": int(time.time()),
         "payload": {
             "refund": {
                 "entity": {
@@ -351,6 +580,219 @@ def test_refund_processed_webhook_appends_event(client):
     )
     assert r.status_code == 200
     assert len(events_for(contract["id"], "REFUND_PROCESSED")) == before + 1
+
+
+def test_refund_before_capture_binds_by_order_and_remediates(client):
+    """A refund can race its capture webhook without becoming an orphan.
+
+    The signed refund carries the order id already issued for the frozen
+    contract. It may therefore reconcile the contract even though no payment
+    capture record or contract payment binding exists yet.
+    """
+    contract = make_authorized_contract()
+    order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
+    assert order_r.status_code == 200
+    order_id = order_r.json()["checkout_config"]["order_id"]
+    STORE.update(contract["id"], status="BREACH_DETECTED")
+
+    payment_id = "pay_RefundBeforeCapture1"
+    refund_id = "rf_RefundBeforeCapture1"
+    event_id = "evt_RefundBeforeCapture1"
+    payload = {
+        "event": "refund.processed",
+        "id": event_id,
+        "created_at": int(time.time()),
+        "payload": {
+            "refund": {
+                "entity": {
+                    "id": refund_id,
+                    "payment_id": payment_id,
+                    "order_id": order_id,
+                    "amount": contract["amount_paise"],
+                    "currency": "INR",
+                    "status": "processed",
+                }
+            }
+        },
+    }
+    raw = json.dumps(payload).encode()
+    response = client.post(
+        "/api/webhooks/razorpay",
+        content=raw,
+        headers={"X-Razorpay-Signature": sign(raw)},
+    )
+
+    assert response.status_code == 200
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == "REMEDIATED"
+    assert refreshed.get("razorpay_payment_id") is None
+    assert refreshed["refunded_amount_paise"] == contract["amount_paise"]
+    assert refreshed["refund_status"] == "fully_refunded"
+    assert refreshed["refund_reconciled"] is True
+    assert len(events_for(contract["id"], "REFUND_PROCESSED")) == 1
+    assert len(events_for(contract["id"], "CONTRACT_REMEDIATED")) == 1
+    received = next(
+        event for event in LOG.all()
+        if event.get("event_type") == "WEBHOOK_RECEIVED"
+    )
+    assert received["correlation_id"] == contract["id"]
+    assert received["payload"]["event_id"] == event_id
+    payment = STORE.get(payment_id)
+    assert payment is not None
+    assert payment["order_id"] == order_id
+    assert payment["status"] == "unknown"
+
+
+def test_refund_order_payment_mismatch_is_withheld(client):
+    """A matching order cannot override an already-bound payment identity."""
+    contract = make_authorized_contract()
+    order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
+    assert order_r.status_code == 200
+    order_id = order_r.json()["checkout_config"]["order_id"]
+    bound_payment_id = "pay_RefundBoundPayment1"
+    foreign_payment_id = "pay_RefundForeignPay1"
+    STORE.update(
+        contract["id"],
+        status="BREACH_DETECTED",
+        razorpay_payment_id=bound_payment_id,
+    )
+
+    payload = {
+        "event": "refund.processed",
+        "id": "evt_RefundBindingConflict1",
+        "created_at": int(time.time()),
+        "payload": {
+            "refund": {
+                "entity": {
+                    "id": "rf_RefundBindingConflict1",
+                    "payment_id": foreign_payment_id,
+                    "order_id": order_id,
+                    "amount": contract["amount_paise"],
+                    "currency": "INR",
+                    "status": "processed",
+                }
+            }
+        },
+    }
+    raw = json.dumps(payload).encode()
+    response = client.post(
+        "/api/webhooks/razorpay",
+        content=raw,
+        headers={"X-Razorpay-Signature": sign(raw)},
+    )
+
+    assert response.status_code == 200
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == "BREACH_DETECTED"
+    assert refreshed.get("refund_reconciled") is not True
+    assert refreshed.get("refunded_amount_paise") is None
+    assert STORE.get(foreign_payment_id) is None
+    assert STORE.get("rf_RefundBindingConflict1") is None
+    conflicts = [
+        event
+        for event in LOG.all()
+        if event.get("event_type") == "STATE_RECONCILED"
+        and event.get("payload", {}).get("reason") == "refund_binding_conflict"
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0]["payload"]["conflict"] == "contract_payment_mismatch"
+
+
+def test_capture_snapshot_cannot_erase_refund_seen_first(client):
+    """A captured-payment snapshot with amount_refunded=0 is stale when a
+    refund webhook already projected the refund; keep the ledger total."""
+    contract = make_authorized_contract()
+    order_r = client.post(f"/api/contracts/{contract['id']}/payment-order")
+    assert order_r.status_code == 200
+    order_id = order_r.json()["checkout_config"]["order_id"]
+    STORE.update(contract["id"], status="BREACH_DETECTED")
+
+    payment_id = "pay_RefundFirstThenCapture1"
+    refund_id = "rf_RefundFirstThenCapture1"
+    refund_payload = {
+        "event": "refund.processed",
+        "id": "evt_RefundFirstThenCapture1",
+        "created_at": int(time.time()),
+        "payload": {
+            "refund": {
+                "entity": {
+                    "id": refund_id,
+                    "payment_id": payment_id,
+                    "order_id": order_id,
+                    "amount": 250000,
+                    "currency": "INR",
+                    "status": "processed",
+                }
+            }
+        },
+    }
+    refund_raw = json.dumps(refund_payload).encode()
+    first = client.post(
+        "/api/webhooks/razorpay",
+        content=refund_raw,
+        headers={"X-Razorpay-Signature": sign(refund_raw)},
+    )
+    assert first.status_code == 200
+    assert STORE.get(payment_id)["amount_refunded"] == 250000
+
+    capture_raw, capture_sig, _ = captured_envelope(
+        order_id,
+        payment_id,
+        contract["amount_paise"],
+        amount_refunded=0,
+    )
+    second = client.post(
+        "/api/webhooks/razorpay",
+        content=capture_raw,
+        headers={"X-Razorpay-Signature": capture_sig},
+    )
+    assert second.status_code == 200
+    payment = STORE.get(payment_id)
+    assert payment is not None
+    assert payment["amount_refunded"] == 250000
+    assert payment["processed_refund_ids"] == [refund_id]
+    assert payment["refund_status"] == "processed"
+
+
+def test_failed_webhook_dispatch_is_redeliverable(client, monkeypatch):
+    """A handler failure leaves a failed claim that the next delivery retries."""
+    import project_dante.api.routes.webhooks as webhook_routes
+
+    calls = 0
+
+    def flaky_handler(event_id, payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient handler failure")
+
+    monkeypatch.setattr(webhook_routes, "_on_payment_captured", flaky_handler)
+    raw, sig, event_id = captured_envelope(
+        "order_retry_0001", "pay_retry_000001", 1149900, "evt_retry_dispatch"
+    )
+
+    first = client.post(
+        "/api/webhooks/razorpay",
+        content=raw,
+        headers={"X-Razorpay-Signature": sig},
+    )
+    assert first.status_code == 500
+    failed = STORE.get(event_id)
+    assert failed is not None
+    assert failed["processing_status"] == "failed"
+    assert failed["attempts"] == 1
+
+    second = client.post(
+        "/api/webhooks/razorpay",
+        content=raw,
+        headers={"X-Razorpay-Signature": sig},
+    )
+    assert second.status_code == 200
+    processed = STORE.get(event_id)
+    assert processed is not None
+    assert processed["processing_status"] == "processed"
+    assert processed["attempts"] == 2
+    assert calls == 2
 
 
 # ------------------------------------------------------------ verify-client
@@ -408,6 +850,29 @@ def test_verify_client_rejects_order_mismatch(client):
     assert r.status_code == 403
 
 
+def test_verify_client_rejects_contract_without_server_order(client):
+    """A valid sandbox HMAC cannot advance a contract with no bound order."""
+    contract = make_authorized_contract()
+    payment_id = "pay_NoServerOrder001"
+    signature = sign(
+        f"order_Arbitrary0001|{payment_id}".encode(), secret=SANDBOX_KEY_SECRET
+    )
+    response = client.post(
+        "/api/payments/verify-client",
+        json={
+            "contract_id": contract["id"],
+            "razorpay_order_id": "order_Arbitrary0001",
+            "razorpay_payment_id": payment_id,
+            "signature": signature,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "payment_order_not_created"
+    refreshed = STORE.get(contract["id"])
+    assert refreshed["status"] == "AWAITING_BUYER_AUTH"
+    assert refreshed.get("razorpay_payment_id") is None
+
+
 # ------------------------------------------------------------- payment-order
 
 
@@ -448,6 +913,27 @@ def test_payment_order_idempotent_reentry_same_order(client):
     r1 = client.post(f"/api/contracts/{contract['id']}/payment-order").json()
     r2 = client.post(f"/api/contracts/{contract['id']}/payment-order").json()
     assert r1["checkout_config"]["order_id"] == r2["checkout_config"]["order_id"]
+    assert len(STORE.list("razorpay_order")) == 1
+
+
+def test_payment_order_readback_and_pending_reentry_keep_same_order(client):
+    contract = make_authorized_contract()
+    path = f"/api/contracts/{contract['id']}/payment-order"
+    created = client.post(path)
+    assert created.status_code == 200
+    first = created.json()
+    order_id = first["checkout_config"]["order_id"]
+
+    readback = client.get(path)
+    assert readback.status_code == 200
+    recovered = readback.json()
+    assert recovered["checkout_config"] == first["checkout_config"]
+    assert recovered["contract_status"] == "PAYMENT_ORDER_CREATED"
+
+    STORE.update(contract["id"], status="PAYMENT_PENDING")
+    reentered = client.post(path)
+    assert reentered.status_code == 200
+    assert reentered.json()["checkout_config"]["order_id"] == order_id
     assert len(STORE.list("razorpay_order")) == 1
 
 

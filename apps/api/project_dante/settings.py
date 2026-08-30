@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,7 +48,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     redis_url: str = ""
 
-    llm_provider: str = ""  # "" | anthropic | openai-compatible
+    llm_provider: str = ""  # "" | anthropic | openai-compatible | groq
     llm_model: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""  # OpenAI-compatible base (…/v1); empty => api.openai.com/v1
@@ -61,7 +62,7 @@ class Settings(BaseSettings):
 
     # ----------------------------------------------------------- razorpay
 
-    def __init__(self, **data: object) -> None:
+    def __init__(self, **data: Any) -> None:
         super().__init__(**data)
         self._enforce_test_only_keys()
 
@@ -117,7 +118,7 @@ class Settings(BaseSettings):
         """The engine that will ACTUALLY serve requests ('' => rules)."""
         if self.llm_provider == "anthropic" and self.llm_api_key:
             return "anthropic"
-        if self.llm_provider == "openai-compatible" and self.llm_api_key:
+        if self.llm_provider in ("openai-compatible", "groq") and self.llm_api_key:
             return "openai-compatible"
         return ""
 

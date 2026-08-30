@@ -14,7 +14,7 @@ implementations behind `get_client()`:
 | | `SandboxClient` (default) | `LiveTestModeClient` |
 |---|---|---|
 | Network | none — records live in the Dante STORE | real calls to `https://api.razorpay.com/v1` via httpx |
-| IDs | realistic shapes (`order_` / `pay_` / `rf_` + 14 alphanumerics) | issued by Razorpay |
+| IDs | realistic shapes (`order_` / `pay_` / `rf_` + 14 alphanumerics) | issued by Razorpay (`rfnd_` for refunds) |
 | Signatures | **real** HMAC-SHA256 math under a clearly synthetic key | real HMACs under your test-mode key secret |
 | Records flagged | `"sandbox": true` on every order/payment/refund | `mode: "live-test-mode"` |
 | Money movement | simulated capture/refund bookkeeping | genuine Test Mode transactions |
@@ -57,7 +57,13 @@ returns **403** (it is sandbox-only by design).
 ### 2.3 What changes at runtime
 
 - `POST /api/contracts/{id}/payment-order` creates a REAL test order.
-  The response's `checkout_config.key_id` is populated so Standard Checkout can run.
+  The response's public `checkout_config.key_id` is mapped by the browser to
+  Standard Checkout's `key` option. `key_id` is an API transport field, never
+  an option passed to `new Razorpay(...)`.
+- `GET /api/contracts/{id}/payment-order` reads back that already-created order
+  for a direct navigation, new tab, or cold refresh; it never creates a second
+  payable order and only returns an order whose receipt, amount, currency, and
+  id still bind to the frozen contract.
 - The browser completes payment with Standard Checkout using a test card.
 - `POST /api/payments/verify-client` verifies the checkout handler signature server-side
   (HMAC-SHA256 of `order_id|payment_id` with the key secret).
@@ -76,11 +82,16 @@ The endpoint:
 
 - reads the RAW body and verifies `X-Razorpay-Signature`
   (HMAC-SHA256 hex of the raw bytes) BEFORE parsing JSON;
+- rejects signed envelopes with a missing, invalid, stale, or implausibly
+  future `created_at` timestamp (five-minute replay window), while allowing a
+  known failed event id to be reclaimed for provider redelivery;
 - stores every verified event keyed by provider event id
   (`X-Razorpay-Event-Id` header, falling back to the payload id);
 - returns `200 {"ok": true, "duplicate": true}` for replays with zero
   additional domain effect;
 - reconciles out-of-order deliveries instead of corrupting state;
+- requires present refund payment/order identifiers to agree with known Dante
+  bindings; conflicting signed observations are audited and withheld;
 - responds fast — no external calls inside the handler beyond verification.
 
 > **Local development:** Razorpay must reach your machine over HTTPS. Use a
@@ -116,9 +127,9 @@ Other useful instruments in Test Mode: netbanking "success" bank, UPI
 | #7 executor re-check before money moves | `_recompute_contract_hash` drift gate in routes/payments.py — 409 `contract_drift`, no order |
 | #8 secrets server-only | keys read only inside `LiveTestModeClient`; never logged; sandbox hands `key_id: ""` to the browser |
 | #9 client success ≠ truth | `/payments/verify-client` stops at PAYMENT_PENDING; only webhook grants PAID |
-| #10 raw-body signature verify first | `handle_webhook_bytes`: verify → parse, 401 otherwise, nothing stored |
+| #10 raw-body signature verify first | `handle_webhook_bytes`: verify → parse → freshness gate, 401/400 otherwise, nothing stored |
 | #11 duplicate events idempotent | event-id STORE check before effects; `WEBHOOK_DUPLICATE_IGNORED` audit |
-| #12 out-of-order safe | legal-path walk to PAID with `STATE_RECONCILED` hops; post-PAID states never regress; amount mismatch blocks PAID |
+| #12 out-of-order safe | legal-path walk to PAID with `STATE_RECONCILED` hops; post-PAID states never regress; amount/currency and capture identity/projection mismatches block PAID |
 
 ## 7. Demo without real keys
 
@@ -140,6 +151,7 @@ same payment behaves like an upstream redelivery: deduped, one domain effect.
 
 ```
 POST /api/contracts/{id}/payment-order   -> {mode, razorpay_order, checkout_config{key_id, order_id, amount_paise, currency}}
+GET  /api/contracts/{id}/payment-order   -> same existing order response (read-only; PAYMENT_ORDER_CREATED/PAYMENT_PENDING)
 POST /api/payments/verify-client          -> {status:"client_confirmed", contract_status}
 POST /api/webhooks/razorpay               -> 200 {"ok":true} | 401 invalid_signature | duplicate:true
 POST /api/demo/razorpay/simulate-event    -> {delivered:true, synthetic:true, ...}   (sandbox+demo only)

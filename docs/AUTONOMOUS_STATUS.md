@@ -1,7 +1,8 @@
 # AUTONOMOUS STATUS — Finish-to-Submission Run
 
 **Plan:** PROJECT_DANTE_AUTONOMOUS_FINISH_PLAN.md
-**Baseline:** main @ ed5be75 (green sandbox) → now far past it.
+**Baseline:** main @ 4ddb255 (current checkout, aligned with origin/main).
+**Updated:** 2026-08-29; local hardening and verification complete.
 
 ## Completed workstreams
 
@@ -15,18 +16,19 @@
 
 ## Current gates
 
-- Backend: 422+ passed (15 PG integration skips without a reachable DB — honest)
-- Ruff / tsc / next build: clean
-- Playwright: hero arc + checkout-options spec green (×3 consecutive runs)
-- Sandbox E2E: PASSED
+- Backend: 470 passed (15 PG integration skips without a reachable DB — honest)
+- Ruff / mypy / tsc / next build: clean
+- Playwright/browser smoke: hero arc + checkout-options spec green (×3 consecutive runs); rendered audit/timeline/merchant surfaces verified
+- Sandbox E2E: PASSED across [01]–[16], including signed webhook, breach, policy, refund, idempotency, and audit
 
 ## Final phase
 
-- §42 review assault: RUNNING (8 reviewers + adversarial verify)
+- §42 review assault: COMPLETE; local review findings are remediated and the final gates are green
+- Real Razorpay Test Mode evidence: NOT_YET_PROVEN; see `REAL_INTEGRATION_STATUS.md` and `docs/BLOCKERS.md`
 
 ## Human blockers (docs/BLOCKERS.md)
 
 1. **Razorpay `rzp_test_*` keys + webhook secret** → requirement 5 real-smoke proof
    (`scripts/verify_real_integration.py` handles everything else incl. the one human checkout step)
-2. LLM API key (optional; openai-compatible or anthropic)
+2. LLM API key (optional; anthropic, openai-compatible, or groq)
 3. Deployment account auth for Railway/Vercel (configs are copy-paste ready)

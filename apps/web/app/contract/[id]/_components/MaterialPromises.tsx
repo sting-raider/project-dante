@@ -37,7 +37,10 @@ export function MaterialPromises({ promises }: { promises: Promise_[] }) {
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-display text-2xl text-ink">Material promises</h3>
+        <div>
+          <p className="folio-label text-signal">FROZEN PROMISE LEDGER</p>
+          <h3 className="mt-1 font-display text-2xl text-ink">Material promises</h3>
+        </div>
         <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-ink-soft">
           {materialCount} of {promises.length} material to intent
         </span>

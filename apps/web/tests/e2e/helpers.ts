@@ -15,9 +15,9 @@ export const API_URL = process.env.DANTE_API_URL ?? "http://localhost:8000";
 const OPERATOR_TOKEN = process.env.DANTE_DEMO_OPERATOR_TOKEN ?? "";
 
 export const test = base.extend<{ api: Awaited<ReturnType<typeof makeApi>> }>({
-  api: async ({}, use) => {
+  api: async ({}, provideApi) => {
     const api = await makeApi();
-    await use(api);
+    await provideApi(api);
     await api.dispose();
   },
 });

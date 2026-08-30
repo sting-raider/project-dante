@@ -24,7 +24,6 @@ import { BuyingBrief } from "./_components/BuyingBrief";
 import { OfferSpread } from "./_components/OfferSpread";
 import {
   Dateline,
-  Folio,
   Panel,
   Button,
   Rule,
@@ -88,7 +87,7 @@ export default function BuyPage() {
       {/* brief + parsed intent */}
       <div className="mt-10 grid gap-10 md:grid-cols-12">
         <div className="md:col-span-7">
-          <SectionLabel index="§1">The buyer's brief</SectionLabel>
+          <SectionLabel index="§1">The buyer&apos;s brief</SectionLabel>
           <label htmlFor="brief" className="sr-only">
             Your buying brief, in your own words
           </label>

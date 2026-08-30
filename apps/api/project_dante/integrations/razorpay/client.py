@@ -20,6 +20,7 @@ import hmac
 import logging
 import secrets
 import string
+import threading
 import time
 from typing import Any, Protocol
 
@@ -100,6 +101,8 @@ class RazorpayClient(Protocol):
 
     def fetch_order_payments(self, order_id: str) -> list[dict]: ...
 
+    def fetch_order_by_receipt(self, receipt: str) -> dict | None: ...
+
     def create_refund(
         self,
         payment_id: str,
@@ -121,6 +124,30 @@ def _existing_refund_for_key(idempotency_key: str) -> dict | None:
     if not idempotency_key:
         return None
     return STORE.find_one("razorpay_refund", idempotency_key=idempotency_key)
+
+
+def _stored_refunded_total(payment_id: str) -> int:
+    """Sum distinct processed local refund records for one payment.
+
+    A refund webhook can arrive before the delayed response to the originating
+    POST. In that ordering ``amount_refunded`` already includes the refund, so
+    adding the response amount again would overstate the payment projection and
+    incorrectly block later refunds. The ledger total is the safe merge value.
+    """
+    total = 0
+    seen: set[str] = set()
+    for refund in STORE.find("razorpay_refund", payment_id=payment_id):
+        if refund.get("status") not in (None, "processed", "paid"):
+            continue
+        refund_id = str(refund.get("id") or "")
+        if refund_id and refund_id in seen:
+            continue
+        if refund_id:
+            seen.add(refund_id)
+        amount = refund.get("amount_paise", refund.get("amount"))
+        if isinstance(amount, int) and not isinstance(amount, bool) and amount > 0:
+            total += amount
+    return total
 
 
 def refund_idempotency_header_value(idempotency_key: str) -> str:
@@ -183,9 +210,12 @@ class LiveTestModeClient:
         path: str,
         json_body: dict | None = None,
         headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict:
         try:
-            resp = self._http.request(method, path, json=json_body, headers=headers)
+            resp = self._http.request(
+                method, path, json=json_body, headers=headers, params=params
+            )
         except httpx.HTTPError as exc:  # network/DNS/timeout — no body, no secrets
             kind = type(exc).__name__
             raise RazorpayError(
@@ -246,6 +276,35 @@ class LiveTestModeClient:
         items = data.get("items") if isinstance(data, dict) else None
         return items if isinstance(items, list) else []
 
+    def fetch_order_by_receipt(self, receipt: str) -> dict | None:
+        """Recover an order after a create response was lost.
+
+        Razorpay exposes receipt filtering on the order collection endpoint;
+        return only an exact receipt match because the recovery caller will
+        bind this order to a frozen contract.
+        """
+        if not receipt:
+            return None
+        try:
+            data = self._request(
+                "GET", "/orders", params={"receipt": receipt, "count": 100}
+            )
+        except RazorpayError as exc:
+            logger.warning(
+                "razorpay fetch_order_by_receipt failed receipt=%s status=%s",
+                receipt,
+                exc.status_code,
+            )
+            return None
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if isinstance(item, dict) and str(item.get("receipt") or "") == receipt:
+                item["mode"] = "live-test-mode"
+                return item
+        return None
+
     # ------------------------------------------------------------- refunds
 
     def create_refund(
@@ -286,7 +345,41 @@ class LiveTestModeClient:
         )
         refund["mode"] = "live-test-mode"
         refund.setdefault("idempotency_key", idempotency_key)
-        STORE.put({"_type": "razorpay_refund", **refund})
+        # A refund webhook may win the race and persist this provider id
+        # before the POST response reaches us. Merge the response into that
+        # record instead of replacing it, otherwise webhook_event_ids,
+        # source, and reconciliation metadata disappear from the audit
+        # projection when the originating response finally arrives.
+        refund_id = str(refund.get("id") or "")
+        existing_refund = STORE.get(refund_id) if refund_id else None
+        refund_record = {
+            "_type": "razorpay_refund",
+            **(existing_refund or {}),
+            **refund,
+        }
+        refund_record["_type"] = "razorpay_refund"
+        STORE.put(refund_record)
+        payment = STORE.get(payment_id)
+        if payment is not None and payment.get("_type") == "razorpay_payment":
+            prior = payment.get("amount_refunded")
+            prior_amount = int(prior) if isinstance(prior, int) and prior >= 0 else 0
+            refund_amount = refund.get("amount")
+            if not isinstance(refund_amount, int):
+                refund_amount = amount_paise or 0
+            refund_ids = list(payment.get("processed_refund_ids") or [])
+            if refund.get("id") and refund["id"] not in refund_ids:
+                refund_ids.append(refund["id"])
+            # Merge the provider projection with the distinct local ledger.
+            # ``prior_amount + refund_amount`` is wrong when the refund
+            # webhook won the race and already projected this same refund.
+            ledger_total = _stored_refunded_total(payment_id)
+            STORE.update(
+                payment_id,
+                amount_refunded=max(prior_amount, ledger_total),
+                refund_status="processed",
+                processed_refund_ids=refund_ids,
+                last_refund_id=refund.get("id") or payment.get("last_refund_id"),
+            )
         return refund
 
 
@@ -298,10 +391,14 @@ def _mint_id(prefix: str) -> str:
     return f"{prefix}{suffix}"
 
 
+_SANDBOX_LOCK = threading.RLock()
+
+
 class SandboxClient:
     """Deterministic, offline Razorpay stand-in.
 
-    NO network. Mints Razorpay-shaped ids (``order_/pay_/rf_`` + 14 alphanumerics),
+    NO network. Mints clearly synthetic Razorpay-shaped ids
+    (``order_/pay_/rf_`` + 14 alphanumerics; real Razorpay refunds use ``rfnd_``),
     persists records under STORE types ``razorpay_order`` / ``razorpay_payment`` /
     ``razorpay_refund`` flagged ``"sandbox": true``, and computes REAL
     HMAC-SHA256 signatures so verification paths are exercised for real.
@@ -316,24 +413,40 @@ class SandboxClient:
     ) -> dict:
         if not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise <= 0:
             raise ValueError("amount_paise must be a positive integer (paise)")
-        now = int(time.time())
-        record = {
-            "_type": "razorpay_order",
-            "id": _mint_id("order_"),
-            "amount": amount_paise,
-            "amount_due": amount_paise,
-            "amount_paid": 0,
-            "currency": "INR",
-            "receipt": receipt,
-            "status": "created",
-            "attempts": 0,
-            "notes": {str(k): str(v) for k, v in (notes or {}).items()},
-            "created_at": now,
-            "sandbox": True,
-            "mode": "sandbox",
-        }
-        STORE.put(record)
-        return dict(record)
+        normalized_notes = {str(k): str(v) for k, v in (notes or {}).items()}
+        with _SANDBOX_LOCK:
+            if receipt:
+                existing = STORE.find_one("razorpay_order", receipt=receipt)
+                if existing is not None:
+                    if (
+                        existing.get("amount") != amount_paise
+                        or existing.get("currency") != "INR"
+                        or existing.get("notes") != normalized_notes
+                    ):
+                        raise RazorpayError(
+                            "sandbox receipt already used with different order terms",
+                            status_code=400,
+                        )
+                    return dict(existing)
+
+            now = int(time.time())
+            record = {
+                "_type": "razorpay_order",
+                "id": _mint_id("order_"),
+                "amount": amount_paise,
+                "amount_due": amount_paise,
+                "amount_paid": 0,
+                "currency": "INR",
+                "receipt": receipt,
+                "status": "created",
+                "attempts": 0,
+                "notes": normalized_notes,
+                "created_at": now,
+                "sandbox": True,
+                "mode": "sandbox",
+            }
+            STORE.put(record)
+            return dict(record)
 
     # ------------------------------------------------------------ payments
 
@@ -350,6 +463,12 @@ class SandboxClient:
             if r.get("order_id") == order_id
         ]
 
+    def fetch_order_by_receipt(self, receipt: str) -> dict | None:
+        if not receipt:
+            return None
+        order = STORE.find_one("razorpay_order", receipt=receipt)
+        return dict(order) if order is not None else None
+
     def capture_sandbox_payment(self, order_id: str, payment_id: str | None = None) -> dict:
         """Mint a CAPTURED payment for a sandbox order (used by the demo
         simulate-event path ONLY — it stands in for Razorpay's own capture).
@@ -357,43 +476,70 @@ class SandboxClient:
         Updates the stored order (status ``paid``, attempts+1) exactly like the
         real gateway does, so downstream fetches stay consistent.
         """
-        order = STORE.get(order_id)
-        if order is None or order.get("_type") != "razorpay_order":
-            raise RazorpayError(f"sandbox order not found: {order_id}", status_code=404)
-        pid = payment_id or _mint_id("pay_")
-        record = {
-            "_type": "razorpay_payment",
-            "id": pid,
-            "entity": "payment",
-            "amount": order.get("amount"),
-            "currency": order.get("currency", "INR"),
-            "status": "captured",
-            "order_id": order_id,
-            "method": "card",
-            "captured": True,
-            "amount_refunded": 0,
-            "refund_status": None,
-            "card": {
-                "last4": "1111",
-                "network": "Visa",
-                "type": "credit",
-                "issuer": "HDFC",
-                "name": "dante-test-card",
-            },
-            "notes": dict(order.get("notes") or {}),
-            "created_at": int(time.time()),
-            "sandbox": True,
-            "mode": "sandbox",
-        }
-        STORE.put(record)
-        STORE.update(
-            order_id,
-            status="paid",
-            amount_paid=order.get("amount"),
-            amount_due=0,
-            attempts=int(order.get("attempts") or 0) + 1,
-        )
-        return dict(record)
+        with _SANDBOX_LOCK:
+            order = STORE.get(order_id)
+            if order is None or order.get("_type") != "razorpay_order":
+                raise RazorpayError(f"sandbox order not found: {order_id}", status_code=404)
+
+            if payment_id:
+                existing = STORE.get(payment_id)
+                if existing is not None:
+                    if (
+                        existing.get("_type") == "razorpay_payment"
+                        and existing.get("order_id") == order_id
+                    ):
+                        return dict(existing)
+                    raise RazorpayError(
+                        "sandbox payment id is already bound to another record",
+                        status_code=409,
+                    )
+            else:
+                existing = next(
+                    (
+                        payment
+                        for payment in STORE.list("razorpay_payment")
+                        if payment.get("order_id") == order_id
+                        and payment.get("status") == "captured"
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    return dict(existing)
+
+            pid = payment_id or _mint_id("pay_")
+            record = {
+                "_type": "razorpay_payment",
+                "id": pid,
+                "entity": "payment",
+                "amount": order.get("amount"),
+                "currency": order.get("currency", "INR"),
+                "status": "captured",
+                "order_id": order_id,
+                "method": "card",
+                "captured": True,
+                "amount_refunded": 0,
+                "refund_status": None,
+                "card": {
+                    "last4": "1111",
+                    "network": "Visa",
+                    "type": "credit",
+                    "issuer": "HDFC",
+                    "name": "dante-test-card",
+                },
+                "notes": dict(order.get("notes") or {}),
+                "created_at": int(time.time()),
+                "sandbox": True,
+                "mode": "sandbox",
+            }
+            STORE.put(record)
+            STORE.update(
+                order_id,
+                status="paid",
+                amount_paid=order.get("amount"),
+                amount_due=0,
+                attempts=int(order.get("attempts") or 0) + 1,
+            )
+            return dict(record)
 
     # ------------------------------------------------------------- refunds
 
@@ -404,41 +550,56 @@ class SandboxClient:
         idempotency_key: str = "",
         notes: dict | None = None,
     ) -> dict:
-        existing = _existing_refund_for_key(idempotency_key)
-        if existing is not None:
-            logger.info("sandbox refund replay hit idempotency key=%s…", idempotency_key[:8])
-            return existing
-        payment = STORE.get(payment_id)
-        if payment is None or payment.get("_type") != "razorpay_payment":
-            raise RazorpayError(f"sandbox payment not found: {payment_id}", status_code=404)
-        payable = int(payment.get("amount") or 0) - int(payment.get("amount_refunded") or 0)
-        amount = amount_paise if amount_paise is not None else payable
-        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
-            raise ValueError("amount_paise must be a positive integer (paise)")
-        if amount > payable:
-            raise RazorpayError(
-                f"refund amount {amount} exceeds refundable balance {payable}",
-                status_code=400,
+        with _SANDBOX_LOCK:
+            existing = _existing_refund_for_key(idempotency_key)
+            if existing is not None:
+                logger.info(
+                    "sandbox refund replay hit idempotency key=%s…", idempotency_key[:8]
+                )
+                return existing
+            payment = STORE.get(payment_id)
+            if payment is None or payment.get("_type") != "razorpay_payment":
+                raise RazorpayError(
+                    f"sandbox payment not found: {payment_id}", status_code=404
+                )
+            payable = int(payment.get("amount") or 0) - int(
+                payment.get("amount_refunded") or 0
             )
-        record = {
-            "_type": "razorpay_refund",
-            "id": _mint_id("rf_"),
-            "entity": "refund",
-            "amount": amount,
-            "currency": payment.get("currency", "INR"),
-            "payment_id": payment_id,
-            "order_id": payment.get("order_id"),
-            "status": "processed",
-            "speed_requested": "normal",
-            "notes": {str(k): str(v) for k, v in (notes or {}).items()},
-            "created_at": int(time.time()),
-            "idempotency_key": idempotency_key,
-            "sandbox": True,
-            "mode": "sandbox",
-        }
-        STORE.put(record)
-        STORE.update(payment_id, amount_refunded=int(payment.get("amount_refunded") or 0) + amount)
-        return dict(record)
+            amount = amount_paise if amount_paise is not None else payable
+            if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+                raise ValueError("amount_paise must be a positive integer (paise)")
+            if amount > payable:
+                raise RazorpayError(
+                    f"refund amount {amount} exceeds refundable balance {payable}",
+                    status_code=400,
+                )
+            record = {
+                "_type": "razorpay_refund",
+                "id": _mint_id("rf_"),
+                "entity": "refund",
+                "amount": amount,
+                "currency": payment.get("currency", "INR"),
+                "payment_id": payment_id,
+                "order_id": payment.get("order_id"),
+                "status": "processed",
+                "speed_requested": "normal",
+                "notes": {str(k): str(v) for k, v in (notes or {}).items()},
+                "created_at": int(time.time()),
+                "idempotency_key": idempotency_key,
+                "sandbox": True,
+                "mode": "sandbox",
+            }
+            STORE.put(record)
+            refund_ids = list(payment.get("processed_refund_ids") or [])
+            refund_ids.append(record["id"])
+            STORE.update(
+                payment_id,
+                amount_refunded=int(payment.get("amount_refunded") or 0) + amount,
+                refund_status="processed",
+                processed_refund_ids=refund_ids,
+                last_refund_id=record["id"],
+            )
+            return dict(record)
 
 
 # ------------------------------------------------------------------- factory

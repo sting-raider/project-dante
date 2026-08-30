@@ -69,7 +69,7 @@ red-team suite once that module merges; **[RESIDUAL]** = accepted gap, see Resid
 | Boundary | S (Spoofing) | T (Tampering) | R (Repudiation) | I (Info disclosure) | D (DoS) | E (Elevation) |
 |---|---|---|---|---|---|---|
 | T1 webhook | forged sender ⇒ HMAC check `service.verify_webhook_signature` | body mutated post-sign ⇒ HMAC mismatch; reorder ⇒ idempotent reconcile | Razorpay retries lost ⇒ events persisted pre-processing | payload logged raw ⇒ secrets never in payloads | 1MB bodies ⇒ reject ≤401/413 path, no parse | n/a — no auth context in webhooks |
-| T2 API edge | anonymous caller ⇒ demo endpoints gated by `demo_mode`; money endpoints require proposal chain | client forges capture success ⇒ server-side verify + webhook-only final truth (I9) | every action emits domain event with idempotency key | CORS pinned to app origin; secrets server-only | oversized bodies ⇒ FastAPI limits + chaos tests | direct `/execute` calls ⇒ executor re-checks policy (I7) |
+| T2 API edge | anonymous caller ⇒ demo endpoints gated by `demo_mode`; money endpoints require proposal chain | client forges capture success ⇒ server-side verify + webhook-only final truth (I9) | request IDs + structured completion logs; every action emits domain event with idempotency key | CORS pinned to app origin; secrets server-only; request bodies/query strings omitted from HTTP logs | production client-address limiter (120 reads / 30 writes per 60s) + oversized-body limits + chaos tests | direct `/execute` calls ⇒ executor re-checks policy (I7) |
 | T3/T6 merchant data | fake offer snapshot ⇒ snapshot id + sha256 evidence | price drift after freeze ⇒ `offer_hash` mismatch invalidates authorization | provenance via `source_snapshot_id` | n/a public-ish catalog | hostile giant descriptions ⇒ bounded fixture sizes | injection in text ⇒ T6 pipeline rules (§4) |
 | T4 agent output | model output spoofing tool results ⇒ schema forbid-extra + enum bounds | amount/type confusion in proposals ⇒ pydantic strict ints (§4 AMT) | all runs logged (`agent_runs`) | prompts never contain secrets (I8) | retry loops capped | refund execution never exposed to agents (I1/I2) |
 | T5 buyer text | impersonation ("as admin") ⇒ no authority channel from prose | tries to rewrite constraints ⇒ constraints only widen within mandate; limits not raisable by prose | intent stored verbatim as evidence | n/a | huge intents ⇒ length caps at compile | "refund me double" ⇒ policy engine deterministic, ignores prose |
@@ -165,11 +165,23 @@ Mitigations:
 - HMAC-SHA256 over **raw bytes** with webhook secret, compare before parsing (I10) —
   `integrations/razorpay/service.py:verify_webhook_signature` **[CONTRACTED→Agent B]**;
   constant-time compare required.
+- Freshness gate requires Razorpay's top-level integer `created_at` to be within
+  five minutes (or to belong to an already-claimed failed event being
+  redelivered), blocking old signed bodies that arrive with a new delivery id.
 - Failure mode: HTTP 401, **no** domain event appended, **no** `webhook_event` row —
   asserted in both suites.
 - Out-of-order tolerance: captured-before-authorized reconciles from fetched payment state and
   logs `STATE_RECONCILED` rather than corrupting state (I12) —
   `api/routes/webhooks.py` **[CONTRACTED→Agent B]**.
+- Refund binding is conjunctive when identifiers are present: known payment, order, contract,
+  and refund projections must agree; mismatches are audited and withheld. Refund-before-capture
+  remains supported when the already-issued order is the only binding available.
+- Captured-payment binding is conjunctive as well: a capture must carry a non-empty payment id,
+  and any known contract, order, and payment projection must agree before the payment id is
+  attached or `PAID` is granted. Missing or conflicting identifiers are audited as
+  `STATE_RECONCILED` with `action=paid_withheld`; compare-and-swap/put-if-absent writes and a
+  final contract re-read close concurrent repointing gaps. Regression coverage lives in
+  `tests/test_webhooks.py`.
 - Unknown-entity events (refund for foreign payment id) stored, never acted upon.
 - Chaos coverage: `tests/test_webhook_chaos.py` (duplicate×5, orphan, skipped-stages, forged,
   unsigned, missing-header, 1MB, non-JSON).
@@ -203,8 +215,12 @@ Mitigations:
 3. **Webhook secret default**: `settings.py` ships a dev default (`dante-dev-webhook-secret`) so
    sandbox flows work out-of-the-box. Production deployments MUST override via env; the secrets
    scan does not flag it because it is not a credential format.
-4. **No rate limiting / auth on the API edge yet** — demo posture; money-mutation endpoints are
-   protected by the proposal chain rather than caller identity. Listed for post-buildathon work.
+4. **No distributed rate limiting or general API authentication** — production now applies a
+   bounded process-local limiter (120 reads / 30 writes per client address per rolling 60 seconds),
+   while health/readiness, CORS preflights, and the signed Razorpay webhook intake are exempt.
+   The single-replica deployment requirement remains, and money-mutation endpoints are protected
+   by the proposal chain rather than caller identity. General authentication and a shared limiter
+   remain post-buildathon work.
 5. **LLM provider paths** (when enabled) inherit the same schema gates, but prompt-level hardening
    is provider-dependent; the deterministic layer is the actual control plane.
 6. **Synthetic fulfillment writes** are guarded by `demo_mode`, which defaults true for the
@@ -213,7 +229,8 @@ Mitigations:
 ## 6. Red-team results
 
 Latest run: `cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
-→ **72 passed / 0 failed / 0 skipped**. Full API tree: **303 passed**.
+→ **72 passed / 0 failed / 0 skipped**. Full API tree: **470 passed, 15 skipped**
+(Postgres/Docker unavailable).
 
 Three vulnerabilities found during red-teaming were VERIFIED FIXED and are now
 covered by permanent regression tests:
@@ -225,9 +242,11 @@ covered by permanent regression tests:
 | K-03 | HIGH | signature-valid captured webhook force-wrote PAID onto CANCELLED/FAILED/DRAFT contracts, bypassing the state machine | `api/routes/webhooks.py`: `_walk_to_paid` legal-path walk + record-withhold fallback (`paid_withheld`) | `TestWebhookChaos::test_captured_never_resurrects_cancelled_or_draft_contracts` |
 
 Post-fix hardening also verified: the observed payment id is no longer grafted
-onto non-payable contracts (`webhooks.py:245` `payment_rel_ok` gate), and
-post-paid states never regress under late redelivery — both covered by new
-permanent attacks in the chaos suite.
+onto non-payable contracts (`_withhold_captured_event` gate), and post-paid states
+never regress under late redelivery. Capture identifiers and known payment projections
+are also binding-checked before any projection or contract write
+(`_payment_record_binding_conflict`, `_safe_transition`, and `test_webhooks.py`).
+These cases are covered by permanent attacks and regression tests.
 
 Full per-vector status:
 

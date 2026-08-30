@@ -158,7 +158,12 @@ def run(limit: int | None = None) -> dict:
 
     thresholds_ok, msgs = threshold_check(
         metrics,
-        [("hard_constraint_violation_rate", exact(0)), ("hard_constraint_violations", exact(0))],
+        [
+            ("hard_constraint_violation_rate", exact(0)),
+            ("hard_constraint_violations", exact(0)),
+            ("scenario_accuracy", exact(1.0)),
+            ("failures", exact(0)),
+        ],
     )
     print("\nThresholds:")
     for m in msgs:

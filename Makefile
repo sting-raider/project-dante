@@ -24,6 +24,7 @@ test: setup
 
 lint: setup
 	cd apps/api && uv run ruff check project_dante tests
+	cd apps/web && npm run lint
 	cd apps/web && npx tsc --noEmit
 
 typecheck: setup

@@ -72,7 +72,7 @@ export function OfferSpread({
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-display text-2xl text-ink">The merchant's shelf</h3>
+        <h3 className="font-display text-2xl text-ink">The merchant&apos;s shelf</h3>
         <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-ink-soft">
           {feasible.length} feasible · {infeasible.length} rejected
         </span>
@@ -227,7 +227,7 @@ export function OfferSpread({
             {submitting ? "Freezing promises…" : "Freeze & open contract"}
           </Button>
           <span className="max-w-md font-body text-[13px] leading-snug text-ink-soft">
-            Freezes this offer's exact promises into a Dante Contract before any
+            Freezes this offer&apos;s exact promises into a Dante Contract before any
             money moves. You authorize payment on the next screen.
           </span>
         </div>

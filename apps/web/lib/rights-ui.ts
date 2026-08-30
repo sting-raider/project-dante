@@ -52,6 +52,10 @@ export type DanteContractFull = {
   razorpay_order_id?: string | null;
   razorpay_payment_id?: string | null;
   amount_paise?: number | null;
+  refund_status?: string | null;
+  refunded_amount_paise?: number | null;
+  refund_reconciled?: boolean;
+  refund_reconciled_at?: string | null;
   status: ContractStatus;
   created_at?: string | null;
   frozen_at?: string | null;
@@ -243,6 +247,24 @@ export type MerchantAnalytics = {
   /** constraint key -> count (Agent F ships a plain dict) */
   blocker_distribution?: Record<string, number>;
   [k: string]: unknown;
+};
+
+/** Computed merchant capability statement from GET /api/merchant/profile. */
+export type MerchantProfile = {
+  merchant_id?: string;
+  name?: string;
+  currency?: string;
+  catalog_version?: string | null;
+  capabilities?: Record<string, boolean>;
+  catalog_stats?: {
+    total_skus?: number;
+    warranty_metadata_coverage?: number;
+    delivery_promise_coverage?: number;
+    return_policy_coverage?: number;
+    [k: string]: unknown;
+  };
+  gateway?: { mode?: string };
+  machine_endpoints?: Record<string, string>;
 };
 
 /* ------------------------------------------------------- demo */

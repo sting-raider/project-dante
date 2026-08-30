@@ -27,7 +27,7 @@ constraints, selects a merchant offer under hard constraints, freezes the exact
 promises that made the offer acceptable into a hashed contract, pays through
 Razorpay, observes fulfillment reality, detects material breaches against the
 frozen promises, derives the buyer's rights, and executes policy-gated remedies —
-with real refunds through Razorpay Test Mode and an append-only audit trail of
+with real Razorpay Test Mode refunds when keys are configured, and an append-only audit trail of
 every step. Payments remember that you paid; Dante remembers what you paid for,
 and what to do when the box betrays the promise.
 ```
@@ -49,7 +49,7 @@ satisfied or remediated:
   deadlines, category — parsed deterministically (critical-constraint recall 1.0
   on a 68-case eval suite).
 · Offers are evaluated against hard constraints that are absolute: zero
-  hard-constraint-violating selections across 116 feasibility checks; rejected
+  hard-constraint-violating selections across 117 feasibility checks; rejected
   offers stay visible with their exact failure reasons.
 · The winning offer's promises are frozen into a hashed contract, each promise
   linked to evidence and marked material/non-material relative to the original
@@ -64,8 +64,11 @@ satisfied or remediated:
   required evidence, dependencies, blocks, and fallbacks.
 · A deterministic remedy planner ranks candidates by a visible scoring function
   (replacement tried first, refund next), a financial policy engine makes the
-  ALLOW / REQUIRE_APPROVAL / DENY call, and a real, idempotent refund executes
-  through Razorpay Test Mode — replay-safe to exactly one money effect.
+  ALLOW / REQUIRE_APPROVAL / DENY call, and an idempotent refund executes
+  behind the same gates — implemented and verified end-to-end against the
+  built-in sandbox rail, and wired to execute as real Razorpay Test Mode calls
+  whenever `rzp_test_*` keys are configured (real-gateway proof is tracked in
+  REAL_INTEGRATION_STATUS.md). Replay-safe to exactly one money effect.
 
 The result for Track 1: agentic commerce that earns repeat trust. Buyers get an
 auditable memory of every purchase and autonomous, bounded remediation; merchants
@@ -102,7 +105,9 @@ distribution behind lost agentic GMV.
 4. Idempotent refunds under replay. Every money action carries a derived
    idempotency key (project-dante:{contract}:{remedy}:v1), a policy snapshot hash,
    reason codes, and evidence IDs. Replaying execute returns the identical
-   rf_ id — exactly one refund effect, verified by dedicated network-level tests.
+   refund id — exactly one refund effect, verified by dedicated network-level
+   tests (rfnd_-shaped refund ids from the real gateway in Test Mode when keys are
+   configured; sandbox-adapter ids otherwise, badged as such).
 
 5. Making evaluation drive the build. A 147-case eval harness (intent, offers,
    breaches, money safety) ran continuously and caught real integration bugs:
@@ -128,13 +133,17 @@ distribution behind lost agentic GMV.
 
 ## Honest-systems statement (keep verbatim wherever the project is described)
 
-- **Payments and refunds are real Razorpay calls.** When Test Mode keys
-  (`rzp_test_*`) are configured, order creation, Standard Checkout, signature
-  verification, webhooks, and refunds hit the real gateway. Without keys, a
-  built-in **sandbox adapter** produces realistic IDs through genuinely computed
-  HMAC signature flows, and every surface is badged **SANDBOX**; the health
-  endpoint reports `sandbox-adapter` vs `live-test-mode`. Live (`rzp_live_*`)
-  keys are hard-rejected at startup.
+- **Payments and refunds hit the real gateway only when keys are configured.**
+  With Test Mode keys (`rzp_test_*`) present, order creation, Standard
+  Checkout, signature verification, webhooks, and refunds are real Razorpay
+  API calls. Without keys, a built-in **sandbox adapter** produces realistic
+  IDs through genuinely computed HMAC signature flows, and every surface is
+  badged **SANDBOX**; the health endpoint reports `sandbox-adapter` vs
+  `live-test-mode`. The sandbox-verified arc is proven by tests and
+  `scripts/verify_e2e.py`; proof against the *real* gateway in Test Mode has
+  not yet been run in this environment and is tracked criterion-by-criterion
+  (currently NOT_YET_PROVEN) in `REAL_INTEGRATION_STATUS.md`. Live
+  (`rzp_live_*`) keys are hard-rejected at startup.
 - **Fulfillment is synthetic and labeled.** Ship, delivery, and device-metadata
   observations come from a simulator; every record carries `"synthetic": true`,
   the UI renders SYNTHETIC badges, and the demo endpoints require an operator

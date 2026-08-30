@@ -12,6 +12,8 @@ import pkgutil
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from project_dante.api.observability import ObservabilityMiddleware
+from project_dante.api.rate_limit import RateLimitMiddleware
 from project_dante.settings import get_settings
 
 settings = get_settings()
@@ -22,12 +24,22 @@ app = FastAPI(
     description="Buyer-owned agentic commerce runtime — intent to resolution.",
 )
 
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.public_app_url, "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Retry-After",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-Trace-Id",
+        "X-Correlation-Id",
+        "X-Contract-Id",
+    ],
 )
 
 

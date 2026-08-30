@@ -17,6 +17,7 @@ import hmac
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,7 @@ def _captured_body(
     return json.dumps(
         {
             "event": event,
+            "created_at": int(time.time()),
             "payload": {
                 "payment": {
                     "entity": {
@@ -244,6 +246,7 @@ class TestWebhookChaos:
         authz = json.dumps(
             {
                 "event": "payment.authorized",
+                "created_at": int(time.time()),
                 "payload": {
                     "payment": {
                         "entity": {
@@ -290,6 +293,7 @@ class TestWebhookChaos:
         body = json.dumps(
             {
                 "event": "refund.processed",
+                "created_at": int(time.time()),
                 "payload": {
                     "refund": {
                         "id": "rfnd_ghost",

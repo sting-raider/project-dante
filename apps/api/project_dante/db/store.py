@@ -10,6 +10,7 @@ Every record carries its type under `_type`; `id` is unique across the store.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import threading
@@ -82,6 +83,22 @@ class Store:
             self._persist()
             return dict(record)
 
+    def put_if_absent(self, record: dict[str, Any]) -> bool:
+        """Insert ``record`` only when its id is not already present.
+
+        This is the store-level claim primitive used by webhook processing.
+        It is deliberately separate from ``put``: replay-safe effects must be
+        able to distinguish "I claimed this id" from "the id already exists"
+        without a racy get-then-put sequence.
+        """
+        rid = record["id"]
+        with self._lock:
+            if rid in self._records:
+                return False
+            self._records[rid] = dict(record)
+            self._persist()
+            return True
+
     def get(self, record_id: str) -> dict[str, Any] | None:
         with self._lock:
             rec = self._records.get(record_id)
@@ -105,14 +122,37 @@ class Store:
             self._persist()
             return dict(rec)
 
-    def list(self, record_type: str | None = None) -> list[dict[str, Any]]:
+    def update_if(
+        self, record_id: str, match_fields: dict[str, Any], **fields: Any
+    ) -> bool:
+        """Atomically check-then-set: apply ``fields`` only while the record's
+        current values match ``match_fields`` exactly (missing key == None,
+        same as ``find`` semantics).
+
+        The whole compare-and-swap happens under ONE lock acquisition, so a
+        racing writer either wins the swap or observes the loser's write —
+        never both. Returns True when the update was applied.
+
+        The Postgres backend implements the same primitive with a row lock, so
+        callers do not need backend-specific fallbacks.
+        """
+        with self._lock:
+            rec = self._records.get(record_id)
+            if rec is None or not all(rec.get(k) == v for k, v in match_fields.items()):
+                return False
+            rec.update(fields)
+            self._records[record_id] = rec
+            self._persist()
+            return True
+
+    def list(self, record_type: str | None = None) -> builtins.list[dict[str, Any]]:
         with self._lock:
             recs = list(self._records.values())
         if record_type is not None:
             recs = [r for r in recs if r.get("_type") == record_type]
         return [dict(r) for r in recs]
 
-    def find(self, record_type: str, **fields: Any) -> list[dict[str, Any]]:
+    def find(self, record_type: str, **fields: Any) -> builtins.list[dict[str, Any]]:
         """Find records of type matching all field==value pairs."""
         out = []
         for r in self.list(record_type):

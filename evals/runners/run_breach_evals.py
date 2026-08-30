@@ -128,6 +128,12 @@ def run(limit: int | None = None) -> dict:
         "delivery.delivered_at",
         "delivery.latest",
         "terms.region",  # aliased to product.region by the runner
+        "accessories.included",
+        "sku",
+        "brand",
+        "attributes.anc",
+        "warranty.duration_months",
+        "returns.window_days",
     }
 
     tp = fp = fn = tn = 0
@@ -249,6 +255,7 @@ def run(limit: int | None = None) -> dict:
         [
             ("breach_f1_supported_keys", at_least(0.85)),
             ("false_positives", exact(0)),
+            ("failures", exact(0)),
         ],
     )
     print("\nThresholds:")

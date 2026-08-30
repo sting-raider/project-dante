@@ -47,8 +47,8 @@ wrapper, and honest results documentation.
 | Suite | Cases | Status | Headline |
 |---|---|---|---|
 | intent | 68 | PASS | critical recall 1.0, overall accuracy 1.0 |
-| offer | 26 / 116 checks | PASS | violation rate 0.0, scenario accuracy 1.0 |
-| breach | 25 | PASS | F1 1.0 supported-keys / 0.75 all-keys, FP=0 |
+| offer | 26 / 117 checks | PASS | violation rate 0.0, scenario accuracy 1.0 |
+| breach | 25 | PASS | F1 1.0 across all exercised keys, FP=0 |
 | money safety | 28 | PASS | unauthorized money actions = 0, case accuracy 1.0 |
 | injection | 50 | PASS | violations = 0, treated_as_data rate 1.0 |
 
@@ -98,13 +98,15 @@ cd apps/api && .venv/Scripts/python.exe ../../evals/runners/run_all.py
 ALL PASSED: True  (intent · offer · breach · money-safety · injection)
 ```
 
-Note: pytest wrapper rewrites the same report files with subset numbers — run
-it BEFORE `run_all.py` when you want reports to hold full-suite results.
+The pytest wrapper writes its curated subset reports under the ignored
+`evals/reports/.pytest-subsets/` directory, so it cannot overwrite the
+canonical full-suite reports produced by `run_all.py`.
 
 ## Known risks / integration notes
 
-- Breach verifier coverage backlog remains (sku/brand/anc/duration/returns/
-  accessories keys unmapped) — closing it lifts all-keys F1 from 0.75 toward 1.0.
+- The previously reported breach coverage backlog is closed: sku/brand/ANC/
+  duration/returns/accessory mappings now run in the 25-case suite, with
+  all-keys F1=1.0 and zero failed cases.
 - Weekday-deadline scenarios are calendar-sensitive at run time by design;
   hero demo query said on certain days legitimately yields zero feasible
   offers (fail-closed).
