@@ -207,8 +207,9 @@ Mitigations:
 
 ## 5. Residual risks (stated honestly)
 
-1. **In-memory store persistence is best-effort** (`db/store.py:_persist` swallows OSError). A
-   crashed process can lose the tail of the audit trail. P0 trade-off; Postgres migration planned.
+1. **JSON snapshot persistence is best-effort** (`db/store.py:_persist` swallows OSError). A
+   filesystem failure or crash during snapshot replacement can still lose the newest tail of
+   the audit trail. The Postgres backend removes the single-file failure mode when configured.
 2. **Single-process idempotency**: dedup lives in process memory (`EventLog._idem_seen`) +
    store file. Two API replicas could double-process concurrent first-time events until Postgres
    unique constraints land. Deployment is single-replica for the buildathon.

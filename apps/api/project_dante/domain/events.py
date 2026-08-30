@@ -1,8 +1,9 @@
 """Append-only domain event stream — canonical audit history (plan §21).
 
-Events are persisted by the events service (db layer); this module defines
-the vocabulary, ordering helpers, and in-memory append-only log used when
-running without Postgres.
+The process-local log is backed by the configured Dante store.  Keeping the
+small in-memory index preserves the existing synchronous API while typed
+``domain_event`` records make the audit timeline survive API restarts for
+both the JSON and Postgres store backends.
 """
 
 from __future__ import annotations
@@ -137,17 +138,57 @@ class DomainEvent(dict):
 
 
 class EventLog:
-    """Thread-safe append-only event log with idempotency-key dedup."""
+    """Thread-safe append-only event log with durable idempotency recovery."""
 
-    def __init__(self) -> None:
+    def __init__(self, store: Any | None = None) -> None:
         self._events: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._idem_seen: set[tuple[str, str]] = set()
+        if store is None:
+            # Lazy import keeps the store/event modules free of an import
+            # cycle while still letting isolated tests inject a temp store.
+            from project_dante.db.store import STORE
+
+            store = STORE
+        self._store = store
+        self._load_persisted()
+
+    @staticmethod
+    def _event_from_record(record: dict[str, Any]) -> dict[str, Any]:
+        """Remove the store discriminator before exposing an event."""
+        return {key: value for key, value in record.items() if key != "_type"}
+
+    def _load_persisted(self) -> None:
+        try:
+            records = self._store.list("domain_event")
+        except Exception:  # noqa: BLE001 - startup must remain fail-safe
+            records = []
+        events = [
+            self._event_from_record(record)
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("id"), str)
+        ]
+        events.sort(
+            key=lambda event: (
+                str(event.get("created_at") or ""),
+                str(event.get("id") or ""),
+            )
+        )
+        with self._lock:
+            self._events = events
+            self._idem_seen = {
+                (event["aggregate_id"], event["idempotency_key"])
+                for event in events
+                if isinstance(event.get("aggregate_id"), str)
+                and isinstance(event.get("idempotency_key"), str)
+                and bool(event.get("idempotency_key"))
+            }
 
     def append(self, event: dict[str, Any]) -> dict[str, Any] | None:
         aggregate_id = event.get("aggregate_id")
         idempotency_key = event.get("idempotency_key")
         with self._lock:
+            dedupe_key: tuple[str, str] | None = None
             # DomainEvent.create() supplies both values as strings. Keep the
             # generic dict boundary fail-safe: malformed events must not put
             # None or arbitrary values into the typed deduplication index.
@@ -159,7 +200,20 @@ class EventLog:
                 key = (aggregate_id, idempotency_key)
                 if key in self._idem_seen:
                     return None  # duplicate suppressed
-                self._idem_seen.add(key)
+                dedupe_key = key
+            # Store events separately from business records so callers keep
+            # receiving the original event shape (without ``_type``).  The
+            # write occurs while the same lock protects the idempotency set,
+            # so a restart cannot resurrect an event that was only partially
+            # claimed in memory.  Claim the idempotency key only after the
+            # durable write succeeds, allowing a caller to retry a failed
+            # persistence attempt safely.
+            if isinstance(event.get("id"), str):
+                persisted = dict(event)
+                persisted["_type"] = "domain_event"
+                self._store.put(persisted)
+            if dedupe_key is not None:
+                self._idem_seen.add(dedupe_key)
             self._events.append(dict(event))
             return event
 
@@ -174,8 +228,15 @@ class EventLog:
     def reset(self) -> int:
         with self._lock:
             n = len(self._events)
+            persisted_ids = [
+                event.get("id")
+                for event in self._events
+                if isinstance(event.get("id"), str)
+            ]
             self._events.clear()
             self._idem_seen.clear()
+            for event_id in persisted_ids:
+                self._store.delete(event_id)
             return n
 
 
