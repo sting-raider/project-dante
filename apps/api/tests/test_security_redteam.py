@@ -25,6 +25,7 @@ import hmac
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -284,24 +285,51 @@ class TestSecretsHygiene:
     def test_no_secrets_in_repo(self):
         offenders: list[str] = []
         scanned = 0
-        for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
-            dirnames[:] = [d for d in dirnames if d not in self.EXCLUDED_DIRS]
-            for name in filenames:
-                path = Path(dirpath) / name
-                try:
-                    if path.stat().st_size > self.MAX_FILE_BYTES:
-                        continue
-                    blob = path.read_bytes()
-                except OSError:
+        # The security invariant is "no secrets committed", not "no local
+        # operator credentials exist on disk".  The latter would make a
+        # correctly ignored .env unusable for real Test Mode smoke runs.  Use
+        # the Git index as the authoritative committed-file set so ignored
+        # local configuration is never treated as repository content.  Keep
+        # a filesystem fallback for source exports that are not Git checkouts.
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "-z"],
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+            )
+            paths = [
+                REPO_ROOT / raw.decode("utf-8")
+                for raw in result.stdout.split(b"\0")
+                if raw
+            ]
+        except (OSError, subprocess.CalledProcessError):
+            paths = []
+            for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+                dirnames[:] = [d for d in dirnames if d not in self.EXCLUDED_DIRS]
+                paths.extend(Path(dirpath) / name for name in filenames)
+
+        for path in paths:
+            try:
+                relative = path.relative_to(REPO_ROOT)
+            except ValueError:
+                continue
+            if any(part in self.EXCLUDED_DIRS for part in relative.parts):
+                continue
+            try:
+                if path.stat().st_size > self.MAX_FILE_BYTES:
                     continue
-                scanned += 1
-                rel = path.relative_to(REPO_ROOT).as_posix()
-                for pat in self.SECRET_PATTERNS:
-                    for m in pat.finditer(blob):
-                        literal = m.group(0).decode("utf-8", errors="replace")
-                        if (rel, literal) in self.ALLOWLIST:
-                            continue
-                        offenders.append(f"{rel}: matched {literal!r}")
+                blob = path.read_bytes()
+            except OSError:
+                continue
+            scanned += 1
+            rel = relative.as_posix()
+            for pat in self.SECRET_PATTERNS:
+                for m in pat.finditer(blob):
+                    literal = m.group(0).decode("utf-8", errors="replace")
+                    if (rel, literal) in self.ALLOWLIST:
+                        continue
+                    offenders.append(f"{rel}: matched {literal!r}")
         assert scanned > 50, f"scan walked only {scanned} files — tree changed?"
         assert not offenders, (
             "SECRET MATERIAL COMMITTED:\n" + "\n".join(offenders)

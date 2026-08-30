@@ -1,6 +1,6 @@
 # Eval report: offer_evals
 
-**Status:** `PASS`  ·  **Generated:** 2026-08-30T06:15:49.997092+00:00
+**Status:** `PASS`  ·  **Generated:** 2026-08-30T07:29:25.930375+00:00
 
 ## Metrics
 
