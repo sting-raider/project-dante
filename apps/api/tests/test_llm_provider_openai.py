@@ -70,6 +70,7 @@ def _chat_response(content: str) -> httpx.Response:
         ("anthropic", "key-anthropic-fixture", "anthropic"),
         ("openai-compatible", "sk-test", "openai-compatible"),
         ("groq", "key-groq-fixture", "openai-compatible"),
+        ("  GROQ  ", "key-groq-spacing-fixture", "openai-compatible"),
         # configured but unusable -> '' -> rules engine
         ("anthropic", "", ""),
         ("openai-compatible", "", ""),

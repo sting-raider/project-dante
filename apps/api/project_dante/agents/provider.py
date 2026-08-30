@@ -187,9 +187,9 @@ class OpenAICompatibleProvider:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._api_key = settings.llm_api_key
-        self.model = settings.llm_model or "gpt-4o-mini"
-        self.base_url = (settings.llm_base_url or OPENAI_DEFAULT_BASE_URL).rstrip("/")
+        self._api_key = settings.llm_api_key.strip()
+        self.model = settings.llm_model.strip() or "gpt-4o-mini"
+        self.base_url = (settings.llm_base_url.strip() or OPENAI_DEFAULT_BASE_URL).rstrip("/")
         self._transport = transport  # test seam: httpx.MockTransport
         self.retries = 0
 

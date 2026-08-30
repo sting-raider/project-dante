@@ -116,9 +116,10 @@ class Settings(BaseSettings):
     @property
     def llm_engine(self) -> str:
         """The engine that will ACTUALLY serve requests ('' => rules)."""
-        if self.llm_provider == "anthropic" and self.llm_api_key:
+        provider = (self.llm_provider or "").strip().lower()
+        if provider == "anthropic" and self.llm_api_key:
             return "anthropic"
-        if self.llm_provider in ("openai-compatible", "groq") and self.llm_api_key:
+        if provider in ("openai-compatible", "groq") and self.llm_api_key:
             return "openai-compatible"
         return ""
 
