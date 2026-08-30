@@ -17,7 +17,19 @@ import threading
 import time
 from typing import Any
 
-_STORE_PATH = os.environ.get("DANTE_STORE_PATH", ".dante-store.json")
+
+def _configured_string(env_name: str, settings_name: str, default: str) -> str:
+    """Read a runtime string from process env, then the loaded .env settings."""
+    value = os.environ.get(env_name)
+    if value and value.strip():
+        return value.strip()
+    from project_dante.settings import get_settings
+
+    configured = getattr(get_settings(), settings_name, "")
+    return str(configured).strip() if configured else default
+
+
+_STORE_PATH = _configured_string("DANTE_STORE_PATH", "dante_store_path", ".dante-store.json")
 
 TYPE_PREFIXES = {
     "intent": "int_",
@@ -195,11 +207,14 @@ def _resolve_store() -> Any:
     - an unreachable-but-configured database defers the error to first
       real use, so processes can start before their DB finishes booting.
     """
-    backend = (os.environ.get("DANTE_STORE_BACKEND") or "json").strip().lower()
+    backend = _configured_string("DANTE_STORE_BACKEND", "dante_store_backend", "json").lower()
     if backend in ("postgres", "pg"):
         from project_dante.db.pg_store import PostgresStore
+        from project_dante.settings import get_settings
 
-        store = PostgresStore(os.environ.get("DATABASE_URL") or None)
+        store = PostgresStore(
+            os.environ.get("DATABASE_URL") or get_settings().database_url or None
+        )
         # Final-assault [14]: when the operator explicitly selects the
         # postgres backend, an unreachable DB must fail STARTUP loudly —
         # deferring to first use hides misconfiguration until a money
