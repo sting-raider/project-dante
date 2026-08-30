@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -567,7 +567,10 @@ class OfferEvaluatorAgent:
                 output_schema=_ExplanationsSchema,
                 trace_id=str(intent_dict.get("id") or ""),
             )
-            by_id = {e.offer_id: e.explanation for e in draft.explanations}
+            by_id = {
+                e.offer_id: e.explanation
+                for e in cast(_ExplanationsSchema, draft).explanations
+            }
             changed = 0
             for r in results[: len(top)]:
                 oid = r["offer"].get("id")

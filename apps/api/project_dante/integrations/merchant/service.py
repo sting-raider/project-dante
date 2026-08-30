@@ -88,7 +88,7 @@ def search_catalog(
     tokens = _tokenize(query or "")
     cat_norm = category.strip().lower() if category else None
 
-    scored: list[tuple[int, int, dict]] = []
+    scored: list[tuple[int, int, int]] = []
     for idx, product in enumerate(catalog):
         if cat_norm and product.get("category", "").lower() != cat_norm:
             continue
@@ -504,7 +504,7 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
         ),
     ]
 
-    result = {
+    result: dict[str, Any] = {
         "kind": "deliver",
         "scenario": scenario or "correct",
         "facts": [_store_fact(f) for f in facts],

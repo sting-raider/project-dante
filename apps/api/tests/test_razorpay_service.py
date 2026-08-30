@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from project_dante.db.store import STORE
@@ -71,6 +72,24 @@ def test_create_order_sandbox_shape(sandbox_env):
     bad = order.copy()
     del bad["_type"], bad["id"]
     assert service.mode() == "sandbox"
+
+
+def test_sandbox_order_receipt_is_retry_safe_and_term_bound(sandbox_env):
+    first = service.create_order(
+        1149900, receipt="dante:retry-order", notes={"contract_id": "con_retry"}
+    )
+    replay = service.create_order(
+        1149900, receipt="dante:retry-order", notes={"contract_id": "con_retry"}
+    )
+    assert replay["id"] == first["id"]
+    assert len(STORE.find("razorpay_order", receipt="dante:retry-order")) == 1
+
+    from project_dante.integrations.razorpay.client import RazorpayError
+
+    with pytest.raises(RazorpayError):
+        service.create_order(
+            999900, receipt="dante:retry-order", notes={"contract_id": "con_retry"}
+        )
 
 
 @pytest.mark.parametrize("bad_amount", [0, -5, 1.5])
@@ -153,6 +172,33 @@ def test_refund_idempotency_same_key_single_effect(sandbox_env):
     assert r1["amount"] == 1149900
     stored = STORE.find("razorpay_refund", idempotency_key="rem_abc:v1")
     assert len(stored) == 1, "one idempotency key => exactly one refund record"
+
+
+def test_refund_idempotency_is_single_effect_under_concurrency(sandbox_env):
+    order = service.create_order(1149900)
+    payment = service.capture_sandbox_payment(order["id"])
+
+    def refund(_: int) -> str:
+        return service.create_refund(
+            payment["id"], amount_paise=1149900, idempotency_key="rem_concurrent:v1"
+        )["id"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        refund_ids = list(pool.map(refund, range(8)))
+
+    assert set(refund_ids) == {refund_ids[0]}
+    assert len(STORE.find("razorpay_refund", idempotency_key="rem_concurrent:v1")) == 1
+    assert service.fetch_payment(payment["id"])["amount_refunded"] == 1149900
+
+
+def test_sandbox_capture_replay_without_payment_id_is_single_effect(sandbox_env):
+    order = service.create_order(500000)
+    first = service.capture_sandbox_payment(order["id"])
+    replay = service.capture_sandbox_payment(order["id"])
+
+    assert replay["id"] == first["id"]
+    assert len(service.fetch_order_payments(order["id"])) == 1
+    assert STORE.get(order["id"])["attempts"] == 1
 
 
 def test_refund_different_keys_are_distinct_effects(sandbox_env):

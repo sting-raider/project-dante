@@ -145,9 +145,18 @@ class EventLog:
         self._idem_seen: set[tuple[str, str]] = set()
 
     def append(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        key = (event.get("aggregate_id"), event.get("idempotency_key"))
+        aggregate_id = event.get("aggregate_id")
+        idempotency_key = event.get("idempotency_key")
         with self._lock:
-            if event.get("idempotency_key"):
+            # DomainEvent.create() supplies both values as strings. Keep the
+            # generic dict boundary fail-safe: malformed events must not put
+            # None or arbitrary values into the typed deduplication index.
+            if (
+                isinstance(aggregate_id, str)
+                and isinstance(idempotency_key, str)
+                and idempotency_key
+            ):
+                key = (aggregate_id, idempotency_key)
                 if key in self._idem_seen:
                     return None  # duplicate suppressed
                 self._idem_seen.add(key)

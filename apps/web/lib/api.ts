@@ -2,11 +2,31 @@
  * Typed fetch client for the Dante FastAPI backend.
  *
  * Base URL comes from NEXT_PUBLIC_API_URL (set in apps/web/.env.local for
- * deploys); defaults to the local uvicorn port. All money fields are integer
- * paise; all timestamps ISO-8601 — see docs/API_CONTRACT.md.
+ * deploys). For local/Tailscale browser sessions without a build-time value,
+ * derive the API host from the page host so a phone does not call its own
+ * localhost. All money fields are integer paise; all timestamps ISO-8601 —
+ * see docs/API_CONTRACT.md.
  */
 
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+function defaultApiBase(): string {
+  if (typeof window === "undefined") return "http://localhost:8000";
+
+  const hostname = window.location.hostname;
+  const isLocalNetworkHost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.startsWith("10.") ||
+    hostname.startsWith("100.") ||
+    hostname.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname);
+
+  return isLocalNetworkHost
+    ? `${window.location.protocol}//${hostname}:8000`
+    : "http://localhost:8000";
+}
+
+export const API = process.env.NEXT_PUBLIC_API_URL ?? defaultApiBase();
 
 export class ApiError extends Error {
   readonly status: number;

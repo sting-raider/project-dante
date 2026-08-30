@@ -375,9 +375,9 @@ def test_find_plan_splits_sql_and_python_filters():
         "payload->>%s = %s",
         "payload->>%s = %s",
     ]
-    # Scalars ride the parameter list; None is deferred to Python matching.
-    assert ("status", "PAID") in params
-    assert ("amount", "2500") in params
+    # Parameters must match every SQL placeholder in order: record type,
+    # JSON key/value, JSON key/value. None is deferred to Python matching.
+    assert params == ["contract", "status", "PAID", "amount", "2500"]
     assert py_checks == [("payload", None)]
 
 
@@ -386,6 +386,5 @@ def test_find_plan_all_python_when_no_scalars():
         "money_action", {"payload": [1, 2]}
     )
     assert where == ["record_type = %s"]
-    assert params == [("record_type", "money_action")]
+    assert params == ["money_action"]
     assert py_checks == [("payload", [1, 2])]
-

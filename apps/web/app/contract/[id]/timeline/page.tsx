@@ -50,7 +50,7 @@ export default function TimelinePage() {
 
   const [events, setEvents] = useState<DanteEvent[] | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [sandbox, setSandbox] = useState<boolean>(false);
+  const [sandbox, setSandbox] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("All");
 
@@ -142,7 +142,9 @@ export default function TimelinePage() {
         </div>
         <div className="flex flex-col items-start gap-2 md:col-span-4 md:items-end">
           {status ? <Badge>{status}</Badge> : null}
-          {sandbox !== null && <span className="folio-label">{sandbox ? "SANDBOX RAIL" : "LIVE TEST-MODE RAIL"}</span>}
+          <span className="folio-label">
+            {sandbox === null ? "PAYMENT RAIL · PROBING…" : sandbox ? "SANDBOX RAIL" : "LIVE TEST-MODE RAIL"}
+          </span>
           <Link
             href={`/audit/${contractId}`}
             className="folio-label underline-offset-4 hover:text-signal hover:underline"

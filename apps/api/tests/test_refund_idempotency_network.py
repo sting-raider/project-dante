@@ -102,12 +102,15 @@ class UpstreamSim:
             return httpx.Response(
                 500, json={"error": {"description": "internal error after processing"}}
             )
+        response_amount = (
+            body.get("amount", 1149900) if isinstance(body, dict) else 1149900
+        )
         return httpx.Response(
             200,
             json={
                 "id": refund_id,
                 "entity": "refund",
-                "amount": 1149900,
+                "amount": response_amount,
                 "currency": "INR",
                 "payment_id": "pay_SIMULATED00000",
                 "status": "processed",
@@ -116,6 +119,43 @@ class UpstreamSim:
 
     def headers_seen(self) -> list[str]:
         return [str(e["header"]) for e in self.requests]
+
+
+class OrderUpstreamSim:
+    """Minimal order collection that can lose the POST response."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+        self.order: dict[str, object] | None = None
+        self.fail_create = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "receipt": request.url.params.get("receipt", ""),
+            }
+        )
+        if request.method == "POST" and request.url.path == "/orders":
+            body = json.loads(request.content or b"{}")
+            self.order = {
+                "id": "order_RECOVERED0001",
+                "amount": body["amount"],
+                "currency": body["currency"],
+                "receipt": body["receipt"],
+                "notes": body.get("notes", {}),
+                "status": "created",
+            }
+            if self.fail_create:
+                self.fail_create = False
+                raise httpx.ReadTimeout("simulated lost order response")
+            return httpx.Response(200, json=self.order)
+        if request.method == "GET" and request.url.path == "/orders":
+            receipt = request.url.params.get("receipt", "")
+            items = [self.order] if self.order and self.order.get("receipt") == receipt else []
+            return httpx.Response(200, json={"entity": "collection", "items": items})
+        return httpx.Response(404, json={"error": "not found"})
 
 
 def _client(sim: UpstreamSim) -> LiveTestModeClient:
@@ -272,6 +312,72 @@ def test_service_create_refund_survives_lost_response_window(live_env, monkeypat
     assert len(sim.effects) == 1
 
 
+def test_service_closes_live_client_after_call(live_env, monkeypatch):
+    """The synchronous facade must release each per-call live HTTP client."""
+    sim = UpstreamSim()
+    client = _client(sim)
+    monkeypatch.setattr(service, "get_client", lambda: client)
+
+    service.create_refund(
+        "pay_SIMCLOSE00000",
+        amount_paise=1000,
+        idempotency_key="rem_net_close:v1",
+    )
+
+    assert client._http.is_closed is True
+
+
+def test_live_refund_response_after_webhook_projection_does_not_double_count(live_env):
+    """A refund webhook may update the payment before the POST response lands.
+
+    The delayed response must reconcile to the one already-recorded refund,
+    not add its amount a second time to ``payment.amount_refunded``.
+    """
+    sim = UpstreamSim()
+    key = "rem_net_webhook_first:v1"
+    refund_id = "rf_WEBHOOKFIRST01"
+    sim.effects[refund_idempotency_header_value(key)] = refund_id
+
+    payment_id = "pay_SIMULATED00000"
+    STORE.put(
+        {
+            "_type": "razorpay_payment",
+            "id": payment_id,
+            "amount": 100000,
+            "currency": "INR",
+            "status": "captured",
+            "amount_refunded": 20000,
+            "processed_refund_ids": [refund_id],
+        }
+    )
+    STORE.put(
+        {
+            "_type": "razorpay_refund",
+            "id": refund_id,
+            "payment_id": payment_id,
+            "amount": 20000,
+            "status": "processed",
+            "webhook_event_id": "evt_refund_projection",
+            "webhook_event_ids": ["evt_refund_projection"],
+            "source": "webhook",
+            # The provider webhook may not echo Dante's local key.
+        }
+    )
+
+    client = _client(sim)
+    refund = client.create_refund(payment_id, amount_paise=20000, idempotency_key=key)
+
+    assert refund["id"] == refund_id
+    assert STORE.get(payment_id)["amount_refunded"] == 20000
+    assert len(STORE.find("razorpay_refund", payment_id=payment_id)) == 1
+    stored = STORE.get(refund_id)
+    assert stored is not None
+    assert stored["webhook_event_id"] == "evt_refund_projection"
+    assert stored["webhook_event_ids"] == ["evt_refund_projection"]
+    assert stored["source"] == "webhook"
+    assert stored["idempotency_key"] == key
+
+
 def test_sandbox_keeps_local_layer_semantics(live_env):
     """SandboxClient mirrors the same semantics offline: STORE-checked key,
     replay returns the original refund, one effect — no network involved."""
@@ -311,3 +417,32 @@ def test_create_order_carries_receipt_as_order_side_dedup_material(live_env):
     assert body["notes"] == {"contract_id": "con_abc123"}
     assert sim.requests[0]["header"] == ""  # no refund-style header on orders
     assert order["mode"] == "live-test-mode"
+
+
+def test_order_receipt_recovery_after_lost_create_response(live_env):
+    """A processed POST whose response is lost is recoverable by receipt."""
+    sim = OrderUpstreamSim()
+    sim.fail_create = True
+    client = LiveTestModeClient(
+        key_id=LIVE_KEY_ID,
+        key_secret=LIVE_KEY_SECRET,
+        base_url="https://api.razorpay.test",
+        transport=httpx.MockTransport(sim.handler),
+    )
+    receipt = "dante:con_recovery_01"
+
+    with pytest.raises(RazorpayError):
+        client.create_order(
+            1149900,
+            receipt=receipt,
+            notes={"contract_id": "con_recovery_01"},
+        )
+
+    recovered = client.fetch_order_by_receipt(receipt)
+    assert recovered is not None
+    assert recovered["id"] == "order_RECOVERED0001"
+    assert recovered["receipt"] == receipt
+    assert recovered["mode"] == "live-test-mode"
+    assert [request["path"] for request in sim.requests] == ["/orders", "/orders"]
+    assert sim.requests[1]["method"] == "GET"
+    assert sim.requests[1]["receipt"] == receipt

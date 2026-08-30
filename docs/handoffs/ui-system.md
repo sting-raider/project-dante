@@ -128,7 +128,7 @@ prettyJson(v)               // indented JSON for audit viewers; "—" when empty
 payloadSummary(payload)     // one-line "k=v, k=v" event summary
 apiGet<T>(path), apiPost<T>(path, body?)   // throw ApiError{status,message,url} on failure
 apiTry<T>(path)             // resolves null instead of throwing — use for stat strips
-API                         // base URL from NEXT_PUBLIC_API_URL ?? http://localhost:8000
+API                         // build-time NEXT_PUBLIC_API_URL; local/private browser hosts derive :8000
 statusTone(status)          // ContractStatus -> badge tone ("SATISFIED"/"REMEDIATED"→success etc.)
 palette                     // raw hex consts for SVG/canvas work
 ```

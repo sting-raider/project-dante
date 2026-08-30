@@ -237,7 +237,7 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
     validate_transition("INTENT_READY", "OFFER_SELECTED")
 
     promises: list[dict[str, Any]] = []
-    evidence_ids: list[dict[str, Any]] = []
+    evidence_ids: list[str] = []
     promise_set_hash: str | None = None
     pipeline_offer_hash: str | None = None
     frozen_via = "inline-fallback"
@@ -250,7 +250,12 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
 
         frozen = freeze_promise_set(offer, intent)
         promises = frozen.get("promises", [])
-        evidence_ids = frozen.get("evidence_ids", [])
+        raw_evidence_ids = frozen.get("evidence_ids", [])
+        evidence_ids = (
+            [evidence_id for evidence_id in raw_evidence_ids if isinstance(evidence_id, str)]
+            if isinstance(raw_evidence_ids, list)
+            else []
+        )
         promise_set_hash = frozen.get("promise_set_hash")
         pipeline_offer_hash = frozen.get("offer_hash")
         frozen_via = "pipeline"
@@ -290,8 +295,12 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
             # Binding must not break selection.
             bind_to_contract(
                 contract_id,
-                promise_ids=[p.get("id") for p in promises if isinstance(p, dict)],
-                evidence_ids=evidence_ids if isinstance(evidence_ids, list) else [],
+                promise_ids=[
+                    p["id"]
+                    for p in promises
+                    if isinstance(p, dict) and isinstance(p.get("id"), str)
+                ],
+                evidence_ids=evidence_ids,
             )
 
     append_event(
@@ -311,7 +320,7 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
         trace_id=intent_id,
     )
 
-    evidence = []
+    evidence: list[dict[str, Any]] = []
     for eid in evidence_ids:
         rec = STORE.get(eid) if isinstance(eid, str) else None
         if rec:

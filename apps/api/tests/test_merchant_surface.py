@@ -187,6 +187,23 @@ def test_order_status_paid_lifecycle_without_facts(client):
     assert resp["fulfillment"]["shipped"] is False
 
 
+def test_order_status_surfaces_reconciled_full_refund(client):
+    _seed_paid_contract("con_refunded")
+    STORE.update(
+        "con_refunded",
+        refund_status="fully_refunded",
+        refunded_amount_paise=1149900,
+        refund_reconciled=True,
+        refund_reconciled_at="2026-08-29T10:00:00+00:00",
+    )
+
+    body = client.get("/api/merchant/orders/con_refunded/status").json()
+    assert body["status"] == "refunded"
+    assert body["refund_status"] == "fully_refunded"
+    assert body["refunded_amount_paise"] == 1149900
+    assert body["refund_reconciled"] is True
+
+
 def test_order_status_reflects_ship_fact_then_delivery(client):
     _seed_paid_contract()
 

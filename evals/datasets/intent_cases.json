@@ -430,8 +430,7 @@
           }
         ]
       },
-      "known_failure": "brand 'aster' not in compiler _BRAND_CANON (merchant-name collision) — documented gap",
-      "notes": "Known gap (informational): 'Aster electronics product' — the merchant name is not in _BRAND_CANON so no brand preference is emitted. Price + deadline are the testable constraints."
+      "notes": "'Aster Electronics' is the fictional merchant name in this phrasing, so the compiler deliberately emits no brand constraint. Explicit 'Aster brand' qualifiers are hard-gated."
     },
     {
       "id": "INT-018",
@@ -525,10 +524,15 @@
             "key": "attributes.anc",
             "op": "eq",
             "value": true
+          },
+          {
+            "key": "sku",
+            "op": "eq",
+            "value": "AST-HP-ANC-001"
           }
         ]
       },
-      "notes": "Known gap: rules path cannot resolve product names to SKUs (no catalog lookup in compiler). Critical assertion is the no-substitution flag; sku constraint documented as future LLM-path work."
+      "notes": "Exact-model language resolves the named Aster ANC Pro against the checked-in catalog title and emits the immutable SKU constraint."
     },
     {
       "id": "INT-021",

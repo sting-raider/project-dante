@@ -5,7 +5,8 @@
 **Project Dante** is a buyer-owned agentic commerce runtime. It converts natural-language
 buyer intent into typed constraints, selects a merchant offer under hard constraints,
 freezes the exact promises that made the offer acceptable into a hashed contract,
-executes payment through Razorpay Test Mode, observes fulfillment reality, detects
+executes payment through Razorpay Test Mode when configured (otherwise the explicit
+sandbox adapter), observes fulfillment reality, detects
 breaches against material promises, derives the buyer's rights, and executes
 policy-gated remedies with a full audit trail.
 
@@ -32,7 +33,7 @@ Buyer intent (natural language)
   → Deterministic offer evaluation (hard constraints are absolute)
   → Promise Ledger freeze (hashed evidence-backed promises, materiality-linked to intent)
   → Buyer authorization envelope bound to contract hash
-  → Razorpay Test Mode order + Standard Checkout
+  → Razorpay Test Mode order + Standard Checkout (or the explicit sandbox adapter)
   → Server-side signature verification
   → Webhook-confirmed payment (raw-body HMAC, idempotent, out-of-order safe)
   → Synthetic fulfillment (clearly labeled) → observed facts
@@ -59,7 +60,9 @@ the full arc print `[01]…[16]` then `E2E VERIFICATION PASSED`.
 | Money authority | LLM agents propose only; deterministic policy engine owns ALLOW/DENY/EXECUTE |
 
 No legal/statutory-right reasoning is performed. No claim of AP2/UCP compliance.
-Fulfillment events are simulated; payments/refunds execute for real in Test Mode.
+Fulfillment events are simulated; payments/refunds use genuine Razorpay Test
+Mode traffic only when `rzp_test_*` keys are configured, otherwise the local
+sandbox adapter is explicit.
 
 ---
 
@@ -132,26 +135,35 @@ endpoints to decide what it can hold the merchant to.
 
 ## Screenshots
 
-| | |
+| Capture | Capture |
 |---|---|
-| Landing `/` editorial masthead | `/buy` brief → constraints → offer spread |
-| `/contract/[id]` dossier + authorization card | Breach spread PROMISED vs OBSERVED |
-| Rights graph SVG | Remedy ranking + policy decision |
-| Audit dossier `/audit/[id]` | Merchant intelligence `/merchant` |
+| [Landing masthead](docs/screenshots/01-landing.png) | [Buyer brief + constraints](docs/screenshots/02-buy-brief.png) |
+| [Offer comparison spread](docs/screenshots/03-buy-offers.png) | [Frozen contract dossier](docs/screenshots/04-contract-dossier.png) |
+| [Payment order — sandbox](docs/screenshots/05-payment-checkout.png) | [Paid webhook — sandbox](docs/screenshots/06-paid-webhook.png) |
+| [Synthetic delivery control room](docs/screenshots/07-demo-synthetic.png) | [Breach: promised vs observed](docs/screenshots/08-breach.png) |
+| [Purchase Rights Graph](docs/screenshots/09-rights-graph.png) | [Remedy ranking + replay proof](docs/screenshots/10-remedy-refund.png) |
+| [Append-only audit dossier](docs/screenshots/11-audit.png) | [Merchant intelligence](docs/screenshots/11-merchant.png) |
 
-*(run locally — pages render best viewed wide)*
+*The checked-in images are local sandbox captures. Payment/refund behavior is
+explicitly badged SANDBOX and synthetic fulfillment is labeled; real Razorpay
+Test Mode order/payment/webhook/refund evidence remains NOT_YET_PROVEN. Run
+locally — pages render best viewed wide.*
 
 ---
 
-## Evaluation results (real runs, `evals/reports/summary.json`)
+## Evaluation results (full deterministic run — reports in `evals/reports/`)
+
+The latest full run is the source of truth in `evals/reports/summary.json`.
+The harness is intentionally runnable without an LLM key, and its combined
+gate fails if a suite has either a threshold failure or any failed case.
 
 | Suite | Result | Headline |
 |---|---|---|
-| Intent compilation | PASS | critical-constraint recall **1.0**, accuracy 1.0 (68 cases) |
-| Offer selection | PASS | hard-constraint violation rate **0.0**, accuracy 1.0 (26 scenarios / 116 SKU checks) |
-| Breach detection | PASS | F1 **1.0** supported keys, precision 1.0, zero false positives (25 cases) |
-| Money-action safety | PASS | unauthorized money actions **0** (28 adversarial cases) |
-| Prompt-injection containment | PASS | violations 0, treated-as-data rate 1.0 (50 payloads) |
+| Intent compilation | 68 / 68 PASS | critical-constraint recall **1.0**, overall accuracy **1.0** |
+| Offer selection | 26 / 26 PASS | hard-constraint violation rate **0.0** across 117 checks; accuracy **1.0** |
+| Breach detection | 25 / 25 PASS | precision / recall / F1 **1.0**, zero false positives |
+| Money-action safety | 28 / 28 PASS | unauthorized money actions **0**, case accuracy **1.0** |
+| Prompt-injection containment | 50 / 50 PASS | violations **0**, treated-as-data rate **1.0** |
 
 Run them yourself:
 
@@ -162,7 +174,9 @@ DANTE_STORE_PATH=/tmp/dante-eval.json .venv/Scripts/python.exe ../../evals/runne
 
 The harness found and drove fixes for real bugs during development: UTC-vs-local
 clock skew flipping delivery feasibility daily, mouse/mice category mismatch,
-dropped price-band floors, condition parsing gaps, missing inventory enforcement.
+dropped price-band floors, condition parsing gaps, missing inventory enforcement,
+and incomplete post-purchase fact mappings. Regenerate the reports to reproduce
+the full-dataset run.
 
 ---
 
@@ -170,8 +184,9 @@ dropped price-band floors, condition parsing gaps, missing inventory enforcement
 
 `apps/api/tests/test_security_redteam.py` + `test_webhook_chaos.py`: amount
 manipulation (string/float/negative/over-captured), cross-contract substitution,
-refund replay ×10, forged/tampered webhooks (401 + zero domain effect), duplicate
-and out-of-order webhook reconciliation, prompt-injection corpus, privilege
+refund replay ×10, forged/tampered/stale webhooks (401/400 + zero domain effect), duplicate
+and out-of-order webhook reconciliation, malformed/conflicting capture identity
+and payment-projection binding, prompt-injection corpus, privilege
 escalation attempts, demo-mode guards, repo-wide secrets scan, state-machine abuse
 (11 illegal transitions). All green; see docs/THREAT_MODEL.md.
 
@@ -240,13 +255,12 @@ apps/
   api/                 FastAPI backend
     project_dante/
       api/routes/      intents, contracts, payments, webhooks, rights, merchant, demo
-      agents/           compiler, evaluator, provider (rules + Anthropic-compatible)
+      agents/           compiler, evaluator, provider (rules + Anthropic/OpenAI-compatible)
       domain/           types, state machine, events, hashing, promises, rights, remedies, money
       integrations/     razorpay (dual adapter), merchant (catalog + fulfillment sim)
       db/               store (JSON-persisted, Postgres-swappable interface), seed
     tests/              full suite incl. red-team + webhook chaos
   web/                 Next.js 15 App Router frontend (editorial design system)
-packages/contracts/    shared schemas (reserved; empty)
 evals/                 datasets, runners, reports
 fixtures/              catalog, adversarial corpora, injection corpus, demo intents
 docs/                  API_CONTRACT ARCHITECTURE THREAT_MODEL RAZORPAY EVALS DEMO_SCRIPT

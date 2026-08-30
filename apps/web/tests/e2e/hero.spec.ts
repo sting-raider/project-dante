@@ -13,7 +13,6 @@
  */
 
 import {
-  API_URL,
   apiGet,
   apiPost,
   expect,
@@ -185,6 +184,16 @@ test.describe("sandbox hero arc", () => {
     await expect(
       page.getByText(/REMEDIATED — refund resolved green/i),
     ).toBeVisible({ timeout: 60_000 });
+
+    // The success surface must expose the derived idempotency key and prove a
+    // second execute returned the identical money action/refund identity.
+    await expect(page.getByText(/IDEMPOTENCY KEY/i)).toBeVisible();
+    const replayButton = page.getByRole("button", { name: "Replay execute" });
+    await expect(replayButton).toBeVisible();
+    await replayButton.click();
+    await expect(
+      page.getByText(/REPLAY CONFIRMED — same refund id; one money effect/i),
+    ).toBeVisible({ timeout: 30_000 });
 
     // Server truth: the contract walked the remedy family to REMEDIATED and
     // a real (sandbox-adapter) refund id exists on the money action.

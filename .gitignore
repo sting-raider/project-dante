@@ -36,10 +36,10 @@ logs/
 .claude/settings.local.json
 evals/reports/*.json
 !evals/reports/.gitkeep
-.dante-live-store.json
-.dante-redteam-store.json
-.dante-evalstore.json
-.dante-debug*.json
+evals/reports/.pytest-subsets/
+
+# --- runtime JSON stores (any depth, any variant) ---
+**/.dante-*.json
+
 test-results/
 playwright-report/
-apps/api/.dante-store.json

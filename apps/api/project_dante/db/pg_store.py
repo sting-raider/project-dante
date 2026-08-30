@@ -1,7 +1,8 @@
 """Postgres-backed implementation of the Dante store contract (plan §11).
 
-Same synchronous interface as ``db.store.Store`` — put/get/update/delete/
-list/find/find_one/count/reset — so every existing call site works unchanged.
+Same synchronous interface as ``db.store.Store`` — put/put_if_absent/get/
+update/update_if/delete/list/find/find_one/count/reset — so every existing
+call site works unchanged.
 The driver is **psycopg 3 (sync, binary build)**: routes are async but the
 STORE call sites throughout the domain are synchronous, so a sync driver
 keeps the contract honest without thread-offloading gymnastics. psycopg
@@ -26,6 +27,7 @@ dropped connection is re-established lazily on the next operation.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import threading
@@ -68,7 +70,11 @@ class PostgresStore:
         import psycopg  # deferred: json backend never pays the import cost
 
         try:
-            self._conn = psycopg.connect(self._dsn)
+            # Never let a dead database make readiness or a request hang for
+            # the driver's platform-dependent default timeout. Deployments
+            # can override the bounded window for slower private networks.
+            timeout = int(os.environ.get("DANTE_PG_CONNECT_TIMEOUT_SECONDS", "5"))
+            self._conn = psycopg.connect(self._dsn, connect_timeout=timeout)
         except Exception as exc:  # noqa: BLE001 - surfaced as store error
             raise PostgresStoreError(f"cannot connect to Postgres: {exc}") from exc
         return self._conn
@@ -142,6 +148,29 @@ class PostgresStore:
             conn.commit()
             return dict(record)
 
+    def put_if_absent(self, record: dict[str, Any]) -> bool:
+        """Atomically claim a record id without overwriting an existing row."""
+        rid = record["id"]
+        rtype = record["_type"]
+        conn = self._connection()
+        with self._lock:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO records (id, record_type, payload)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (rid, rtype, json.dumps(record, ensure_ascii=False)),
+                    )
+                    claimed = cur.rowcount == 1
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            return claimed
+
     def get(self, record_id: str) -> dict[str, Any] | None:
         conn = self._connection()
         with self._lock:
@@ -181,7 +210,56 @@ class PostgresStore:
             conn.commit()
             return merged
 
-    def list(self, record_type: str | None = None) -> list[dict[str, Any]]:
+    def update_if(
+        self, record_id: str, match_fields: dict[str, Any], **fields: Any
+    ) -> bool:
+        """Atomically compare and update one JSON record.
+
+        The row is locked with ``FOR UPDATE`` before the payload is compared,
+        giving Postgres the same check-then-set semantics as ``Store``'s
+        process-wide lock. A missing key compares as ``None`` to match the
+        JSON backend's ``dict.get`` semantics.
+        """
+        conn = self._connection()
+        with self._lock:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT payload::text
+                          FROM records
+                         WHERE id = %s
+                         FOR UPDATE
+                        """,
+                        (record_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        conn.commit()
+                        return False
+                    current = self._row_to_record(row[0])
+                    if not all(
+                        current.get(key) == value
+                        for key, value in match_fields.items()
+                    ):
+                        conn.commit()
+                        return False
+                    merged = {**current, **fields}
+                    cur.execute(
+                        """
+                        UPDATE records
+                           SET payload = %s, updated_at = now()
+                         WHERE id = %s
+                        """,
+                        (json.dumps(merged, ensure_ascii=False), record_id),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            return True
+
+    def list(self, record_type: str | None = None) -> builtins.list[dict[str, Any]]:
         conn = self._connection()
         query = "SELECT payload::text FROM records"
         params: tuple[Any, ...] = ()
@@ -197,17 +275,21 @@ class PostgresStore:
     @staticmethod
     def _find_plan(
         record_type: str, fields: dict[str, Any]
-    ) -> tuple[list[str], list[tuple[str, Any]], list[tuple[str, Any]]]:
+    ) -> tuple[builtins.list[str], builtins.list[Any], builtins.list[tuple[str, Any]]]:
         """Split find() criteria into SQL-side and Python-side filters.
 
-        Returns (sql_where_fragments, sql_params_as_(key, value)_pairs,
-        python_checks). Scalar values whose JSONB ->> projection is exact
-        become ``payload->>%s = %s`` server-side; everything else (None,
-        floats, containers) is deferred to post-fetch Python equality so the
+        Returns (sql_where_fragments, bound_sql_params, python_checks).
+        Scalar values whose JSONB ->> projection is exact become
+        ``payload->>%s = %s`` server-side; everything else (None, floats,
+        containers) is deferred to post-fetch Python equality so the
         semantics match db.store.Store exactly.
         """
         sql_parts: list[str] = ["record_type = %s"]
-        params: list[tuple[str, Any]] = [("record_type", record_type)]
+        # The record_type predicate has one placeholder; each scalar payload
+        # predicate has two (the JSON key and its comparable value). Keep the
+        # parameter list in exact placeholder order so psycopg binds the key
+        # as well as the value.
+        params: list[Any] = [record_type]
         python_checks: list[tuple[str, Any]] = []
 
         for key, value in fields.items():
@@ -217,20 +299,17 @@ class PostgresStore:
                 # which never equals a scalar — same as Store's .get(k) == v
                 # mismatch.
                 sql_parts.append("payload->>%s = %s")
-                params.append((key, comparable))
+                params.extend((key, comparable))
             else:
                 python_checks.append((key, value))
         return sql_parts, params, python_checks
 
-    def find(self, record_type: str, **fields: Any) -> list[dict[str, Any]]:
+    def find(self, record_type: str, **fields: Any) -> builtins.list[dict[str, Any]]:
         """Find records of type matching all field==value pairs (Store semantics)."""
         if not fields:
             return self.list(record_type)
 
-        sql_parts, param_pairs, python_checks = self._find_plan(record_type, fields)
-        params: list[Any] = []
-        for _, value in param_pairs:
-            params.append(value)
+        sql_parts, params, python_checks = self._find_plan(record_type, fields)
 
         conn = self._connection()
         query = (

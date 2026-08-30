@@ -19,6 +19,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2].parent  # apps/api/tests -> repo root
 RUNNERS_DIR = REPO_ROOT / "evals" / "runners"
+# The wrapper intentionally exercises small subsets. Keep those generated
+# reports isolated so pytest cannot overwrite the canonical full-suite
+# evidence in evals/reports or leave summary.json out of sync with it.
+PYTEST_REPORTS = REPO_ROOT / "evals" / "reports" / ".pytest-subsets"
+os.environ.setdefault("DANTE_EVAL_REPORTS_DIR", os.fspath(PYTEST_REPORTS))
 # insert the runners dir at absolute-path position 0 so `import run_*` resolves.
 sys.path.insert(0, os.fspath(RUNNERS_DIR))
 
@@ -54,10 +59,22 @@ def test_intent_runner_small_subset_produces_valid_report():
     assert isinstance(payload["failures"], list)
     assert payload["metrics"]["cases_run"] == 5
     # report files land in evals/reports/
-    report = REPO_ROOT / "evals" / "reports" / "intent_evals.json"
+    report = PYTEST_REPORTS / "intent_evals.json"
     assert report.exists()
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["metrics"]["cases_run"] == 5
+
+
+def test_intent_harness_requires_complete_in_list():
+    from harness import constraint_satisfied
+
+    expected = {"key": "brand", "op": "in", "value": ["orbio", "soniq"]}
+    assert constraint_satisfied(
+        [{"key": "brand", "op": "in", "value": ["orbio", "soniq"]}], expected
+    )
+    assert not constraint_satisfied(
+        [{"key": "brand", "op": "in", "value": ["orbio"]}], expected
+    )
 
 
 def test_breach_runner_small_subset_produces_valid_report():

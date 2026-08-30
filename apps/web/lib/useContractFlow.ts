@@ -185,6 +185,7 @@ export type PaymentOrderResponse = {
     amount_paise: number;
     currency: string;
   };
+  contract_status?: ContractStatus;
 };
 
 // Razorpay Standard Checkout handler payload (subset we consume).
@@ -317,13 +318,6 @@ export function useContractFlow() {
   const mountedRef = useRef(true);
   /** Guards authorize→order against double-firing while a click is in flight. */
   const authorizeInFlightRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      stopPolling();
-    };
-  }, []);
 
   const fail = useCallback((p: FlowPhase, e: unknown) => {
     if (!mountedRef.current) return;
@@ -349,8 +343,19 @@ export function useContractFlow() {
     setPollingActive(false);
   }, []);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopPolling();
+    };
+  }, [stopPolling]);
+
   const refreshContract = useCallback(
-    async (id: string): Promise<DanteContract | null> => {
+    async (
+      id: string,
+      options: { initialLoad?: boolean } = {},
+    ): Promise<DanteContract | null> => {
       try {
         const detail = await apiGet<ContractDetail>(`/api/contracts/${id}`);
         if (!mountedRef.current) return detail.contract;
@@ -368,13 +373,19 @@ export function useContractFlow() {
             : e instanceof Error
               ? e.message
               : String(e);
-        // 404 is fatal — the contract genuinely doesn't exist. Anything else
-        // (timeout, network blip, 5xx) keeps last-known data on screen and
-        // degrades to a small "retrying" notice instead of nuking the page.
+        // 404 is fatal — the contract genuinely doesn't exist. During the
+        // initial load there is no last-known data to keep, so every failure
+        // must become an actionable error screen. Once data is on screen,
+        // timeout/network/5xx failures degrade to a small retrying notice.
         if (e instanceof ApiError && e.status === 404) {
-          setPhase("error_poll");
+          setPhase(options.initialLoad ? "error_contract_load" : "error_poll");
           setError(msg);
           stopPolling();
+          return null;
+        }
+        if (options.initialLoad) {
+          setPhase("error_contract_load");
+          setError(msg);
           return null;
         }
         setPollRetrying(true);
@@ -415,18 +426,32 @@ export function useContractFlow() {
     async (id: string): Promise<boolean> => {
       setError(null);
       setContractId(id); // Stage 2's openCheckout/canOpenCheckout gate on this
-      const c = await refreshContract(id);
-      if (!c) return false; // only a fatal (404) load lands here now
+      const c = await refreshContract(id, { initialLoad: true });
+      if (!c) return false;
       // Restore the payment-order context so RazorpayPanel keeps its mode
-      // badge + simulate/open affordance across a cold refresh (#3). Prefer
-      // the cached full response; fall back to re-deriving from contract
-      // fields (sandbox_mode + razorpay_order_id).
+      // badge + simulate/open affordance across a cold refresh (#3). Sandbox
+      // can re-derive the essentials locally; a live order must be read back
+      // from the server because the public checkout key is not present in the
+      // contract record and sessionStorage is not a trust boundary.
       if (!orderInfo) {
         const cached = readOrderSnapshot(id);
-        const restored =
-          cached ??
-          deriveOrderFromContract(c);
-        if (restored) setOrderInfo(restored);
+        let restored = cached ?? deriveOrderFromContract(c);
+        const hasExistingLiveOrder =
+          !c.sandbox_mode &&
+          !!c.razorpay_order_id &&
+          (c.status === "PAYMENT_ORDER_CREATED" ||
+            c.status === "PAYMENT_PENDING");
+        if (hasExistingLiveOrder) {
+          try {
+            restored = await apiGet<PaymentOrderResponse>(
+              `/api/contracts/${id}/payment-order`,
+            );
+          } catch {
+            // Keep the cached/derived view as a retryable fallback. A live
+            // fallback has no key, so canOpenCheckout remains fail-closed.
+          }
+        }
+        if (restored && mountedRef.current) setOrderInfo(restored);
       }
       setPhase("awaiting_authorization");
       if (
@@ -802,7 +827,8 @@ export const BRIEF_SESSION_KEY = "dante.brief.raw";
  * detection used to derive from in-memory orderInfo only — a refresh lost it.
  * We persist mode + checkout_config here at order time AND re-derive from the
  * contract's own fields (sandbox_mode + razorpay_order_id) on load, so the
- * simulate / open-checkout affordance survives any reload path (#3).
+ * simulate affordance survives any reload path (#3). Live checkout keys are
+ * recovered through GET /api/contracts/{id}/payment-order instead.
  */
 function orderSnapshotKey(contractId: string): string {
   return `dante.contract.${contractId}.order`;
@@ -834,12 +860,17 @@ export function readOrderSnapshot(
 /**
  * Re-derive a minimal PaymentOrderResponse from contract fields when no
  * snapshot exists. `mode` is authoritative from contract.sandbox_mode; the
- * checkout config carries what the simulate/open paths need. key_id is
- * unknown from this shape (only needed for live checkout open, which always
- * has the fresh order response) so it is left blank deliberately.
+ * checkout config carries what the sandbox simulate path needs. key_id is
+ * unknown from this shape, so live callers must use the server read-back path
+ * in loadContract.
  */
 function deriveOrderFromContract(c: DanteContract): PaymentOrderResponse | null {
-  if (!c.razorpay_order_id || c.status !== "PAYMENT_ORDER_CREATED") return null;
+  if (
+    !c.razorpay_order_id ||
+    (c.status !== "PAYMENT_ORDER_CREATED" && c.status !== "PAYMENT_PENDING")
+  ) {
+    return null;
+  }
   return {
     mode: c.sandbox_mode ? "sandbox" : "live-test-mode",
     razorpay_order: {},
@@ -891,4 +922,3 @@ export function readOfferSelection(contractId: string): OfferMemo | null {
     return null;
   }
 }
-

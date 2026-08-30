@@ -1,11 +1,11 @@
 # Security Findings — Agent K (Red Team)
 
-Last updated: 2026-08-26 — **all three confirmed vulnerabilities VERIFIED FIXED**
+Last updated: 2026-08-29 — **all three confirmed vulnerabilities VERIFIED FIXED**
 by re-running the red-team suites against the patched modules.
 
 Suites: `apps/api/tests/test_security_redteam.py` + `tests/test_webhook_chaos.py`
 Latest run: **72 passed / 0 failed / 0 skipped** (red-team suites);
-full API tree: **303 passed**.
+full API tree: **470 passed, 15 skipped** (Postgres/Docker unavailable).
 
 Post-fix hardening verified (2026-08-26, second pass): Agent B additionally
 gated the `razorpay_payment_id` graft (`webhooks.py:245`) so orphaned captures

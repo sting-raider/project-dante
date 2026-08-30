@@ -4,8 +4,8 @@ Usage (from apps/api so project_dante imports resolve):
     .venv/Scripts/python.exe ../../evals/runners/run_all.py [limit]
 
 Writes evals/reports/summary.json and prints a combined table. Exit code 0
-iff every suite that ran met its thresholds; NOT_RUN_YET suites fail the
-gate so CI cannot silently pass on skip.
+iff every suite that ran met its thresholds and reported zero failed cases;
+NOT_RUN_YET suites fail the gate so CI cannot silently pass on skip.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def main() -> int:
         else:
             head = ""
         print(f"{label:22} {str(status):14} {head}")
-        if status != "PASS":
+        if status != "PASS" or info["failures"]:
             all_ok = False
 
     summary = {

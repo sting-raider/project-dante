@@ -3,6 +3,7 @@ import { ButtonLink } from "@/components/ui/Button";
 import Rule from "@/components/editorial/Rule";
 import SectionLabel from "@/components/editorial/SectionLabel";
 import StatStrip from "@/components/commerce/StatStrip";
+import RailStatus from "@/components/commerce/RailStatus";
 
 const nav = [
   { href: "/buy", label: "Buy" },
@@ -81,7 +82,7 @@ export default function LandingPage() {
               ["01", "Intent", "The buyer's brief, compiled into hard constraints."],
               ["02", "Offer", "Candidates marked against every constraint."],
               ["03", "Contract", "Promises frozen at selection time."],
-              ["04", "Payment", "Razorpay test-mode order, buyer authorized."],
+              ["04", "Payment", "Gateway order; buyer authorization recorded."],
               ["05", "Delivery", "Observed facts checked against promises."],
               ["06", "Remedy", "Rights derived; refund executed under policy."],
             ].map(([n, title, body]) => (
@@ -113,7 +114,7 @@ export default function LandingPage() {
       <footer className="dante-container py-10">
         <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-baseline">
           <span className="folio-label">Project Dante · Razorpay AI Buildathon</span>
-          <span className="folio-label">Payments on Razorpay Test Mode · No real money moves</span>
+          <RailStatus />
         </div>
       </footer>
     </div>

@@ -187,22 +187,30 @@ def _captured_amount_paise(contract: dict[str, Any]) -> int | None:
 def _refunded_so_far_paise(payment_id: str | None) -> int:
     """Total paise already refunded against a payment (0 when unknown).
 
-    Prefers the gateway payment record's ``amount_refunded``; falls back to
-    summing stored successful refund records for the payment.
+    Reconciles both the gateway payment projection and the append-only local
+    refund ledger. Either source may be ahead after a timeout or an
+    out-of-band dashboard refund, so the larger observed total is binding.
     """
     if not payment_id:
         return 0
     pay = STORE.get(payment_id) or STORE.find_one("razorpay_payment", payment_id=payment_id)
+    payment_total = 0
     if pay and isinstance(pay.get("amount_refunded"), int) and pay["amount_refunded"] >= 0:
-        return pay["amount_refunded"]
-    total = 0
+        payment_total = pay["amount_refunded"]
+    ledger_total = 0
+    seen: set[str] = set()
     for r in STORE.find("razorpay_refund", payment_id=payment_id):
+        rid = str(r.get("id") or "")
+        if rid and rid in seen:
+            continue
+        if rid:
+            seen.add(rid)
         amt = r.get("amount")
         if isinstance(amt, int):
-            total += amt
+            ledger_total += amt
         elif isinstance(r.get("amount_paise"), int):
-            total += r["amount_paise"]
-    return total
+            ledger_total += r["amount_paise"]
+    return max(payment_total, ledger_total)
 
 
 def _persist_and_link(
@@ -527,6 +535,36 @@ def _first_breach(contract_id: str) -> dict[str, Any] | None:
     return breaches[0] if breaches else None
 
 
+def _require_executable_remedy(prop: dict[str, Any]) -> None:
+    """Fail closed unless ``prop`` is the planner's active top choice.
+
+    The planner persists rejected and ranked-lower siblings so the buyer can
+    inspect why they lost. Those records are not alternate authorization
+    tokens: allowing a caller to submit one directly would let it bypass the
+    deterministic remedy choice and, for a refund sibling, potentially move
+    money. Directly seeded single proposals remain valid for isolated domain
+    use when no ranking metadata exists.
+    """
+    rejected_reason = prop.get("rejected_reason")
+    if rejected_reason:
+        raise ValueError(
+            f"remedy proposal is not executable: rejected_reason={rejected_reason}"
+        )
+
+    rank = prop.get("rank")
+    if rank is not None and rank != 1:
+        raise ValueError("only the rank-1 remedy proposal is executable")
+
+    contract_id = prop.get("contract_id")
+    siblings = STORE.find("remedy", contract_id=contract_id) if contract_id else []
+    active = [s for s in siblings if not s.get("rejected_reason")]
+    rank_one = [s for s in active if s.get("rank") == 1]
+    if rank_one and rank_one[0].get("id") != prop.get("id"):
+        raise ValueError("only the selected rank-1 remedy proposal is executable")
+    if not rank_one and len(active) > 1:
+        raise ValueError("remedy choice is ambiguous; re-plan before execution")
+
+
 def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
     """Build (or reuse) the MoneyActionProposal for a RemedyProposal.
 
@@ -538,6 +576,7 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
     prop = STORE.get(proposal_id)
     if not prop or prop.get("_type") != "remedy":
         raise KeyError(f"remedy proposal {proposal_id} not found")
+    _require_executable_remedy(prop)
     contract = STORE.get(prop.get("contract_id") or "")
     if contract is None:
         raise KeyError(f"contract {prop.get('contract_id')} not found")
@@ -819,6 +858,7 @@ def execute_remedy(proposal_id: str) -> dict[str, Any]:
     prop = STORE.get(proposal_id)
     if not prop or prop.get("_type") != "remedy":
         raise KeyError(f"remedy proposal {proposal_id} not found")
+    _require_executable_remedy(prop)
 
     if prop.get("remedy_type") not in _MONEY_TYPE_BY_REMEDY:
         return {
@@ -893,6 +933,7 @@ def approve_remedy(proposal_id: str) -> dict[str, Any]:
     prop = STORE.get(proposal_id)
     if not prop or prop.get("_type") != "remedy":
         raise KeyError(f"remedy proposal {proposal_id} not found")
+    _require_executable_remedy(prop)
 
     idem = f"project-dante:{prop.get('contract_id')}:{prop['id']}:v1"
     existing = STORE.find_one("money_action", idempotency_key=idem)

@@ -30,6 +30,18 @@ _FACT_TO_PROMISE = {
     "amount_paid_paise": "price.amount_paise",
     "delivery.delivered_date": "delivery.promised_by_date",
     "delivery.actual_date": "delivery.promised_by_date",
+    "accessories.included": "accessories.included",
+    "sku": "sku",
+    "product.sku": "sku",
+    "brand": "brand",
+    "product.brand": "brand",
+    "attributes.anc": "attributes.anc",
+    "warranty.duration_months": "warranty.duration_months",
+    "returns.window_days": "returns.window_days",
+    "product.category": "category",
+    "category": "category",
+    "product.form_factor": "attributes.form_factor",
+    "amount_paise": "price.amount_paise",
 }
 
 # Promise keys other modules historically used for the delivery deadline.
@@ -44,7 +56,15 @@ _VARIANT_KEYS = {"warranty.type", "warranty.region", "product.region"}
 # only over material promises in this set — e.g. "category" is material to
 # intent but has no post-purchase observation, so demanding a fact for it
 # would make SATISFIED unreachable.
-_OBSERVABLE_KEYS = set(_FACT_TO_PROMISE.values())
+_OBSERVABLE_KEYS = set(_FACT_TO_PROMISE.values()) - {"category"}
+
+# Some lower-severity post-purchase rights are monitored even when the buyer
+# did not mark them material. They can produce an informational breach, but
+# they must not make a contract SATISFIED/UNSATISFIED by themselves.
+_MONITORED_NON_MATERIAL_KEYS = {
+    "accessories.included",
+    "returns.window_days",
+}
 
 # Late-delivery thresholds: <=24h late is minor, beyond that material.
 _MINOR_LATE_MAX_HOURS = 24.0
@@ -57,7 +77,11 @@ def _breach_from_record(record: dict[str, Any]) -> Breach:
 
 def _latest_fact(facts: list[dict[str, Any]], promise_key: str) -> dict[str, Any] | None:
     """Latest observed fact whose key maps onto the given promise key."""
-    candidates = [f for f in facts if _FACT_TO_PROMISE.get(f.get("key")) == promise_key]
+    candidates = []
+    for fact in facts:
+        key = fact.get("key")
+        if isinstance(key, str) and _FACT_TO_PROMISE.get(key) == promise_key:
+            candidates.append(fact)
     if not candidates:
         return None
     return max(candidates, key=lambda f: f.get("observed_at") or "")
@@ -128,10 +152,51 @@ def _compare_pair(promise: dict[str, Any], fact: dict[str, Any]) -> Breach | Non
 
     pval = promise.get("normalized_value")
     fval = normalize_value(pkey, fact.get("value"))
+
+    if pkey == "accessories.included":
+        promised_items = pval if isinstance(pval, list) else [pval]
+        observed_items = fval if isinstance(fval, list) else [fval]
+        missing = [item for item in promised_items if item not in observed_items]
+        if not missing:
+            return None
+        return _make_breach(
+            promise,
+            fact,
+            "informational",
+            "ACCESSORY_MISSING",
+            f"Promised accessories missing from delivery: {missing!r}",
+        )
+
+    if (
+        pkey in {"warranty.duration_months", "returns.window_days"}
+        and isinstance(pval, (int, float))
+        and isinstance(fval, (int, float))
+    ):
+        if fval >= pval:
+            return None
+        reason = (
+            "WARRANTY_DURATION_SHORTFALL"
+            if pkey == "warranty.duration_months"
+            else "RETURN_WINDOW_SHORTFALL"
+        )
+        return _make_breach(
+            promise,
+            fact,
+            "material" if promise.get("material_to_intent") else "minor",
+            reason,
+            f"Promised {pkey}={pval!r} but observed {fval!r}",
+        )
+
     if fval == pval:
         return None
 
-    if pkey in _VARIANT_KEYS:
+    if pkey == "sku":
+        severity, reason = "critical", "WRONG_SKU"
+    elif pkey == "brand":
+        severity, reason = "critical", "WRONG_ITEM"
+    elif pkey == "attributes.anc":
+        severity, reason = "material", "FEATURE_MISSING"
+    elif pkey in _VARIANT_KEYS:
         severity, reason = "material", "MATERIAL_VARIANT_MISMATCH"
     elif pkey == "condition":
         severity, reason = "critical", "CONDITION_MISMATCH"
@@ -185,7 +250,11 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
     promises = [
         p
         for p in STORE.list("promise")
-        if p.get("contract_id") == contract_id and p.get("material_to_intent")
+        if p.get("contract_id") == contract_id
+        and (
+            p.get("material_to_intent")
+            or p.get("key") in _MONITORED_NON_MATERIAL_KEYS
+        )
     ]
     facts = [f for f in STORE.list("fact") if f.get("contract_id") == contract_id]
 
@@ -260,7 +329,8 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
     verifiable = [
         {**p, "key": _canonical_promise_key(p["key"])}
         for p in promises
-        if _canonical_promise_key(p["key"]) in _OBSERVABLE_KEYS
+        if p.get("material_to_intent")
+        and _canonical_promise_key(p["key"]) in _OBSERVABLE_KEYS
     ]
     observed = {p["key"] for p in verifiable if _latest_fact(facts, p["key"]) is not None}
     all_keys = {p["key"] for p in verifiable}
@@ -307,6 +377,8 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
         "unobserved_material_keys": sorted(
             p["key"]
             for p in promises
-            if p["key"] in _OBSERVABLE_KEYS and _latest_fact(facts, p["key"]) is None
+            if p.get("material_to_intent")
+            and p["key"] in _OBSERVABLE_KEYS
+            and _latest_fact(facts, p["key"]) is None
         ),
     }

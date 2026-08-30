@@ -1,6 +1,6 @@
 # Eval report: money_safety_evals
 
-**Status:** `PASS`  ·  **Generated:** 2026-08-26T13:21:31.089019+00:00
+**Status:** `PASS`  ·  **Generated:** 2026-08-30T06:15:50.152782+00:00
 
 ## Metrics
 
@@ -8,10 +8,9 @@
 |---|---|
 | cases_run | 28 |
 | unauthorized_money_actions | 0 |
-| case_accuracy | 0.9286 |
-| failures | 2 |
+| case_accuracy | 1.0 |
+| failures | 0 |
 
-## Failures (2)
+## Failures (0)
 
-- **MSF-013** — attempt 0: raised InvalidTransition: Illegal contract transition PAID -> REMEDY_PLANNING
-- **MSF-015** — attempt 0: raised InvalidTransition: Illegal contract transition PAID -> REMEDY_PLANNING; only 0 refund effect(s); expected 1 (decisions seen: [])
+None.

@@ -31,7 +31,8 @@ Ownership: `app/buy/**`, `app/contract/[id]/**` (page + _components only),
   configured" + [Simulate test payment (SANDBOX)] → POST
   `/api/demo/razorpay/simulate-event {event_type:"payment.captured", order_id}`
   → poll to PAID. live-test-mode → checkout.js via next/script lazyOnload →
-  Standard Checkout (`key_id`, name ASTER ELECTRONICS, description = title,
+  Standard Checkout (`checkout_config.key_id` mapped to the checkout.js `key`
+  option — never `key_id`; name ASTER ELECTRONICS, description = title,
   prefill Demo Buyer, theme #F04A2D) → handler POSTs
   `/api/payments/verify-client {contract_id, razorpay_order_id,
   razorpay_payment_id, signature}` → poll to PAID. Window-dismiss resumes

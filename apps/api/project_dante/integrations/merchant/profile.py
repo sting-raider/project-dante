@@ -169,10 +169,15 @@ def _derive_stage(
 ) -> str:
     """Coarse fulfillment ladder, highest observed stage wins.
 
-    delivered > shipped > paid > payment_pending > awaiting_payment.
+    refunded > delivered > shipped > paid > payment_pending > awaiting_payment.
     Each rung is backed by a concrete stored record, in priority order:
     observed facts, then audit events, then the contract row itself.
     """
+    if (
+        contract.get("refund_reconciled")
+        and contract.get("refund_status") == "fully_refunded"
+    ):
+        return "refunded"
     if "delivery.delivered_date" in facts_by_key:
         return "delivered"
     if facts_by_key.get("shipment.status", {}).get("value") == "shipped":
@@ -206,7 +211,11 @@ def order_status(contract_id: str) -> dict[str, Any]:
     facts = STORE.find("fact", contract_id=contract_id)
     facts_by_key = _latest_by_key(facts)
     events = sorted(LOG.for_aggregate(contract_id), key=lambda e: e.get("created_at") or "")
-    event_types = {e.get("event_type") for e in events}
+    event_types: set[str] = set()
+    for event in events:
+        event_type = event.get("event_type")
+        if isinstance(event_type, str):
+            event_types.add(event_type)
 
     shipped_fact = facts_by_key.get("shipment.status", {}).get("value") == "shipped"
     delivered_fact = facts_by_key.get("delivery.delivered_date")
@@ -234,6 +243,10 @@ def order_status(contract_id: str) -> dict[str, Any]:
         "lifecycle_status": contract.get("status"),
         "offer_sku": contract.get("offer_sku"),
         "amount_paise": contract.get("amount_paise"),
+        "refund_status": contract.get("refund_status"),
+        "refunded_amount_paise": contract.get("refunded_amount_paise", 0),
+        "refund_reconciled": bool(contract.get("refund_reconciled")),
+        "refund_reconciled_at": contract.get("refund_reconciled_at"),
         "fulfillment": {
             "shipped": shipped_fact or "FULFILLMENT_SHIPPED" in event_types,
             "carrier": facts_by_key.get("shipment.carrier", {}).get("value"),

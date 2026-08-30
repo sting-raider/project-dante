@@ -10,7 +10,8 @@
 Dante is a buyer-owned agentic commerce runtime: it converts natural-language buyer
 intent into typed constraints, selects a merchant offer under hard constraints,
 freezes the exact promises that made the offer acceptable into a hashed contract,
-executes payment through Razorpay Test Mode, observes fulfillment reality,
+executes payment through Razorpay Test Mode when configured (otherwise the
+explicit sandbox adapter), observes fulfillment reality,
 detects breaches against material promises, derives the buyer's rights,
 and executes policy-gated remedies (refunds) with a full audit trail.
 
@@ -67,6 +68,17 @@ flowchart TB
 3. **No LLM ever holds Razorpay credentials or executes a money action.**
 4. Every money action: typed proposal → deterministic policy → executor re-check → call.
 5. Final truth of payment state = webhook signature verification server-side.
+
+## Request observability
+
+`api/observability.py` wraps every HTTP request with fresh `trace_id` and
+`correlation_id` values, plus a `contract_id` when the URL identifies one.
+The IDs are available to downstream handlers through request state and are
+returned as `X-Trace-Id`, `X-Correlation-Id`, and (where applicable)
+`X-Contract-Id` response headers. The middleware emits one structured JSON
+`http_request_completed` record containing method, path, status, duration, and
+those IDs. Request bodies, query strings, credentials, and exception text are
+never written to that record.
 
 ## Module map
 

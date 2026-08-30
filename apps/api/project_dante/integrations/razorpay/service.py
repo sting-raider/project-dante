@@ -48,6 +48,13 @@ def key_id_public() -> str:
     return ""
 
 
+def _close_client(client: Any) -> None:
+    """Release a per-call live HTTP client without coupling to the sandbox."""
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
+
+
 # ------------------------------------------------------------------- orders
 
 
@@ -55,7 +62,11 @@ def create_order(
     amount_paise: int, receipt: str = "", notes: dict[str, Any] | None = None
 ) -> dict:
     """Create a Razorpay order (real Test Mode or sandbox record)."""
-    return get_client().create_order(amount_paise, receipt=receipt, notes=notes)
+    client = get_client()
+    try:
+        return client.create_order(amount_paise, receipt=receipt, notes=notes)
+    finally:
+        _close_client(client)
 
 
 # -------------------------------------------------------------- verification
@@ -132,24 +143,38 @@ def hmac_equal(expected_hex: str, provided: str) -> bool:
 def fetch_payment(payment_id: str) -> dict | None:
     """Current gateway-side view of a payment; None when unknown/unreachable."""
     client = get_client()
-    if isinstance(client, SandboxClient):
+    try:
         return client.fetch_payment(payment_id)
-    return client.fetch_payment(payment_id)
+    finally:
+        _close_client(client)
 
 
 def fetch_order_payments(order_id: str) -> list[dict]:
     client = get_client()
-    if isinstance(client, SandboxClient):
+    try:
         return client.fetch_order_payments(order_id)
-    return client.fetch_order_payments(order_id)
+    finally:
+        _close_client(client)
+
+
+def fetch_order_by_receipt(receipt: str) -> dict | None:
+    """Find a gateway order by its merchant receipt for lost-response recovery."""
+    client = get_client()
+    try:
+        return client.fetch_order_by_receipt(receipt)
+    finally:
+        _close_client(client)
 
 
 def capture_sandbox_payment(order_id: str, payment_id: str | None = None) -> dict:
     """Sandbox-only stand-in for Razorpay's own capture step (demo path)."""
     client = get_client()
-    if not isinstance(client, SandboxClient):
-        raise RazorpayError("capture_sandbox_payment is sandbox-only")
-    return client.capture_sandbox_payment(order_id, payment_id)
+    try:
+        if not isinstance(client, SandboxClient):
+            raise RazorpayError("capture_sandbox_payment is sandbox-only")
+        return client.capture_sandbox_payment(order_id, payment_id)
+    finally:
+        _close_client(client)
 
 
 # ----------------------------------------------------------------- refunds
@@ -166,9 +191,16 @@ def create_refund(
     The STORE-level check lives inside both adapters, so retries after network
     failure and deliberate replays converge on the original refund record.
     """
-    return get_client().create_refund(
-        payment_id, amount_paise=amount_paise, idempotency_key=idempotency_key, notes=notes
-    )
+    client = get_client()
+    try:
+        return client.create_refund(
+            payment_id,
+            amount_paise=amount_paise,
+            idempotency_key=idempotency_key,
+            notes=notes,
+        )
+    finally:
+        _close_client(client)
 
 
 __all__ = [
@@ -182,6 +214,7 @@ __all__ = [
     "sign_webhook_payload",
     "fetch_payment",
     "fetch_order_payments",
+    "fetch_order_by_receipt",
     "capture_sandbox_payment",
     "create_refund",
 ]

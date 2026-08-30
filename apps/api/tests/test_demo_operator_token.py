@@ -12,14 +12,12 @@ Postures of the state-changing synthetic fulfillment endpoints
 GET /api/demo/status stays open and reports the active posture for the UI.
 
 Env manipulation follows the test_razorpay_service.py pattern: set/unset env
-vars, then ``get_settings.cache_clear()`` so the next construction picks the
-values up; the demo module's captured ``settings`` object is repointed at the
-fresh instance via monkeypatch (auto-restored on teardown).
+vars, then ``get_settings.cache_clear()`` so the request-time gate picks the
+values up.
 """
 
 from __future__ import annotations
 
-import project_dante.api.routes.demo as demo_mod
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -56,11 +54,9 @@ def _seed_contract(contract_id: str = "con_gate01") -> None:
 
 
 def _rebuild_settings(monkeypatch: pytest.MonkeyPatch):
-    """Flush the cached Settings, rebuild from env, repoint demo.settings."""
+    """Flush the cached Settings and rebuild from the current environment."""
     get_settings.cache_clear()
-    fresh = get_settings()
-    monkeypatch.setattr(demo_mod, "settings", fresh)
-    return fresh
+    return get_settings()
 
 
 def _sandbox(monkeypatch: pytest.MonkeyPatch):
@@ -217,6 +213,24 @@ def test_live_test_mode_whitespace_padded_values_match(
         headers={"X-Demo-Operator-Token": f"  {OPERATOR_TOKEN}"},
     )
     assert r.status_code == 200
+
+
+def test_state_gate_uses_request_time_settings_after_token_rotation(
+    client, monkeypatch
+):
+    """A settings cache refresh must change the live operator gate too."""
+    _live_test_mode(monkeypatch)
+    _seed_contract()
+
+    rotated = "op-token-rotated"
+    monkeypatch.setenv("DEMO_OPERATOR_TOKEN", rotated)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/api/demo/contracts/con_gate01/ship",
+        headers={"X-Demo-Operator-Token": rotated},
+    )
+    assert response.status_code == 200
 
 
 # ---------------------------------------------------------------- status

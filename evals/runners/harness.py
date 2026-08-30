@@ -24,7 +24,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 DATASETS = REPO_ROOT / "evals" / "datasets"
-REPORTS = REPO_ROOT / "evals" / "reports"
+_REPORTS_OVERRIDE = os.environ.get("DANTE_EVAL_REPORTS_DIR")
+REPORTS = (
+    Path(_REPORTS_OVERRIDE).expanduser().resolve()
+    if _REPORTS_OVERRIDE
+    else REPO_ROOT / "evals" / "reports"
+)
 FIXTURES = REPO_ROOT / "fixtures"
 
 # Deterministic rules path for every runner (plan §51: deterministic code owns authority).
@@ -167,12 +172,14 @@ def constraint_satisfied(actual_constraints: list[dict[str, Any]], expected: dic
             continue
         av, ev = c.get("value"), exp_value
         if exp_op == "in":
-            # expected value may be a list of acceptable values; match any.
-            # If the ACTUAL value is itself a list (e.g. brand sets), overlap counts.
+            # An actual list represents the complete accepted set.  Require an
+            # exact set match when the dataset also specifies a list: accepting
+            # mere overlap would let a compiler silently drop alternatives and
+            # still pass the intent eval.
             if isinstance(av, (list, tuple)) and isinstance(ev, (list, tuple)):
                 a_norm = {normalize_scalar(x) for x in av}
                 e_norm = {normalize_scalar(x) for x in ev}
-                if a_norm & e_norm:
+                if a_norm == e_norm:
                     return True
             ev_list = ev if isinstance(ev, list) else [ev]
             if any(_cat_equivalent(av, x) or scalars_equal(av, x) for x in ev_list):

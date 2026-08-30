@@ -6,7 +6,7 @@ backend. Two specs:
 | Spec | Rail | What it proves |
 |---|---|---|
 | `tests/e2e/hero.spec.ts` | sandbox | The full buyer-owned arc: brief → compiled constraints → offer spread with visible rejections → freeze → contract dossier with MATERIAL PROMISES → authorize → simulated capture delivered as a **real signed webhook** → PAID banner → synthetic ship + wrong-variant delivery → MATERIAL BREACH page → gated remedy pipeline (policy → optional human approval → execute) → REMEDIATED, verified against server truth via the API. |
-| `tests/e2e/checkout-options.spec.ts` | live-test-mode (mocked API) | The §3.1 regression guard: intercepts `https://checkout.razorpay.com/v1/checkout.js`, fulfils it with a recording stub (`window.__rzpCtorArgs`), drives a contract to READY_TO_PAY through mocked live-test-mode endpoints, clicks Pay, and asserts the app handed checkout.js `key` (the public key VALUE — **never** a `key_id` option), plus `order_id`, integer-paise `amount` and `currency: "INR"`. Also asserts `.open()` actually ran inside the click's user gesture. |
+| `tests/e2e/checkout-options.spec.ts` | live-test-mode (mocked API) | The §3.1 regression guard: intercepts `https://checkout.razorpay.com/v1/checkout.js`, fulfils it with a recording stub (`window.__rzpCtorArgs`), drives a contract to READY_TO_PAY through mocked live-test-mode endpoints, clicks Pay, and asserts the app handed checkout.js `key` (the public key VALUE — **never** a `key_id` option), plus `order_id`, integer-paise `amount` and `currency: "INR"`. Also asserts `.open()` actually ran inside the click's user gesture, and covers a cold `PAYMENT_PENDING` load with cleared session storage reopening the server-read-back order. |
 
 ## Prerequisites
 
@@ -49,7 +49,7 @@ failing noisily.
 |---|---|---|
 | `DANTE_API_URL` | `http://localhost:8000` | API base used by readiness probe + request context |
 | `DANTE_WEB_URL` | `http://localhost:3000` | web base used as Playwright `baseURL` |
-| `DANTE_DEMO_OPERATOR_TOKEN` | `""` | Value of the `X-Demo-Operator-Token` header. Only needed when the API runs in live-test-mode (real `rzp_test_*` keys configured); without it the demo/fulfillment endpoints are operator-locked and the hero spec skips. |
+| `DANTE_DEMO_OPERATOR_TOKEN` | `""` | Value of the `X-Demo-Operator-Token` header. Needed for live-test-mode demo writes and any human remedy approval; without it those state changes are operator-locked and the hero spec skips when applicable. |
 
 ## Design notes
 

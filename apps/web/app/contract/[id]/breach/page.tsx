@@ -143,7 +143,6 @@ export default function BreachPage() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
 
   // Also verify on load so the page reflects current truth even before the

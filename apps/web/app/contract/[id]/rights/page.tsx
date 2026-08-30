@@ -43,7 +43,7 @@ export default function RightsPage() {
   const [graph, setGraph] = useState<RightsResponse["graph"] | null>(null);
   const [entitlements, setEntitlements] = useState<Entitlement[]>([]);
   const [contractStatus, setContractStatus] = useState<string | null>(null);
-  const [sandbox, setSandbox] = useState(false);
+  const [sandbox, setSandbox] = useState<boolean | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Drawer focus management (#15).
@@ -149,7 +149,7 @@ export default function RightsPage() {
 
       <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
         <div className="md:col-span-8">
-          <SectionLabel>THE RIGHTS GRAPH</SectionLabel>
+          <SectionLabel>THE PURCHASE RIGHTS GRAPH</SectionLabel>
           <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
             What this purchase entitles you to.
           </h1>
@@ -162,7 +162,9 @@ export default function RightsPage() {
         </div>
         <div className="flex flex-col items-start gap-2 md:col-span-4 md:items-end">
           {contractStatus ? <Badge>{contractStatus}</Badge> : null}
-          <span className="folio-label">{sandbox ? "SANDBOX RAIL" : "LIVE TEST-MODE RAIL"}</span>
+          <span className="folio-label">
+            {sandbox === null ? "PAYMENT RAIL · PROBING…" : sandbox ? "SANDBOX RAIL" : "LIVE TEST-MODE RAIL"}
+          </span>
           {(entitlements.filter((e) => e.status === "eligible").length > 0 && (
             <span className="folio-label text-success">
               {entitlements.filter((e) => e.status === "eligible").length} ELIGIBLE

@@ -19,6 +19,8 @@ Two operating postures for the state-changing endpoints
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Body, Header, HTTPException
 
 from project_dante.db.store import STORE
@@ -27,7 +29,6 @@ from project_dante.integrations.merchant import service
 from project_dante.settings import Settings, get_settings
 
 router = APIRouter(prefix="/demo", tags=["demo"])
-settings = get_settings()
 
 _OPERATOR_HEADER = "x-demo-operator-token"
 
@@ -47,7 +48,9 @@ def _operator_gate(s: Settings, token: str | None) -> None:
         # rights/policy chain into issuing REAL refunds. The hybrid path is
         # therefore explicit and operator-gated — fail closed when no
         # operator token has been provisioned.
-        if not configured or presented != configured:
+        if not configured or not presented or not hmac.compare_digest(
+            presented, configured
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -62,7 +65,9 @@ def _operator_gate(s: Settings, token: str | None) -> None:
 def _require_demo_mode(operator_token: str | None = None) -> None:
     """Gate one state-changing request; ``operator_token`` comes from the
     X-Demo-Operator-Token request header (declared per-endpoint below)."""
-    _operator_gate(settings, operator_token)
+    # Resolve settings at request time so a cache refresh/reload cannot leave
+    # the state-changing gate using a stale token or demo posture snapshot.
+    _operator_gate(get_settings(), operator_token)
 
 
 @router.get("/status")
@@ -129,6 +134,7 @@ def deliver(
 
     breaches: list[dict] = []
     contract_status: str | None = None
+    verification_error: str | None = None
     try:
         from project_dante.domain.promises.verifier import evaluate_contract
     except ImportError:

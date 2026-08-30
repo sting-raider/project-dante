@@ -20,8 +20,15 @@ jobs:
         run: uv sync --extra dev
       - name: Lint
         run: uv run ruff check project_dante tests
+      - name: Verification scripts lint
+        run: uv run ruff check ../../scripts/verify_e2e.py ../../scripts/verify_real_integration.py
+      - name: Typecheck
+        run: uv run mypy project_dante --ignore-missing-imports
       - name: Tests
         run: uv run pytest -q
+      - name: Evaluation gates
+        working-directory: .
+        run: uv run --project apps/api python evals/runners/run_all.py
 
   web:
     runs-on: ubuntu-latest
@@ -37,5 +44,7 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Typecheck
         run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
       - name: Build
         run: npm run build

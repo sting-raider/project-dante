@@ -83,20 +83,13 @@ def run(limit: int | None = None) -> dict:
                 continue
             # Brand is a Preference (plan §12.1), not a hard constraint — accept
             # it among soft preferences when the compiler classifies it there.
-            if resolved["key"] == "brand" and any(
+            if resolved["key"] == "brand" and resolved.get("op") != "in" and any(
                 p.get("key") == "brand"
                 and str(p.get("value", "")).strip().lower()
                 == str(resolved["value"]).strip().lower()
                 for p in actual_soft
             ):
                 continue
-            if resolved["key"] == "brand" and resolved.get("op") == "in":
-                wanted = [str(v).lower() for v in (resolved["value"] or [])]
-                have = [str(p.get("value", "")).lower() for p in actual_soft if p.get("key") == "brand"]
-                # Multi-brand lists: compiler extracts the first recognized brand
-                # only — accept any overlap as satisfying this informational case.
-                if set(wanted) & set(have):
-                    continue
             actual_vals = [(c.get("key"), c.get("op"), c.get("value")) for c in actual_constraints]
             case_failed.append(
                 f"missing constraint {resolved['key']} {resolved['op']} {resolved['value']!r} "
@@ -145,7 +138,11 @@ def run(limit: int | None = None) -> dict:
 
     thresholds_ok, threshold_msgs = threshold_check(
         metrics,
-        [("critical_recall", exact(1.0)), ("failures", exact(0))],
+        [
+            ("critical_recall", exact(1.0)),
+            ("overall_accuracy", exact(1.0)),
+            ("failures", exact(0)),
+        ],
     )
     print("\nThresholds:")
     for m in threshold_msgs:

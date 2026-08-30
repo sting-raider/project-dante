@@ -44,6 +44,30 @@ def _get_contract_or_404(contract_id: str) -> dict:
     return contract
 
 
+def _order_matches_contract(
+    order: Any, *, contract_id: str, amount_paise: int, receipt: str
+) -> bool:
+    """Validate an order recovered after an ambiguous create response."""
+    if not isinstance(order, dict):
+        return False
+    order_id = order.get("id")
+    if not isinstance(order_id, str) or not order_id.strip():
+        return False
+    if str(order.get("receipt") or "") != receipt:
+        return False
+    if order.get("amount") != amount_paise:
+        return False
+    if str(order.get("currency") or "") != "INR":
+        return False
+    notes = order.get("notes")
+    if notes is None:
+        return True
+    return isinstance(notes, dict) and (
+        not notes.get("contract_id")
+        or str(notes.get("contract_id")) == contract_id
+    )
+
+
 def _recompute_contract_hash(contract: dict) -> str | None:
     """Recompute sha256 over the FROZEN offer + promise set exactly as the
     contract pipeline froze it. Returns None when inputs are missing (nothing
@@ -65,10 +89,6 @@ def _recompute_contract_hash(contract: dict) -> str | None:
         promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract["id"]]
         if not promises:
             return None
-        def _norm_of(pr: dict) -> str:
-            nv = pr.get("normalized_value")
-            return canonical_json(nv if nv is not None else pr.get("value")).decode()
-
         def _norm_of(pr: dict) -> str:
             nv = pr.get("normalized_value")
             return canonical_json(nv if nv is not None else pr.get("value")).decode()
@@ -112,6 +132,65 @@ class PaymentOrderResponse(BaseModel):
     contract_status: str
 
 
+def _payment_order_response(order: dict, *, contract_status: str) -> PaymentOrderResponse:
+    """Serialize a stored order using the current gateway mode/key surface."""
+    return PaymentOrderResponse(
+        mode=service.mode(),
+        razorpay_order={k: v for k, v in order.items() if k != "_type"},
+        checkout_config={
+            "key_id": service.key_id_public(),
+            "order_id": order["id"],
+            "amount_paise": order["amount"],
+            "currency": order.get("currency", "INR"),
+        },
+        contract_status=contract_status,
+    )
+
+
+def _stored_payment_order_response(contract: dict) -> PaymentOrderResponse:
+    """Recover an already-created order without creating another one.
+
+    The browser may arrive on a contract in a new tab or after sessionStorage
+    was cleared. Only return a stored order when its immutable receipt,
+    amount, currency, and id all still bind it to this contract.
+    """
+    order_id = contract.get("razorpay_order_id")
+    if not isinstance(order_id, str) or not order_id.strip():
+        raise HTTPException(status_code=409, detail="payment_order_not_created")
+    amount_paise = contract.get("amount_paise")
+    if (
+        not isinstance(amount_paise, int)
+        or isinstance(amount_paise, bool)
+        or amount_paise <= 0
+    ):
+        raise HTTPException(status_code=409, detail="contract_amount_invalid")
+    order = STORE.get(order_id)
+    if order is None or order.get("_type") != "razorpay_order":
+        raise HTTPException(status_code=404, detail="payment_order_unavailable")
+    receipt = f"dante:{contract['id']}"[:40]
+    if order.get("id") != order_id or not _order_matches_contract(
+        order,
+        contract_id=str(contract["id"]),
+        amount_paise=amount_paise,
+        receipt=receipt,
+    ):
+        raise HTTPException(status_code=409, detail="payment_order_inconsistent")
+    return _payment_order_response(order, contract_status=str(contract.get("status")))
+
+
+@router.get("/contracts/{contract_id}/payment-order", response_model=PaymentOrderResponse)
+async def get_payment_order(contract_id: str) -> PaymentOrderResponse:
+    """Read back the existing order for a cold-refresh/direct-navigation path."""
+    contract = _get_contract_or_404(contract_id)
+    status = contract.get("status")
+    if status not in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"payment_order_unavailable_for_status:{status}",
+        )
+    return _stored_payment_order_response(contract)
+
+
 @router.post("/contracts/{contract_id}/payment-order", response_model=PaymentOrderResponse)
 async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
     """Create a Razorpay order for an authorized, frozen contract.
@@ -132,20 +211,24 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
     # Idempotent re-entry: an existing live order for this contract is returned
     # unchanged instead of minting a second payable order.
     existing_order_id = contract.get("razorpay_order_id")
-    if status == "PAYMENT_ORDER_CREATED" and existing_order_id:
+    if status in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING") and existing_order_id:
         existing = STORE.get(existing_order_id)
         if existing is not None:
-            return PaymentOrderResponse(
-                mode=service.mode(),
-                razorpay_order={k: v for k, v in existing.items() if k != "_type"},
-                checkout_config={
-                    "key_id": service.key_id_public(),
-                    "order_id": existing["id"],
-                    "amount_paise": existing["amount"],
-                    "currency": existing.get("currency", "INR"),
-                },
-                contract_status=status,
-            )
+            amount_paise = contract.get("amount_paise")
+            receipt = f"dante:{contract_id}"[:40]
+            if (
+                not isinstance(amount_paise, int)
+                or isinstance(amount_paise, bool)
+                or not _order_matches_contract(
+                    existing,
+                    contract_id=contract_id,
+                    amount_paise=amount_paise,
+                    receipt=receipt,
+                )
+                or existing.get("id") != existing_order_id
+            ):
+                raise HTTPException(status_code=409, detail="payment_order_inconsistent")
+            return _payment_order_response(existing, contract_status=status)
 
     if status != "AWAITING_BUYER_AUTH":
         raise HTTPException(
@@ -187,13 +270,41 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
         "intent_id": str(contract.get("intent_id") or ""),
         "offer_id": str(contract.get("offer_id") or ""),
     }
+    recovered_after_create_error = False
+    order: dict[str, Any]
     try:
         order = service.create_order(amount_paise, receipt=receipt, notes=notes)
     except service.RazorpayError as exc:
-        logger.error(
-            "razorpay order creation failed contract=%s status=%s", contract_id, exc.status_code
-        )
-        raise HTTPException(status_code=502, detail="razorpay_order_failed") from exc
+        # The provider may have accepted the POST and lost only its response.
+        # A blind retry can create/return a duplicate-receipt failure, so
+        # recover the exact merchant receipt before reporting failure.
+        try:
+            recovered = service.fetch_order_by_receipt(receipt)
+        except Exception:  # noqa: BLE001 - recovery is best-effort and fail-closed
+            recovered = None
+        if not isinstance(recovered, dict) or not _order_matches_contract(
+            recovered,
+            contract_id=contract_id,
+            amount_paise=amount_paise,
+            receipt=receipt,
+        ):
+            logger.error(
+                "razorpay order creation failed contract=%s status=%s; receipt recovery missed",
+                contract_id,
+                exc.status_code,
+            )
+            raise HTTPException(status_code=502, detail="razorpay_order_failed") from exc
+        order = recovered
+        recovered_after_create_error = True
+
+    if not _order_matches_contract(
+        order,
+        contract_id=contract_id,
+        amount_paise=amount_paise,
+        receipt=receipt,
+    ):
+        logger.error("razorpay returned an order that does not match contract=%s", contract_id)
+        raise HTTPException(status_code=502, detail="razorpay_order_invalid")
 
     # ---- persist + transition + audit --------------------------------------
     is_sandbox = service.mode() == "sandbox"
@@ -215,6 +326,7 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
             "razorpay_order_id": order["id"],
             "amount_paise": amount_paise,
             "mode": service.mode(),
+            "recovered_after_create_error": recovered_after_create_error,
         },
         idempotency_key=f"order:{contract_id}:{order['id']}",
     )
@@ -226,17 +338,7 @@ async def create_payment_order(contract_id: str) -> PaymentOrderResponse:
         service.mode(),
     )
 
-    return PaymentOrderResponse(
-        mode=service.mode(),
-        razorpay_order={k: v for k, v in order.items() if k != "_type"},
-        checkout_config={
-            "key_id": service.key_id_public(),
-            "order_id": order["id"],
-            "amount_paise": amount_paise,
-            "currency": order.get("currency", "INR"),
-        },
-        contract_status="PAYMENT_ORDER_CREATED",
-    )
+    return _payment_order_response(order, contract_status="PAYMENT_ORDER_CREATED")
 
 
 # --------------------------------------------------- POST /verify-client
@@ -260,7 +362,14 @@ async def verify_client_payment(req: VerifyClientRequest) -> dict[str, Any]:
     contract = _get_contract_or_404(req.contract_id)
 
     expected_order = contract.get("razorpay_order_id")
-    if expected_order and req.razorpay_order_id != expected_order:
+    # Client-side verification is only meaningful after this contract has a
+    # server-created gateway order. A missing binding must fail closed; in
+    # sandbox mode the checkout HMAC secret is intentionally fixed and known
+    # to the demo, so accepting an arbitrary order here would let a caller
+    # advance a malformed contract to PAYMENT_PENDING.
+    if not isinstance(expected_order, str) or not expected_order:
+        raise HTTPException(status_code=409, detail="payment_order_not_created")
+    if req.razorpay_order_id != expected_order:
         raise HTTPException(status_code=403, detail="order_mismatch_for_contract")
 
     if not service.verify_checkout_signature(
@@ -270,7 +379,7 @@ async def verify_client_payment(req: VerifyClientRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="signature_verification_failed")
 
     updates: dict[str, Any] = {"razorpay_payment_id": req.razorpay_payment_id}
-    current = contract.get("status")
+    current = str(contract.get("status") or "")
 
     if current in ("PAID",) or current in (
         "FULFILLING",
@@ -383,7 +492,8 @@ async def demo_simulate_event(req: SimulateEventRequest = Body(...)) -> dict[str
     raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     signature = service.sign_webhook_payload(raw_body)
 
-    status, body = await handle_webhook_bytes(raw_body, signature, payload["id"])
+    event_id = str(payload["id"])
+    status, body = await handle_webhook_bytes(raw_body, signature, event_id)
     if status != 200 or not body.get("ok"):
         raise HTTPException(status_code=500, detail="simulated_webhook_failed_intake")
 
@@ -391,7 +501,7 @@ async def demo_simulate_event(req: SimulateEventRequest = Body(...)) -> dict[str
     return {
         "delivered": True,
         "synthetic": True,
-        "event_id": payload["id"],
+        "event_id": event_id,
         "payment_id": payment["id"],
         "contract_status": contract["status"] if contract else None,
     }

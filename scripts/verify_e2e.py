@@ -177,7 +177,10 @@ def main() -> None:
     r = c.post(f"/api/remedies/{rid}/policy")
     expect(r.status_code == 200, f"policy eval failed: {r.status_code} {r.text[:200]}")
     decision = r.json()["decision"]
-    expect(decision["decision"] == "ALLOW", f"expected ALLOW, got {decision['decision']}: {decision}")
+    expect(
+        decision["decision"] == "ALLOW",
+        f"expected ALLOW, got {decision['decision']}: {decision}",
+    )
     step("policy", f"{decision['decision']} policies={decision.get('policy_ids')}")
 
     r = c.post(f"/api/remedies/{rid}/execute", json={})
@@ -191,7 +194,10 @@ def main() -> None:
     r2 = c.post(f"/api/remedies/{rid}/execute", json={})
     expect(r2.status_code == 200, "second execute errored")
     ref2 = (r2.json().get("money_action") or {}).get("result_ref")
-    expect(ref2 == refund_ref, f"double execute produced different refund ids: {refund_ref} vs {ref2}")
+    expect(
+        ref2 == refund_ref,
+        f"double execute produced different refund ids: {refund_ref} vs {ref2}",
+    )
     step("idempotency", "repeat execute returned same refund id (one money effect)")
 
     final = poll_status(c, cid, {"REMEDIATED"})

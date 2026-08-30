@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from project_dante.db.store import STORE
 from project_dante.domain.events import LOG, append_event
@@ -33,7 +34,7 @@ def _get_contract_or_404(contract_id: str) -> dict[str, Any]:
     return contract
 
 
-def _to_model(model_cls: type, record: dict[str, Any]) -> dict[str, Any]:
+def _to_model(model_cls: type[BaseModel], record: dict[str, Any]) -> dict[str, Any]:
     """Rehydrate a stored record into a frozen model, dropping store-internal
     (`_type`) and non-schema fields the forbid-extras models would reject."""
     fields = set(model_cls.model_fields)

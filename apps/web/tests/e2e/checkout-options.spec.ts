@@ -274,5 +274,118 @@ test.describe("razorpay checkout options", () => {
       () => (window as { __rzpOpened?: number }).__rzpOpened ?? 0,
     );
     expect(opened).toBeGreaterThan(0);
+    expect(orderCalls).toBe(1);
+    expect(contractGets).toBeGreaterThan(0);
+  });
+
+  test("cold-refresh reads back a pending live order and can reopen checkout", async ({
+    page,
+    api,
+  }) => {
+    await requireServers(api, test.skip);
+
+    let contractGets = 0;
+    let paymentOrderGets = 0;
+    const orderResponse = {
+      mode: "live-test-mode",
+      razorpay_order: {
+        id: MOCK_ORDER_ID,
+        amount: MOCK_AMOUNT_PAISE,
+        currency: "INR",
+        status: "created",
+      },
+      checkout_config: {
+        key_id: MOCK_KEY_ID,
+        order_id: MOCK_ORDER_ID,
+        amount_paise: MOCK_AMOUNT_PAISE,
+        currency: "INR",
+      },
+      contract_status: "PAYMENT_PENDING",
+    };
+
+    // This test intentionally seeds no order snapshot. The only usable live
+    // checkout key must therefore come from GET /payment-order.
+    await page.addInitScript(() => window.sessionStorage.clear());
+    await page.route("**/api/intents/**", (route) =>
+      route.fulfill({ status: 404, body: "{}" }),
+    );
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}/payment-order`, async (route) => {
+      expect(route.request().method()).toBe("GET");
+      paymentOrderGets += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(orderResponse),
+      });
+    });
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}`, async (route) => {
+      contractGets += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(contractPayload("PAYMENT_PENDING")),
+      });
+    });
+    await page.route(
+      "https://checkout.razorpay.com/v1/checkout.js*",
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/javascript",
+          body: STUB_CHECKOUT_JS,
+        }),
+    );
+
+    await page.goto(`/contract/${MOCK_CONTRACT_ID}`, { waitUntil: "domcontentloaded" });
+    const reopenButton = page.getByRole("button", {
+      name: "Re-open Razorpay checkout",
+    });
+    await expect(reopenButton).toBeVisible({ timeout: 30_000 });
+    await page.waitForFunction(
+      () => typeof (window as { Razorpay?: unknown }).Razorpay === "function",
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    await reopenButton.click();
+    await page.waitForFunction(
+      () => ((window as { __rzpCtorArgs?: unknown[] }).__rzpCtorArgs?.length ?? 0) > 0,
+    );
+    const ctorArgs = (await page.evaluate(() => {
+      const args = (window as { __rzpCtorArgs?: Record<string, unknown>[] }).__rzpCtorArgs;
+      return args && args.length > 0 ? args[0] : null;
+    })) as Record<string, unknown> | null;
+
+    expect(ctorArgs).not.toBeNull();
+    expect(ctorArgs!.key).toBe(MOCK_KEY_ID);
+    expect(ctorArgs).not.toHaveProperty("key_id");
+    expect(ctorArgs!.order_id).toBe(MOCK_ORDER_ID);
+    expect(ctorArgs!.amount).toBe(MOCK_AMOUNT_PAISE);
+    expect(ctorArgs!.currency).toBe("INR");
+    expect(paymentOrderGets).toBe(1);
+    expect(contractGets).toBeGreaterThan(0);
+  });
+
+  test("initial dossier load failure shows an actionable retry instead of hanging", async ({
+    page,
+    api,
+  }) => {
+    await requireServers(api, test.skip);
+
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}`, (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "API temporarily unavailable" }),
+      }),
+    );
+
+    await page.goto(`/contract/${MOCK_CONTRACT_ID}`, { waitUntil: "domcontentloaded" });
+
+    await expect(
+      page.getByRole("heading", { name: "Contract unavailable" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("HTTP 503: API temporarily unavailable")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 });

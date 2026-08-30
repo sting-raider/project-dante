@@ -319,7 +319,7 @@ def get_provider(settings: Settings) -> AnthropicProvider | OpenAICompatibleProv
 
     Selection is delegated entirely to settings.llm_engine so provider/key
     usability is decided in exactly one place: 'anthropic' -> Anthropic,
-    'openai-compatible' -> OpenAICompatible, '' => rules engine.
+    'openai-compatible'/'groq' -> OpenAICompatible, '' => rules engine.
     """
     engine = settings.llm_engine
     if not engine:
