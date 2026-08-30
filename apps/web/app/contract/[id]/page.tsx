@@ -19,9 +19,9 @@
  * Payment paths (per docs/API_CONTRACT.md):
  * - sandbox:      payment-order returns mode "sandbox" → clearly-badged button
  *                 fires POST /api/demo/razorpay/simulate-event, then poll to PAID.
- * - live-test:    load checkout.js, open Standard Checkout on Pay, handler posts
- *                 /api/payments/verify-client, then poll to PAID.
- * Client success is never final truth — the webhook is.
+ * - live-test:    load checkout.js, open Standard Checkout on Pay, handler records
+ *                 the provider callback as advisory and polls to PAID.
+ * Client success is never final truth — the signature-verified webhook is.
  */
 
 import Link from "next/link";
@@ -32,7 +32,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   PaymentOrderResponse,
   RazorpayCheckoutOptions,
-  RazorpayHandlerResponse,
 } from "@/lib/useContractFlow";
 import {
   BRIEF_SESSION_KEY,
@@ -131,9 +130,14 @@ export default function ContractPage() {
           dante_order_id: String(cfg.order_id),
         },
         theme: { color: "#F04A2D" },
-        handler: (response: RazorpayHandlerResponse) => {
-          // client success ≠ truth; verify then keep polling for webhook
-          void flow.verifyClient(contractId, response);
+        handler: () => {
+          // The callback is advisory only. The signed Razorpay webhook is the
+          // sole authority that can move the contract to PAID.
+          setDismissedNote(
+            "Checkout returned; waiting for Razorpay webhook confirmation.",
+          );
+          setCheckoutOpen(false);
+          flow.pollUntilResolved(contractId);
         },
         modal: {
           ondismiss: () => {
