@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     database_url: str = ""
     redis_url: str = ""
 
+    # JSON is the buildathon-friendly default.  These fields are also read by
+    # the persistence factory when the values come from a repo-root .env;
+    # direct process environment variables still take precedence there.
+    dante_store_backend: str = "json"
+    dante_store_path: str = ""
+
     llm_provider: str = ""  # "" | anthropic | openai-compatible | groq
     llm_model: str = ""
     llm_api_key: str = ""

@@ -18,6 +18,8 @@ import contextlib
 import os
 from typing import Any
 
+from project_dante.settings import get_settings
+
 
 def make_store() -> Any:
     """Resolve the store backend from DANTE_STORE_BACKEND.
@@ -29,11 +31,14 @@ def make_store() -> Any:
     raises immediately (operator misconfiguration must be loud); an
     unreachable-but-configured database defers its error to first use.
     """
-    backend = (os.environ.get("DANTE_STORE_BACKEND") or "json").strip().lower()
+    settings = get_settings()
+    backend = (
+        os.environ.get("DANTE_STORE_BACKEND") or settings.dante_store_backend or "json"
+    ).strip().lower()
     if backend in ("postgres", "pg"):
         from project_dante.db.pg_store import PostgresStore
 
-        store = PostgresStore(os.environ.get("DATABASE_URL") or None)
+        store = PostgresStore(os.environ.get("DATABASE_URL") or settings.database_url or None)
         with contextlib.suppress(Exception):
             store.ensure_schema()
         return store
