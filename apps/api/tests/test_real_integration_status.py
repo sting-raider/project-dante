@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -113,3 +114,16 @@ def test_resume_context_reuses_existing_real_order_without_writes():
         "/api/contracts/con_resume123456/payment-order",
     ]
     assert client.post_called is False
+
+
+def test_operator_headers_fall_back_to_dotenv_backed_settings(monkeypatch):
+    monkeypatch.delenv("DEMO_OPERATOR_TOKEN", raising=False)
+
+    assert VERIFY.operator_headers(SimpleNamespace(demo_operator_token="from-settings")) == {
+        "X-Demo-Operator-Token": "from-settings"
+    }
+
+    monkeypatch.setenv("DEMO_OPERATOR_TOKEN", "from-process")
+    assert VERIFY.operator_headers(SimpleNamespace(demo_operator_token="from-settings")) == {
+        "X-Demo-Operator-Token": "from-process"
+    }

@@ -196,8 +196,12 @@ def expect(cond: Any, msg: str) -> None:
         raise Fail(msg)
 
 
-def operator_headers() -> dict[str, str]:
+def operator_headers(settings: Any | None = None) -> dict[str, str]:
+    """Use the process environment first, then the API's dotenv-backed settings."""
     tok = os.environ.get("DEMO_OPERATOR_TOKEN", "")
+    if not tok and settings is not None:
+        tok = str(getattr(settings, "demo_operator_token", "") or "")
+    tok = tok.strip()
     return {"X-Demo-Operator-Token": tok} if tok else {}
 
 
@@ -319,11 +323,11 @@ def main() -> None:
     preflight_settings(settings)
 
     c = httpx.Client(
-        base_url=args.api.rstrip("/"), timeout=30, headers=operator_headers(),
+        base_url=args.api.rstrip("/"), timeout=30, headers=operator_headers(settings),
     )
     web_base = (args.web or settings.public_app_url or "http://localhost:3000").rstrip("/")
 
-    if not os.environ.get("DEMO_OPERATOR_TOKEN"):
+    if not operator_headers(settings):
         log("WARNING: DEMO_OPERATOR_TOKEN is not set; the live-mode demo fulfillment")
         log("endpoints may answer 403. Export DEMO_OPERATOR_TOKEN and rerun if so.")
 
@@ -496,7 +500,8 @@ def run_flow(
                 opened = webbrowser.open(pay_url)
             except Exception:  # noqa: BLE001 - headless hosts may lack a browser handler
                 opened = False
-            log(f"checkout: browser {'opened' if opened else 'NOT opened (headless?)'} at {pay_url}")
+            browser_state = "opened" if opened else "NOT opened (headless?)"
+            log(f"checkout: browser {browser_state} at {pay_url}")
         else:
             log(f"checkout: browser open disabled; manual URL is {pay_url}")
     else:
