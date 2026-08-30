@@ -108,11 +108,12 @@ BEGIN-RUN / END-RUN blocks below.
 
 ## Where the keys go
 
-**No Razorpay credentials are committed to this repository or persisted in its
-env files.** The currently running local API may receive Test Mode credentials
-through its process environment; live `rzp_live_*` keys would be hard-rejected
-at startup anyway per `LiveKeyRejected`. To enable real-integration mode for a
-fresh process, create/edit the env files that
+**No Razorpay credentials are committed to this repository.** For a local real
+smoke run, an operator may intentionally persist Razorpay **Test Mode** values
+in an ignored `.env` file; this workspace does so. Local env files are not part
+of the Git evidence or deployment artifact. Live `rzp_live_*` keys would be
+hard-rejected at startup anyway per `LiveKeyRejected`. To enable
+real-integration mode for a fresh process, create/edit the env files that
 `apps/api/project_dante/settings.py` reads (later entries win):
 
 - Repo root: `X:/RazorPay Buildathon/.env` (general), and/or
