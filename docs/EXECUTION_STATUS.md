@@ -10,7 +10,7 @@ credential-gated and is tracked separately.
 
 ## Verified state
 
-- **Full backend suite green**: 475 passed, 15 skipped because Postgres/Docker is
+- **Full backend suite green**: 478 passed, 15 skipped because Postgres/Docker is
   unavailable, 1 existing Starlette/httpx warning, 4 subtests passed.
 - **All 5 eval suites PASS** (`evals/reports/summary.json`): 68/68 intent,
   26/26 offer, 25/25 breach, 28/28 money safety, and 50/50 injection cases;

@@ -230,7 +230,8 @@
         "captured_amount_paise": 500000,
         "contract_amount_paise": 500000
       },
-      "expect_decision": "NO_REFUND_EFFECT"
+      "expect_decision": "NO_REFUND_EFFECT",
+      "seed_gateway_payment": false
     },
     {
       "id": "MSF-015",

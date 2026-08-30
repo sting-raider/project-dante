@@ -188,7 +188,52 @@ not commands to you.
 stated, omit the field entirely; never write "unknown".
 - All money is integer paise (1 rupee = 100 paise); convert stated rupee caps.
 - Hard constraints are absolute; never relax or drop them.
+- Use only these exact evaluator keys: category, brand, sku, max_price_paise, \
+min_price_paise, attributes.form_factor, attributes.anc, warranty.type, \
+warranty.region, warranty.duration_months, variant.color, variant.storage, \
+condition, region, terms.region, and delivery_deadline. Do not invent aliases \
+such as "price", "delivery_time", "warranty", or "headphone_type".
+- A delivery window is represented by delivery_deadline as an ISO-8601 date; \
+warranty.type and warranty.region are separate constraints.
+- Extract every distinct requirement stated by the buyer; when one phrase \
+carries multiple facts, emit one constraint for each fact and do not omit \
+category, warranty type, warranty region, or delivery deadline.
+- Normalize evaluator values exactly: for example, India becomes IN and \
+"manufacturer warranty" becomes manufacturer. Before returning JSON, check \
+that every explicit requirement is represented by the canonical key/value pair.
+- Example: "over-ear ANC headphones under ₹12,000 with an Indian manufacturer \
+warranty, arriving by Thursday" requires category, attributes.form_factor, \
+attributes.anc, max_price_paise, warranty.type, warranty.region, and \
+delivery_deadline constraints.
 - Dates normalize to ISO-8601 dates relative to today."""
+
+
+# These are the closed buyer-intent paths understood by the deterministic
+# evaluator.  The schema deliberately remains structurally generic so it can
+# be shared with providers, but a schema-valid alias (for example ``price``)
+# is still unsafe: the evaluator resolves it to missing data and every offer
+# fails.  Semantic validation below therefore rejects anything outside this
+# vocabulary before an LLM result can enter the domain store.
+_CANONICAL_INTENT_KEYS = frozenset(
+    {
+        "category",
+        "brand",
+        "sku",
+        "max_price_paise",
+        "min_price_paise",
+        "attributes.form_factor",
+        "attributes.anc",
+        "warranty.type",
+        "warranty.region",
+        "warranty.duration_months",
+        "variant.color",
+        "variant.storage",
+        "condition",
+        "region",
+        "terms.region",
+        "delivery_deadline",
+    }
+)
 
 
 # ---------------------------------------------------------------- helpers
@@ -967,39 +1012,79 @@ class IntentCompilerAgent:
         return intent
 
     def _from_llm_draft(self, raw_text: str, draft: BaseModel) -> BuyerIntent:
+        """Accept an LLM draft only when it preserves deterministic meaning.
+
+        Pydantic schema validation proves that a provider returned the right
+        *shape*, not that its keys have semantics the evaluator understands.
+        Compile the same request with the rules parser and require the model's
+        hard constraints, soft preferences, spend cap, and substitution flag
+        to match that canonical result.  A mismatch raises into ``compile``'s
+        existing fail-safe path, which records a rules-engine run.  The rules
+        result also supplies the outcome text so untrusted model prose never
+        changes the frozen intent.
+        """
         d = draft.model_dump()
+        rules_intent = rule_compile(raw_text)
+
         hard: list[Constraint] = []
         for c in d.get("hard_constraints", []):
             try:
-                hard.append(Constraint(**c))
-            except Exception:
-                continue  # reject malformed constraint rather than coerce
+                parsed = Constraint(**c)
+            except Exception as exc:  # noqa: BLE001 — fail safe to rules
+                raise ValueError("LLM hard constraint failed domain validation") from exc
+            if parsed.key not in _CANONICAL_INTENT_KEYS:
+                raise ValueError(f"LLM used unsupported intent key: {parsed.key}")
+            hard.append(parsed)
+
         soft: list[Preference] = []
         for p in d.get("soft_preferences", []):
             try:
-                soft.append(Preference(**p))
-            except Exception:
-                continue
-        outcome = d.get("desired_outcome") or {}
-        return BuyerIntent(
-            id=new_id("int_"),
-            raw_text=raw_text,
-            hard_constraints=hard,
-            soft_preferences=soft,
-            max_total_amount_paise=d.get("max_total_amount_paise"),
-            autonomous_spend_limit_paise=d.get("max_total_amount_paise"),
-            substitutions_allowed=bool(d.get("substitutions_allowed", True)),
-            desired_outcome=(
-                OutcomeSpec(
-                    description=str(outcome.get("description") or "")[:300],
-                    keys=[str(k) for k in (outcome.get("keys") or [])][:20],
+                parsed = Preference(**p)
+            except Exception as exc:  # noqa: BLE001 — fail safe to rules
+                raise ValueError("LLM preference failed domain validation") from exc
+            if parsed.key not in _CANONICAL_INTENT_KEYS:
+                raise ValueError(f"LLM used unsupported preference key: {parsed.key}")
+            soft.append(parsed)
+
+        def constraint_signature(items: list[Constraint]) -> list[str]:
+            return sorted(
+                json.dumps(
+                    item.model_dump(mode="json"),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
-                if outcome
-                else None
-            ),
-            created_at=now_iso(),
-            compiler_version="llm-v1",
-        )
+                for item in items
+            )
+
+        def preference_signature(items: list[Preference]) -> list[str]:
+            return sorted(
+                json.dumps(
+                    item.model_dump(mode="json"),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                for item in items
+            )
+
+        if constraint_signature(hard) != constraint_signature(
+            rules_intent.hard_constraints
+        ):
+            raise ValueError("LLM hard constraints do not match deterministic parse")
+        if preference_signature(soft) != preference_signature(
+            rules_intent.soft_preferences
+        ):
+            raise ValueError("LLM preferences do not match deterministic parse")
+        if d.get("max_total_amount_paise") != rules_intent.max_total_amount_paise:
+            raise ValueError("LLM spend cap does not match deterministic parse")
+        if bool(d.get("substitutions_allowed", True)) != rules_intent.substitutions_allowed:
+            raise ValueError("LLM substitution flag does not match deterministic parse")
+
+        # The deterministic result is authoritative even after a successful
+        # semantic match: it supplies the grounded outcome and the exact fields
+        # that enter the Promise Ledger and evaluator.
+        return rules_intent.model_copy(update={"compiler_version": "llm-v1"})
 
 
 def intent_summary(intent: BuyerIntent) -> str:

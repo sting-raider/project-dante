@@ -27,7 +27,7 @@
 import Link from "next/link";
 import Script from "next/script";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   PaymentOrderResponse,
@@ -88,6 +88,7 @@ export default function ContractPage() {
   const [rzpScriptReady, setRzpScriptReady] = useState(false);
   const [rzpScriptFailed, setRzpScriptFailed] = useState(false);
   const [dismissedNote, setDismissedNote] = useState<string | null>(null);
+  const paymentFailureRef = useRef(false);
 
   // initial load (+ resume polling if payment pending)
   useEffect(() => {
@@ -137,9 +138,11 @@ export default function ContractPage() {
         modal: {
           ondismiss: () => {
             setCheckoutOpen(false);
-            setDismissedNote(
-              "Checkout closed before completing. If the payment actually went through, server reconciliation will confirm it — watch the status below.",
-            );
+            if (!paymentFailureRef.current) {
+              setDismissedNote(
+                "Checkout closed before completing. If the payment actually went through, server reconciliation will confirm it — watch the status below.",
+              );
+            }
             // window-closed fallback (§33.5): resume polling regardless
             flow.pollUntilResolved(contractId);
           },
@@ -187,6 +190,7 @@ export default function ContractPage() {
       );
       return;
     }
+    paymentFailureRef.current = false;
     const opened = flow.openCheckout();
     if (!opened) {
       setDismissedNote("Checkout could not be started — please try again.");
@@ -194,6 +198,7 @@ export default function ContractPage() {
     }
     const rzp = new window.Razorpay(options);
     rzp.on?.("payment.failed", (resp: { error?: { description?: string } }) => {
+      paymentFailureRef.current = true;
       setDismissedNote(
         resp.error?.description
           ? `Payment attempt failed: ${resp.error.description}`

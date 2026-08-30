@@ -230,7 +230,7 @@ Mitigations:
 ## 6. Red-team results
 
 Latest run: `cd apps/api && .venv/Scripts/python.exe -m pytest tests/test_security_redteam.py tests/test_webhook_chaos.py -q`
-→ **72 passed / 0 failed / 0 skipped**. Full API tree: **475 passed, 15 skipped**
+→ **72 passed / 0 failed / 0 skipped**. Full API tree: **478 passed, 15 skipped**
 (Postgres/Docker unavailable).
 
 Three vulnerabilities found during red-teaming were VERIFIED FIXED and are now

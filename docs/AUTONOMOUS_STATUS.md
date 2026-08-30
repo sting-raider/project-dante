@@ -17,7 +17,7 @@
 
 ## Current gates
 
-- Backend: 475 passed (15 PG integration skips without a reachable DB — honest)
+- Backend: 478 passed (15 PG integration skips without a reachable DB — honest)
 - Ruff / mypy / tsc / next build: clean
 - Playwright/browser smoke: hero arc + checkout-options spec green (×3 consecutive runs); rendered audit/timeline/merchant surfaces verified
 - Sandbox E2E: PASSED across [01]–[16], including signed webhook, breach, policy, refund, idempotency, and audit
