@@ -24,9 +24,9 @@ between BEGIN-RUN/END-RUN markers. Exit code 0 only when ALL criteria pass.
 
 Usage:
     python scripts/verify_real_integration.py [--api http://localhost:8000]
-        [--web http://localhost:3000] [--wait 180]
+        [--web http://localhost:3000] [--wait 180] [--no-open]
     python scripts/verify_real_integration.py --resume-contract con_...
-        [--api http://localhost:8000] [--web http://localhost:3000] [--wait 600]
+        [--api http://localhost:8000] [--web http://localhost:3000] [--wait 600] [--no-open]
 
 Environment:
     DEMO_OPERATOR_TOKEN   sent as X-Demo-Operator-Token on every /api/demo/*
@@ -308,6 +308,11 @@ def main() -> None:
             "contract instead of resetting and creating a new order"
         ),
     )
+    ap.add_argument(
+        "--no-open",
+        action="store_true",
+        help="print the checkout URL and wait without opening a local browser",
+    )
     args = ap.parse_args()
 
     settings = load_settings_or_exit()
@@ -330,7 +335,13 @@ def main() -> None:
     fail_msg = ""
     ok = False
     try:
-        ok = run_flow(c, web_base, args.wait, args.resume_contract)
+        ok = run_flow(
+            c,
+            web_base,
+            args.wait,
+            args.resume_contract,
+            open_browser=not args.no_open,
+        )
     except Fail as exc:
         fail_msg = str(exc)
         log(f"FAIL: {fail_msg}")
@@ -367,6 +378,8 @@ def run_flow(
     web_base: str,
     wait_s: float,
     resume_contract_id: str = "",
+    *,
+    open_browser: bool = True,
 ) -> bool:
     # ---- 0. server truth ----------------------------------------------------
     r = c.get("/api/health")
@@ -478,11 +491,14 @@ def run_flow(
         print("  (use a TEST card, e.g. 4111 1111 1111 1111 - never a real card)")
         print(f"  Waiting up to {int(wait_s)}s for the signature-verified webhook to grant PAID...")
         print("=" * 78)
-        try:
-            opened = webbrowser.open(pay_url)
-        except Exception:  # noqa: BLE001 - headless hosts may lack a browser handler
-            opened = False
-        log(f"checkout: browser {'opened' if opened else 'NOT opened (headless?)'} at {pay_url}")
+        if open_browser:
+            try:
+                opened = webbrowser.open(pay_url)
+            except Exception:  # noqa: BLE001 - headless hosts may lack a browser handler
+                opened = False
+            log(f"checkout: browser {'opened' if opened else 'NOT opened (headless?)'} at {pay_url}")
+        else:
+            log(f"checkout: browser open disabled; manual URL is {pay_url}")
     else:
         log(
             "resume: contract already PAID; skipping checkout prompt and "
