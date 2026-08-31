@@ -1502,6 +1502,79 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Merchant evidence — capability profile before merchandising
+--------------------------------------------------------------------------- */
+
+.merchant-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(47 111 237 / 4%), transparent 24rem),
+    var(--color-paper);
+}
+
+.merchant-masthead {
+  max-width: 76rem;
+}
+
+.merchant-profile-panel {
+  box-shadow: 0 6px 22px rgb(16 24 40 / 3%);
+}
+
+.merchant-profile-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.merchant-profile-cell {
+  min-height: 6.75rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-paper);
+  padding: 0.9rem;
+}
+
+.merchant-profile-label,
+.merchant-profile-detail {
+  display: block;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.merchant-profile-value {
+  display: block;
+  margin-top: 0.65rem;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merchant-profile-detail {
+  margin-top: 0.5rem;
+  font-size: 0.56rem;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+@media (min-width: 768px) {
+  .merchant-profile-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .merchant-profile-cell {
+    padding: 1rem;
+  }
+}
+
 @media (max-width: 767px) {
   .demo-manual-summary {
     align-items: flex-start;
