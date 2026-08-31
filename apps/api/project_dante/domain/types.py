@@ -313,6 +313,8 @@ class Predicate(DanteModel):
 class Entitlement(DanteModel):
     id: str
     contract_id: str | None = None
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
 
     issuer_type: IssuerType = "merchant"
     issuer_name: str = "Aster Electronics"
@@ -343,6 +345,8 @@ class Entitlement(DanteModel):
 class RemedyProposal(DanteModel):
     id: str
     breach_id: str | None = None
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
     entitlement_id: str | None = None
     contract_id: str | None = None
 
@@ -370,6 +374,8 @@ class MoneyActionProposal(DanteModel):
     razorpay_order_id: str | None = None
 
     contract_id: str
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
     remedy_proposal_id: str | None = None
 
     reason_code: str

@@ -16,6 +16,12 @@ from typing import Any
 
 from project_dante.db.store import STORE
 from project_dante.domain.events import append_event
+from project_dante.domain.line_items import (
+    contract_line_scopes,
+    line_item_amount_paise,
+    record_matches_scope,
+    records_for_scope,
+)
 
 # ------------------------------------------------------------------ helpers
 
@@ -58,6 +64,29 @@ def _evidence(contract_id: str) -> list[dict[str, Any]]:
 
 def _remedies(contract_id: str) -> list[dict[str, Any]]:
     return STORE.find("remedy", contract_id=contract_id)
+
+
+def _entitlements_for_contract(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only entitlements matching the contract's current line scopes.
+
+    Older persisted multi-item contracts may contain the historical single
+    unscoped entitlement set.  Re-derive those records before any eligibility
+    or graph decision so a stale basket-level right cannot authorize money for
+    the wrong line.  Legacy single-item contracts keep their old IDs.
+    """
+    existing = STORE.find("entitlement", contract_id=contract["id"])
+    scopes = contract_line_scopes(contract)
+    complete = all(
+        any(record_matches_scope(entitlement, scope) for entitlement in existing)
+        for scope in scopes
+    )
+    if not complete:
+        return derive_entitlements(contract["id"])
+    return [
+        entitlement
+        for entitlement in existing
+        if any(record_matches_scope(entitlement, scope) for scope in scopes)
+    ]
 
 
 def _fact_value(facts: list[dict[str, Any]], key: str) -> Any:
@@ -137,7 +166,11 @@ def _eval_predicate(pred: dict[str, Any], ctx: dict[str, Any]) -> bool:
 
 
 def resolve_ctx(
-    contract_id: str, promises: list[dict], facts: list[dict], breaches: list[dict]
+    contract_id: str,
+    promises: list[dict],
+    facts: list[dict],
+    breaches: list[dict],
+    line_item_id: str | None = None,
 ) -> dict[str, Any]:
     """Flat dotted-key context for predicate evaluation.
 
@@ -145,17 +178,22 @@ def resolve_ctx(
     derived scenario markers. ``breach.reason_codes`` is a list so `contains`
     style checks work; ``breach.reason_code`` is the first material breach.
     """
+    del contract_id  # retained in the public helper signature for compatibility
+    scoped_promises = records_for_scope(promises, line_item_id)
+    scoped_facts = records_for_scope(facts, line_item_id)
+    scoped_breaches = records_for_scope(breaches, line_item_id)
+
     ctx: dict[str, Any] = {}
-    for p in promises:
+    for p in scoped_promises:
         key = p.get("key")
         if isinstance(key, str):
             ctx[key] = p.get("value")
-    for f in facts:
+    for f in scoped_facts:
         key = f.get("key")
         if isinstance(key, str):
             ctx[key] = f.get("value")
 
-    reasons = sorted(_reason_codes(breaches))
+    reasons = sorted(_reason_codes(scoped_breaches))
     ctx["breach.reason_codes"] = reasons
     material = [r for r in reasons if r in MATERIAL_REASONS]
     sla = [r for r in reasons if r in SLA_REASONS]
@@ -166,15 +204,15 @@ def resolve_ctx(
     ctx["breach.sla_present"] = bool(sla)
 
     # Received-unit attributes (observed reality beats promise for these).
-    received_region = _fact_value(facts, "product.region")
-    received_warranty = _fact_value(facts, "warranty.type")
+    received_region = _fact_value(scoped_facts, "product.region")
+    received_warranty = _fact_value(scoped_facts, "warranty.type")
     ctx.setdefault("received.product.region", received_region)
     ctx.setdefault("received.warranty.type", received_warranty)
 
     # Scenario markers injected by demo control (Agent F): replacement.available,
     # replacement.attempted etc. Normalize to booleans.
-    inv = _fact_value(facts, "replacement.available")
-    attempted = _fact_value(facts, "replacement.attempted")
+    inv = _fact_value(scoped_facts, "replacement.available")
+    attempted = _fact_value(scoped_facts, "replacement.attempted")
     ctx["replacement.available"] = bool(inv) if inv is not None else None
     ctx["replacement.attempted"] = bool(attempted) if attempted is not None else False
     return ctx
@@ -270,11 +308,15 @@ _ENTITLEMENT_SPECS: list[dict[str, Any]] = [
 ]
 
 
-def _entitlement_id(contract_id: str, slug: str) -> str:
+def _entitlement_id(
+    contract_id: str, slug: str, line_item_id: str | None = None
+) -> str:
     # Stable per-contract id so re-derivation updates rather than duplicates.
     from project_dante.domain.hashing import short_hash
 
-    return f"ent_{short_hash([contract_id, slug])}"
+    # Keep the historical id for the legacy unscoped/single-item shape.
+    seed = [contract_id, slug] if line_item_id is None else [contract_id, line_item_id, slug]
+    return f"ent_{short_hash(seed)}"
 
 
 def derive_entitlements(contract_id: str) -> list[dict[str, Any]]:
@@ -286,57 +328,74 @@ def derive_entitlements(contract_id: str) -> list[dict[str, Any]]:
     """
     contract = _get_contract(contract_id)
     captured = int(contract.get("amount_paise") or 0)
+    all_breaches = _breaches(contract_id)
 
     out: list[dict[str, Any]] = []
-    id_by_slug: dict[str, str] = {
-        spec["slug"]: _entitlement_id(contract_id, spec["slug"])
+    id_by_scope_slug: dict[tuple[str | None, str], str] = {
+        (line_item_id, spec["slug"]): _entitlement_id(
+            contract_id, spec["slug"], line_item_id
+        )
+        for line_item_id in contract_line_scopes(contract)
         for spec in _ENTITLEMENT_SPECS
     }
 
-    for spec in _ENTITLEMENT_SPECS:
-        eid = id_by_slug[spec["slug"]]
-        value = spec.get("remedy_value_paise")
-        rec: dict[str, Any] = {
-            "_type": "entitlement",
-            "id": eid,
-            "contract_id": contract_id,
-            "slug": spec["slug"],
-            "issuer_type": spec["issuer_type"],
-            "issuer_name": spec["issuer_name"],
-            "type": spec["type"],
-            "activates_when": spec["activates_when"],
-            "expires_at": None,  # P0: no expiring rights; expiry logic ready
-            "required_evidence_types": spec["required_evidence_types"],
-            "remedy_value_paise": (
-                value if value is not None else (captured or None)
-            ),
-            "estimated_resolution_hours": spec["estimated_resolution_hours"],
-            "requires": spec["requires"],
-            "blocks": spec["blocks"],
-            "fallback_to": spec["fallback_to"],
-            "execution_mode": spec["execution_mode"],
-            "status": "dormant",
-            "synthetic": True,  # demo-defined merchant/manufacturer terms
-        }
+    for line_item_id in contract_line_scopes(contract):
+        scoped_breaches = records_for_scope(all_breaches, line_item_id)
+        line_amount = line_item_amount_paise(contract, line_item_id)
+        for spec in _ENTITLEMENT_SPECS:
+            slug = spec["slug"]
+            eid = id_by_scope_slug[(line_item_id, slug)]
+            value = spec.get("remedy_value_paise")
+            if value is None:
+                value = line_amount if line_item_id is not None else (captured or None)
+            elif line_item_id is not None and line_amount is not None:
+                value = min(int(value), line_amount)
+            rec: dict[str, Any] = {
+                "_type": "entitlement",
+                "id": eid,
+                "contract_id": contract_id,
+                "line_item_id": line_item_id,
+                "affected_breach_ids": [b["id"] for b in scoped_breaches if b.get("id")],
+                "slug": slug,
+                "issuer_type": spec["issuer_type"],
+                "issuer_name": spec["issuer_name"],
+                "type": spec["type"],
+                "activates_when": spec["activates_when"],
+                "expires_at": None,  # P0: no expiring rights; expiry logic ready
+                "required_evidence_types": spec["required_evidence_types"],
+                "remedy_value_paise": value,
+                "estimated_resolution_hours": spec["estimated_resolution_hours"],
+                "requires": spec["requires"],
+                "blocks": spec["blocks"],
+                "fallback_to": spec["fallback_to"],
+                "execution_mode": spec["execution_mode"],
+                "status": "dormant",
+                "synthetic": True,  # demo-defined merchant/manufacturer terms
+            }
 
-        # Cross-links per plan §13 / task spec.
-        if spec["slug"] == "merchant_replacement":
-            rec["fallback_to"] = [id_by_slug.get("merchant_full_refund", "")]
-            rec["blocks"] = [id_by_slug.get("merchant_full_refund", "")]
-        elif spec["slug"] == "merchant_full_refund":
-            # Refund is the fallback when replacement was attempted/unavailable;
-            # it also blocks nothing itself. requires is checked dynamically.
-            rec["requires"] = []
-        elif spec["slug"] == "buyer_protection_fallback":
-            rec["requires"] = [
-                sid for slug, sid in id_by_slug.items() if slug != "buyer_protection_fallback"
-            ]
+            # Cross-links stay inside the same line scope.  A replacement
+            # right for a monitor must never block a keyboard refund.
+            if slug == "merchant_replacement":
+                rec["fallback_to"] = [
+                    id_by_scope_slug[(line_item_id, "merchant_full_refund")]
+                ]
+                rec["blocks"] = [
+                    id_by_scope_slug[(line_item_id, "merchant_full_refund")]
+                ]
+            elif slug == "merchant_full_refund":
+                rec["requires"] = []
+            elif slug == "buyer_protection_fallback":
+                rec["requires"] = [
+                    id_by_scope_slug[(line_item_id, other["slug"])]
+                    for other in _ENTITLEMENT_SPECS
+                    if other["slug"] != "buyer_protection_fallback"
+                ]
 
-        existing = STORE.get(eid)
-        if existing:
-            rec["status"] = existing.get("status", "dormant")  # preserve computed status
-        STORE.put(rec)
-        out.append(rec)
+            existing = STORE.get(eid)
+            if existing:
+                rec["status"] = existing.get("status", "dormant")  # preserve computed status
+            STORE.put(rec)
+            out.append(rec)
 
     ent_ids = [r["id"] for r in out]
     if sorted(contract.get("entitlement_ids") or []) != sorted(ent_ids):
@@ -348,7 +407,14 @@ def derive_entitlements(contract_id: str) -> list[dict[str, Any]]:
         event_type="RIGHTS_REEVALUATED",
         payload={
             "entitlement_ids": ent_ids,
-            "statuses": {r["slug"]: r["status"] for r in out},
+            "statuses": {
+                (
+                    f"{r.get('line_item_id')}:{r['slug']}"
+                    if r.get("line_item_id")
+                    else r["slug"]
+                ): r["status"]
+                for r in out
+            },
         },
     )
     return out
@@ -375,40 +441,65 @@ def evaluate_eligibility(contract_id: str) -> list[dict[str, Any]]:
       consumed   — already exercised via a remediated/executed remedy
     """
     contract = _get_contract(contract_id)
-    ents = STORE.find("entitlement", contract_id=contract_id) or derive_entitlements(contract_id)
-    promises = _promises(contract_id)
-    facts = _facts(contract_id)
-    breaches = _breaches(contract_id)
-    evidence = _evidence(contract_id)
+    ents = _entitlements_for_contract(contract)
+    all_promises = _promises(contract_id)
+    all_facts = _facts(contract_id)
+    all_breaches = _breaches(contract_id)
+    all_evidence = _evidence(contract_id)
     remedies = _remedies(contract_id)
-    ctx = resolve_ctx(contract_id, promises, facts, breaches)
 
     now = _now()
-    material_reason = ctx.get("breach.reason_code")
-    sla_reason = next((r for r in ctx["breach.reason_codes"] if r in SLA_REASONS), None)
-
-    # Replacement availability drives both the replacement right and the
-    # refund's fallback condition.
-    repl_available = ctx.get("replacement.available")  # True/False/None(unknown)
-    repl_attempted = ctx.get("replacement.attempted")  # bool
-
-    replacement_unavailable_or_attempted = (
-        repl_attempted or (repl_available is False)
-    )
-
-    # A remedy already executed/consumed marks its entitlement consumed.
-    executed_ent_ids = {
-        r.get("entitlement_id")
+    # A remedy already executed/consumed marks only its own line entitlement
+    # consumed.  The old contract-level fallback is retained for legacy
+    # single-item records that predate explicit money-action status.
+    executed_ent_ids: set[str] = {
+        str(r.get("entitlement_id"))
         for r in remedies
-        if r.get("entitlement_id")
-        and (
-            r.get("status") == "executed"
-            or r.get("rejected_reason") is None and r.get("rank") == 1
-            and contract.get("status") == "REMEDIATED"
-        )
+        if r.get("entitlement_id") and r.get("status") == "executed"
     }
+    for action in STORE.find("money_action", contract_id=contract_id):
+        if action.get("status") != "executed":
+            continue
+        remedy = STORE.get(action.get("remedy_proposal_id") or "")
+        if remedy and remedy.get("entitlement_id"):
+            executed_ent_ids.add(str(remedy["entitlement_id"]))
+    if contract.get("status") == "REMEDIATED":
+        executed_ent_ids.update(
+            str(r["entitlement_id"])
+            for r in remedies
+            if r.get("entitlement_id")
+            and r.get("line_item_id") is None
+            and r.get("rejected_reason") is None
+            and r.get("rank") == 1
+        )
 
     for ent in ents:
+        line_item_id = ent.get("line_item_id")
+        promises = records_for_scope(all_promises, line_item_id)
+        facts = records_for_scope(all_facts, line_item_id)
+        breaches = records_for_scope(all_breaches, line_item_id)
+        # A delivery event can be a shared artifact for a bulk simulation, so
+        # evidence is the one record family allowed to use an unscoped record
+        # for a specific line.
+        evidence = records_for_scope(
+            all_evidence, line_item_id, allow_unscoped=True
+        )
+        ctx = resolve_ctx(
+            contract_id, promises, facts, breaches, line_item_id=line_item_id
+        )
+        material_reason = ctx.get("breach.reason_code")
+        sla_reason = next(
+            (r for r in ctx["breach.reason_codes"] if r in SLA_REASONS), None
+        )
+
+        # Replacement availability drives both the replacement right and the
+        # refund's fallback condition for this line only.
+        repl_available = ctx.get("replacement.available")
+        repl_attempted = ctx.get("replacement.attempted")
+        replacement_unavailable_or_attempted = repl_attempted or (
+            repl_available is False
+        )
+
         slug = ent.get("slug")
         status = "dormant"
 
@@ -472,15 +563,24 @@ def evaluate_eligibility(contract_id: str) -> list[dict[str, Any]]:
             # Always external/dormant in P0 (plan §59: no direct claim API).
             status = "dormant"
 
-        STORE.update(ent["id"], status=status)
+        STORE.update(
+            ent["id"],
+            status=status,
+            affected_breach_ids=[b["id"] for b in breaches if b.get("id")],
+        )
 
+    stored_statuses = {
+        f"{e.get('line_item_id')}:{e['slug']}" if e.get("line_item_id") else e["slug"]:
+        (STORE.get(e["id"]) or {}).get("status")
+        for e in ents
+    }
     append_event(
         aggregate_type="contract",
         aggregate_id=contract_id,
         event_type="RIGHTS_REEVALUATED",
         payload={
             "trigger": "eligibility_check",
-            "statuses": {e["slug"]: (STORE.get(e["id"]) or {}).get("status") for e in ents},
+            "statuses": stored_statuses,
         },
     )
     return [STORE.get(e["id"]) for e in ents]
@@ -498,7 +598,7 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
     ISSUED_BY.
     """
     contract = _get_contract(contract_id)
-    ents = STORE.find("entitlement", contract_id=contract_id) or derive_entitlements(contract_id)
+    ents = _entitlements_for_contract(contract)
     promises = [p for p in _promises(contract_id)]
     facts = _facts(contract_id)
     breaches = _breaches(contract_id)
@@ -537,6 +637,7 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
             f"{p.get('key')} = {p.get('value')}",
             key=p.get("key"),
             value=p.get("value"),
+            line_item_id=p.get("line_item_id"),
             material_reason=p.get("material_reason"),
             source_artifact_id=p.get("source_artifact_id"),
         )
@@ -553,6 +654,8 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
             issuer_type=ent.get("issuer_type"),
             issuer_name=ent.get("issuer_name"),
             entitlement_type=ent.get("type"),
+            line_item_id=ent.get("line_item_id"),
+            affected_breach_ids=ent.get("affected_breach_ids") or [],
             status=ent.get("status"),
             execution_mode=ent.get("execution_mode"),
             remedy_value_paise=ent.get("remedy_value_paise"),
@@ -564,7 +667,8 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
         # whose breach family it remedies (replacement/refund) or that define
         # it (warranty).
         for p in material_promises:
-            edge(nid, f"promise:{p['id']}", "REQUIRES")
+            if record_matches_scope(p, ent.get("line_item_id")):
+                edge(nid, f"promise:{p['id']}", "REQUIRES")
 
     # ---- breaches ----------------------------------------------------------
     fact_by_id = {f["id"]: f for f in facts}
@@ -578,6 +682,7 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
             b.get("reason_code") or "BREACH",
             severity=b.get("severity"),
             reason_code=b.get("reason_code"),
+            line_item_id=b.get("line_item_id"),
             explanation=b.get("explanation"),
             detected_at=b.get("detected_at"),
         )
@@ -597,6 +702,8 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
         # Breach activates the rights whose reason families match.
         reason = b.get("reason_code")
         for ent in ents:
+            if not record_matches_scope(ent, b.get("line_item_id")):
+                continue
             if reason in (MATERIAL_REASONS & set(ent.get("_activation_reasons", []) or [])) or (
                 reason in MATERIAL_REASONS
                 and ent.get("slug")
@@ -657,6 +764,8 @@ def build_rights_graph(contract_id: str) -> dict[str, Any]:
             rank=r.get("rank"),
             rejected_reason=r.get("rejected_reason"),
             amount_paise=r.get("amount_paise"),
+            line_item_id=r.get("line_item_id"),
+            affected_breach_ids=r.get("affected_breach_ids") or [],
             status=r.get("status"),
         )
         if r.get("breach_id"):

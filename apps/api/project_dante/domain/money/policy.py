@@ -34,6 +34,12 @@ import yaml
 from project_dante.db.store import STORE
 from project_dante.domain.events import append_event, new_id, now_iso
 from project_dante.domain.hashing import sha256_hex
+from project_dante.domain.line_items import (
+    contract_line_ids,
+    line_item_amount_paise,
+    record_line_id,
+    records_for_scope,
+)
 
 # ------------------------------------------------------------------ policy
 
@@ -184,20 +190,25 @@ def _captured_amount_paise(contract: dict[str, Any]) -> int | None:
     return None
 
 
-def _refunded_so_far_paise(payment_id: str | None) -> int:
+def _refund_totals(
+    payment_id: str | None,
+) -> tuple[int, dict[str, int]]:
     """Total paise already refunded against a payment (0 when unknown).
 
     Reconciles both the gateway payment projection and the append-only local
     refund ledger. Either source may be ahead after a timeout or an
-    out-of-band dashboard refund, so the larger observed total is binding.
+    out-of-band dashboard refund, so the larger aggregate total is binding.
+    The second return value contains only explicitly line-attributed refunds;
+    an unlinked dashboard refund is intentionally financial-only.
     """
     if not payment_id:
-        return 0
+        return 0, {}
     pay = STORE.get(payment_id) or STORE.find_one("razorpay_payment", payment_id=payment_id)
     payment_total = 0
     if pay and isinstance(pay.get("amount_refunded"), int) and pay["amount_refunded"] >= 0:
         payment_total = pay["amount_refunded"]
     ledger_total = 0
+    line_totals: dict[str, int] = {}
     seen: set[str] = set()
     for r in STORE.find("razorpay_refund", payment_id=payment_id):
         rid = str(r.get("id") or "")
@@ -206,11 +217,28 @@ def _refunded_so_far_paise(payment_id: str | None) -> int:
         if rid:
             seen.add(rid)
         amt = r.get("amount")
-        if isinstance(amt, int):
-            ledger_total += amt
-        elif isinstance(r.get("amount_paise"), int):
-            ledger_total += r["amount_paise"]
-    return max(payment_total, ledger_total)
+        if not isinstance(amt, int):
+            amt = r.get("amount_paise")
+        if not isinstance(amt, int) or isinstance(amt, bool) or amt < 0:
+            continue
+        ledger_total += amt
+        line_item_id = record_line_id(r)
+        if line_item_id is None:
+            notes = r.get("notes")
+            if isinstance(notes, dict):
+                note_line = notes.get("line_item_id")
+                line_item_id = note_line if isinstance(note_line, str) and note_line else None
+        if line_item_id is not None:
+            line_totals[line_item_id] = line_totals.get(line_item_id, 0) + amt
+    return max(payment_total, ledger_total), line_totals
+
+
+def _refunded_so_far_paise(
+    payment_id: str | None, line_item_id: str | None = None
+) -> int:
+    """Return aggregate or explicitly attributed line refund totals."""
+    total, by_line = _refund_totals(payment_id)
+    return total if line_item_id is None else by_line.get(line_item_id, 0)
 
 
 def _persist_and_link(
@@ -229,6 +257,8 @@ def _persist_and_link(
         # REQUIRE_APPROVAL decision exists for THIS exact action+amount.
         "idempotency_key": proposal.get("idempotency_key"),
         "amount_paise": proposal.get("amount_paise"),
+        "line_item_id": proposal.get("line_item_id"),
+        "affected_breach_ids": proposal.get("affected_breach_ids") or [],
         **decision,
     }
     STORE.put(rec)
@@ -244,6 +274,8 @@ def _persist_and_link(
         "explanation": decision["explanation"],
         "money_action_id": mid,
         "amount_paise": proposal.get("amount_paise"),
+        "line_item_id": proposal.get("line_item_id"),
+        "affected_breach_ids": proposal.get("affected_breach_ids") or [],
         "action_type": proposal.get("type"),
         "policy_snapshot_hash": decision["policy_snapshot_hash"],
     }
@@ -352,6 +384,38 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
             explanation=f"Contract {contract_id or '<missing>'} does not exist.",
         ))
 
+    line_item_id = proposal.get("line_item_id")
+    if line_item_id is not None and (
+        not isinstance(line_item_id, str)
+        or not line_item_id
+        or line_item_id not in contract_line_ids(contract)
+    ):
+        return _finish(proposal, contract_id, _make_decision(
+            decision="DENY",
+            policy_ids=[P_GENERIC],
+            reason_codes=["INVALID_LINE_ITEM"],
+            explanation=(
+                "A scoped money action must name an existing frozen contract "
+                "line item; no line-level ceiling can be inferred from the "
+                "basket total."
+            ),
+        ))
+    line_ceiling = (
+        line_item_amount_paise(contract, line_item_id)
+        if line_item_id is not None
+        else None
+    )
+    if line_item_id is not None and line_ceiling is None:
+        return _finish(proposal, contract_id, _make_decision(
+            decision="DENY",
+            policy_ids=[P_REFUND_BOUNDS],
+            reason_codes=["LINE_CEILING_UNAVAILABLE"],
+            explanation=(
+                f"Frozen line {line_item_id} has no positive amount_paise; "
+                "the basket total cannot be used as a refund ceiling."
+            ),
+        ))
+
     policy = load_policy()
 
     # --- order creation ---------------------------------------------------
@@ -426,7 +490,46 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
             ),
         ))
 
+    line_refunded = 0
+    if line_item_id is not None:
+        line_refunded = _refunded_so_far_paise(
+            contract.get("razorpay_payment_id"), line_item_id
+        )
+        assert line_ceiling is not None
+        line_remaining = line_ceiling - line_refunded
+        if amount > line_ceiling:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="DENY",
+                policy_ids=[P_REFUND_BOUNDS],
+                reason_codes=["AMOUNT_EXCEEDS_LINE_CEILING"],
+                explanation=(
+                    f"Scoped refund {_fmt_inr(amount)} exceeds frozen line "
+                    f"{line_item_id} ceiling {_fmt_inr(line_ceiling)}."
+                ),
+            ))
+        if line_remaining <= 0 or amount > line_remaining:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="DENY",
+                policy_ids=[P_REFUND_BOUNDS],
+                reason_codes=["LINE_REFUND_BALANCE_EXCEEDED"],
+                explanation=(
+                    f"Line {line_item_id} has only {_fmt_inr(max(line_remaining, 0))} "
+                    f"of refundable balance after {_fmt_inr(line_refunded)} already "
+                    "attributed refunds."
+                ),
+            ))
+
     if action_type == "refund_full":
+        if line_item_id is not None:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="DENY",
+                policy_ids=[P_REFUND_BOUNDS],
+                reason_codes=["LINE_SCOPED_REFUND_MUST_USE_PARTIAL"],
+                explanation=(
+                    "A complete refund for one basket line is a payment-level "
+                    "refund_partial action with explicit line scope."
+                ),
+            ))
         # K-01 (case-closure fraud): a "full" refund below the captured amount
         # would close the case while under-refunding the buyer, silently
         # bypassing the partial-refund reason list and its auto cap. A full
@@ -481,6 +584,47 @@ def evaluate_money_action(proposal: dict[str, Any]) -> dict[str, Any]:
     # action_type == "refund_partial"
     partial = policy["refund"]["partial_refund"]
     allowed_p: list[str] = list(partial["allowed_reasons"])
+    allowed_full: list[str] = list(policy["refund"]["full_refund"]["allowed_reasons"])
+
+    # A full refund of one basket line deliberately travels as a payment-level
+    # partial refund.  Its amount and reason still receive the full-refund
+    # policy treatment, while the line ceiling prevents basket-wide refunds.
+    if line_item_id is not None and reason in allowed_full:
+        assert line_ceiling is not None
+        if amount != line_ceiling:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="DENY",
+                policy_ids=[P_REFUND_FULL, P_REFUND_BOUNDS],
+                reason_codes=["FULL_LINE_REFUND_AMOUNT_MISMATCH", reason],
+                explanation=(
+                    f"A full refund for line {line_item_id} must equal its "
+                    f"frozen amount {_fmt_inr(line_ceiling)}; smaller amounts "
+                    "must use an allowed partial-refund reason."
+                ),
+            ))
+        threshold = int(policy["refund"]["full_refund"]["require_human_approval_above_paise"])
+        if amount > threshold:
+            return _finish(proposal, contract_id, _make_decision(
+                decision="REQUIRE_APPROVAL",
+                policy_ids=[P_REFUND_FULL_AUTO],
+                reason_codes=["FULL_LINE_REFUND_ABOVE_HUMAN_APPROVAL_THRESHOLD", reason],
+                explanation=(
+                    f"Full refund of line {line_item_id} for {_fmt_inr(amount)} "
+                    f"exceeds the {_fmt_inr(threshold)} autonomous limit; human "
+                    "approval is required."
+                ),
+            ))
+        return _finish(proposal, contract_id, _make_decision(
+            decision="ALLOW",
+            policy_ids=[P_REFUND_FULL, P_REFUND_BOUNDS, P_REFUND_FULL_AUTO],
+            reason_codes=["WITHIN_POLICY_LIMITS", reason],
+            explanation=(
+                f"AUTO-APPROVED BY POLICY {P_REFUND_FULL_AUTO}: full refund of "
+                f"line {line_item_id} for {_fmt_inr(amount)} is within the "
+                f"autonomous limit of {_fmt_inr(threshold)}."
+            ),
+        ))
+
     if reason not in allowed_p:
         return _finish(proposal, contract_id, _make_decision(
             decision="DENY",
@@ -530,8 +674,12 @@ _MONEY_TYPE_BY_REMEDY = {
 }
 
 
-def _first_breach(contract_id: str) -> dict[str, Any] | None:
-    breaches = STORE.find("breach", contract_id=contract_id)
+def _first_breach(
+    contract_id: str, line_item_id: str | None = None
+) -> dict[str, Any] | None:
+    breaches = records_for_scope(
+        STORE.find("breach", contract_id=contract_id), line_item_id
+    )
     return breaches[0] if breaches else None
 
 
@@ -556,7 +704,9 @@ def _require_executable_remedy(prop: dict[str, Any]) -> None:
         raise ValueError("only the rank-1 remedy proposal is executable")
 
     contract_id = prop.get("contract_id")
+    line_item_id = record_line_id(prop)
     siblings = STORE.find("remedy", contract_id=contract_id) if contract_id else []
+    siblings = [s for s in siblings if record_line_id(s) == line_item_id]
     active = [s for s in siblings if not s.get("rejected_reason")]
     rank_one = [s for s in active if s.get("rank") == 1]
     if rank_one and rank_one[0].get("id") != prop.get("id"):
@@ -587,13 +737,35 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
             f"remedy type {prop.get('remedy_type')!r} carries no money action"
         )
 
+    prop_line_item_id = record_line_id(prop)
+    line_item_id = prop_line_item_id
     breach = (
         STORE.get(prop.get("breach_id") or "") if prop.get("breach_id") else None
-    ) or _first_breach(contract["id"])
+    ) or _first_breach(contract["id"], prop_line_item_id)
+    if breach is not None and breach.get("contract_id") != contract["id"]:
+        raise ValueError("remedy breach belongs to a different contract")
+    breach_line_item_id = record_line_id(breach or {})
+    if line_item_id is not None and breach_line_item_id not in {None, line_item_id}:
+        raise ValueError("remedy line_item_id does not match its breach")
+    if line_item_id is None and breach_line_item_id is not None:
+        line_item_id = breach_line_item_id
+    if line_item_id is not None and line_item_id not in contract_line_ids(contract):
+        raise ValueError("remedy names a line item that is not frozen on the contract")
+
+    # A complete refund of one line is intentionally a payment-level partial
+    # refund. The proposal keeps its semantic refund_full type for the rights
+    # graph, while the money action tells Razorpay only the line amount.
+    if prop.get("remedy_type") == "refund_full" and line_item_id is not None:
+        action_type = "refund_partial"
     reason = normalize_reason_code(breach.get("reason_code")) if breach else prop.get("remedy_type")
 
-    amount = prop.get("amount_paise") or contract.get("amount_paise") or 0
-    amount = int(amount)
+    amount = prop.get("amount_paise")
+    if amount is None:
+        amount = line_item_amount_paise(contract, line_item_id) or 0
+    if not isinstance(amount, int) or isinstance(amount, bool):
+        # Keep malformed values visible to the policy engine instead of
+        # coercing them into money.
+        amount = amount
 
     evidence_ids = list(prop.get("evidence_ids") or [])
     if not evidence_ids and breach:
@@ -615,6 +787,11 @@ def build_money_action_for_remedy(proposal_id: str) -> dict[str, Any]:
         "razorpay_payment_id": contract.get("razorpay_payment_id"),
         "razorpay_order_id": contract.get("razorpay_order_id"),
         "contract_id": contract["id"],
+        "line_item_id": line_item_id,
+        "affected_breach_ids": list(
+            prop.get("affected_breach_ids")
+            or ([breach["id"]] if breach and breach.get("id") else [])
+        ),
         "remedy_proposal_id": prop["id"],
         "reason_code": reason,
         "human_explanation": explanation,
@@ -787,14 +964,171 @@ _BREACH_FAMILY_STATUSES = {
 }
 
 
+def _actionable_breach(breach: dict[str, Any]) -> bool:
+    return bool(
+        breach.get("reason_code") in {
+            "WRONG_SKU",
+            "SKU_MISMATCH",
+            "REGION_MISMATCH",
+            "WARRANTY_REGION_MISMATCH",
+            "WARRANTY_TYPE_MISMATCH",
+            "VARIANT_MISMATCH",
+            "MATERIAL_VARIANT_MISMATCH",
+            "MATERIALLY_NOT_AS_DESCRIBED",
+            "NOT_AS_DESCRIBED",
+            "DELIVERY_SLA_MISS",
+            "DELIVERY_SLA_MINOR",
+            "LATE_DELIVERY",
+        }
+        or breach.get("severity") in {"material", "critical"}
+    )
+
+
+def _resolved_breach_ids(contract_id: str) -> set[str]:
+    """Return breach ids covered by an executed local money action."""
+    resolved: set[str] = set()
+    for action in STORE.find("money_action", contract_id=contract_id):
+        if action.get("status") != "executed":
+            continue
+        refs = action.get("affected_breach_ids") or []
+        if not isinstance(refs, list):
+            refs = []
+        if not refs:
+            remedy = STORE.get(action.get("remedy_proposal_id") or "") or {}
+            refs = remedy.get("affected_breach_ids") or []
+            if not refs and remedy.get("breach_id"):
+                refs = [remedy["breach_id"]]
+        resolved.update(str(ref) for ref in refs if isinstance(ref, str) and ref)
+    return resolved
+
+
+def _all_actionable_breaches_resolved(contract_id: str) -> bool:
+    """Check resolution across every breached line, not just one proposal."""
+    contract = STORE.get(contract_id)
+    if contract is None:
+        return False
+    payment_id = contract.get("razorpay_payment_id")
+    refunded_total, refunded_by_line = _refund_totals(payment_id)
+    # A refund webhook may be reconciled by the frozen order before the
+    # capture webhook binds its payment id.  In that window the contract's
+    # persisted financial totals are the only trustworthy aggregate source.
+    persisted_total = contract.get("refunded_amount_paise")
+    if isinstance(persisted_total, int) and persisted_total >= 0:
+        refunded_total = max(refunded_total, persisted_total)
+    persisted_by_line = contract.get("refunded_line_amounts_paise")
+    if isinstance(persisted_by_line, dict):
+        for line_item_id, amount in persisted_by_line.items():
+            if isinstance(line_item_id, str) and isinstance(amount, int) and amount >= 0:
+                refunded_by_line[line_item_id] = max(
+                    refunded_by_line.get(line_item_id, 0), amount
+                )
+    breaches = [
+        breach
+        for breach in STORE.find("breach", contract_id=contract_id)
+        if _actionable_breach(breach)
+    ]
+    if not breaches:
+        # Preserve the historical out-of-band full-refund reconciliation for
+        # a contract whose breach records have not arrived yet.
+        contract_ceiling = line_item_amount_paise(contract, None)
+        return contract_ceiling is not None and refunded_total >= contract_ceiling
+
+    resolved_ids = _resolved_breach_ids(contract_id)
+    contract_ceiling = line_item_amount_paise(contract, None)
+    for breach in breaches:
+        breach_id = breach.get("id")
+        if isinstance(breach_id, str) and breach_id in resolved_ids:
+            continue
+        line_item_id = record_line_id(breach)
+        if line_item_id is None:
+            if contract_ceiling is not None and refunded_total >= contract_ceiling:
+                continue
+            return False
+        line_ceiling = line_item_amount_paise(contract, line_item_id)
+        if (
+            line_ceiling is not None
+            and refunded_by_line.get(line_item_id, 0) >= line_ceiling
+        ):
+            continue
+        return False
+    return True
+
+
+def reconcile_contract_lifecycle(contract_id: str) -> bool:
+    """Close only when all actionable breaches have been resolved.
+
+    Returns whether the contract is now fully remediated. This is shared by
+    the local executor and refund webhook reconciliation, including out-of-
+    band dashboard refunds.
+    """
+    contract = STORE.get(contract_id)
+    if contract is None:
+        return False
+    resolved = _all_actionable_breaches_resolved(contract_id)
+    current = str(contract.get("status") or "")
+    if resolved and current in _BREACH_FAMILY_STATUSES:
+        _transition_contract(contract_id, "REMEDIATED")
+    elif not resolved and current in _BREACH_FAMILY_STATUSES and current != "BREACH_DETECTED":
+        _transition_contract(contract_id, "BREACH_DETECTED")
+    return resolved
+
+
 def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
-    """Amount/payment/policy-drift validation shared by both executor paths."""
+    """Final amount, scope, breach, payment, and policy validation.
+
+    This check intentionally reads every source again immediately before the
+    gateway call.  The earlier policy decision is not an authorization token
+    for a different line, amount, payment, or breach.
+    """
     idem = ma.get("idempotency_key")
     if not isinstance(idem, str) or not idem.strip():
         return False, "money action has no non-empty idempotency_key (replay safety)"
     contract = STORE.get(ma["contract_id"])
     if contract is None:
         return False, "contract vanished between evaluation and execution"
+    raw_line_item_id = ma.get("line_item_id")
+    if raw_line_item_id is not None and (
+        not isinstance(raw_line_item_id, str) or not raw_line_item_id
+    ):
+        return False, "money action has an invalid line_item_id"
+    line_item_id = record_line_id(ma)
+    if line_item_id is not None and line_item_id not in contract_line_ids(contract):
+        return False, "money action line_item_id is not on the frozen contract"
+
+    remedy = STORE.get(ma.get("remedy_proposal_id") or "")
+    if remedy is not None:
+        if remedy.get("contract_id") != contract["id"]:
+            return False, "remedy proposal belongs to a different contract"
+        if record_line_id(remedy) != line_item_id:
+            return False, "money action line scope drifted from its remedy"
+    affected_breach_ids = list(
+        ma.get("affected_breach_ids")
+        or (remedy or {}).get("affected_breach_ids")
+        or (
+            [remedy.get("breach_id")]
+            if remedy and remedy.get("breach_id")
+            else []
+        )
+    )
+    if not affected_breach_ids and line_item_id is None:
+        # Compatibility for pre-line-scoping single-item money actions.
+        affected_breach_ids = [
+            breach["id"]
+            for breach in records_for_scope(
+                STORE.find("breach", contract_id=contract["id"]), None
+            )
+            if breach.get("id")
+        ][:1]
+    scoped_breaches = [
+        breach
+        for breach in STORE.find("breach", contract_id=contract["id"])
+        if breach.get("id") in affected_breach_ids
+        and record_line_id(breach) == line_item_id
+    ]
+    if not scoped_breaches:
+        return False, "money action has no current breach in its exact line scope"
+    if len(scoped_breaches) != len(set(affected_breach_ids)):
+        return False, "money action references a missing or cross-line breach"
     if not contract.get("razorpay_payment_id"):
         return False, "contract has no captured razorpay_payment_id"
     if ma.get("razorpay_payment_id") != contract.get("razorpay_payment_id"):
@@ -809,10 +1143,32 @@ def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
         return False, "no captured amount on record for this contract"
     if amount > captured:
         return False, f"amount {amount} exceeds captured amount {captured}"
+    line_ceiling = (
+        line_item_amount_paise(contract, line_item_id)
+        if line_item_id is not None
+        else None
+    )
+    if line_item_id is not None:
+        if line_ceiling is None:
+            return False, "frozen line has no positive amount_paise ceiling"
+        if amount > line_ceiling:
+            return False, (
+                f"amount {amount} exceeds frozen line {line_item_id} ceiling "
+                f"{line_ceiling}"
+            )
+        allowed_full = set(load_policy()["refund"]["full_refund"]["allowed_reasons"])
+        reason = normalize_reason_code(ma.get("reason_code"))
+        if ma.get("type") == "refund_full":
+            return False, "line-scoped full refunds must use refund_partial"
+        if reason in allowed_full and amount != line_ceiling:
+            return False, (
+                f"full refund reason for line {line_item_id} must equal its "
+                f"frozen ceiling {line_ceiling}"
+            )
     # Refund-stacking guard (review finding): bound every refund by the
     # REMAINING refundable balance — prior refunds on this payment count
     # against the ceiling, so full+partial stacks can never exceed captured.
-    refunded = _refunded_so_far_paise(ma.get("razorpay_payment_id"))
+    refunded, refunded_by_line = _refund_totals(ma.get("razorpay_payment_id"))
     remaining = captured - refunded
     if remaining <= 0:
         return False, (
@@ -824,6 +1180,14 @@ def _executor_structural_check(ma: dict[str, Any]) -> tuple[bool, str]:
             f"amount {amount} exceeds remaining refundable balance {remaining} "
             f"(captured {captured}, already refunded {refunded})"
         )
+    if line_item_id is not None:
+        line_refunded = refunded_by_line.get(line_item_id, 0)
+        line_remaining = line_ceiling - line_refunded  # type: ignore[operator]
+        if line_remaining <= 0 or amount > line_remaining:
+            return False, (
+                f"amount {amount} exceeds remaining frozen line balance "
+                f"{line_remaining} after {line_refunded} already attributed"
+            )
     # K-01 executor mirror: a full refund must still be FULL at call time —
     # a downward tamper after evaluation must not close the case short.
     if ma.get("type") == "refund_full" and amount != captured:
@@ -1027,7 +1391,7 @@ def approve_remedy(proposal_id: str) -> dict[str, Any]:
 def _execute_allowed(
     ma: dict[str, Any], decision: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
-    """Execute an ALLOW-decided money action: final check -> refund -> REMEDIATED.
+    """Execute an ALLOW-decided money action with line-aware reconciliation.
 
     Returns (updated_money_action, refund_record, error_message_or_None).
     """
@@ -1076,17 +1440,25 @@ def _execute_allowed(
         causation_id=ma.get("remedy_proposal_id"),
     )
 
+    refund_notes = {
+        "contract_id": contract_id,
+        "remedy_proposal_id": ma.get("remedy_proposal_id") or "",
+        "reason_code": ma.get("reason_code") or "",
+        "source": "project-dante",
+    }
+    if record_line_id(ma) is not None:
+        refund_notes["line_item_id"] = record_line_id(ma) or ""
+    if isinstance(ma.get("affected_breach_ids"), list):
+        refund_notes["affected_breach_ids"] = ",".join(
+            str(value) for value in ma["affected_breach_ids"] if value
+        )
+
     try:
         refund = _create_refund(
             payment_id=ma["razorpay_payment_id"],
             amount_paise=int(ma["amount_paise"]),
             idempotency_key=ma["idempotency_key"],
-            notes={
-                "contract_id": contract_id,
-                "remedy_proposal_id": ma.get("remedy_proposal_id") or "",
-                "reason_code": ma.get("reason_code") or "",
-                "source": "project-dante",
-            },
+            notes=refund_notes,
         )
     except Exception as exc:  # noqa: BLE001 — network/API failures fail safe
         updated = STORE.update(ma["id"], status="failed")
@@ -1102,7 +1474,49 @@ def _execute_allowed(
             _transition_contract(contract_id, "BREACH_DETECTED")
         return updated or ma, None, str(exc)
 
+    refund = dict(refund)
     refund_id = refund.get("id") or refund.get("refund_id") or ""
+    refund_amount = refund.get("amount_paise", refund.get("amount"))
+    if isinstance(refund_amount, int) and not isinstance(refund_amount, bool):
+        # Keep the adapter's wire ``amount`` while exposing one normalized
+        # amount field to callers and the local reconciliation ledger.
+        refund["amount_paise"] = refund_amount
+    line_item_id = record_line_id(ma)
+    refund["contract_id"] = contract_id
+    if line_item_id is not None:
+        refund["line_item_id"] = line_item_id
+    if isinstance(ma.get("affected_breach_ids"), list):
+        refund["affected_breach_ids"] = list(ma["affected_breach_ids"])
+    # Both adapters normally persist the provider response. Promote the
+    # trusted, already-validated line scope onto that local ledger record so
+    # later executions can calculate the exact per-line balance. If a test or
+    # alternate adapter only returns a response, persist the same durable
+    # reconciliation record here.
+    if refund_id:
+        stored_refund = STORE.get(str(refund_id))
+        if stored_refund is None:
+            STORE.put({"_type": "razorpay_refund", **refund})
+        else:
+            STORE.update(
+                str(refund_id),
+                contract_id=contract_id,
+                **(
+                    {"line_item_id": line_item_id}
+                    if line_item_id is not None
+                    else {}
+                ),
+                **(
+                    {"affected_breach_ids": list(ma["affected_breach_ids"])}
+                    if isinstance(ma.get("affected_breach_ids"), list)
+                    else {}
+                ),
+                **(
+                    {"amount_paise": refund_amount}
+                    if isinstance(refund_amount, int)
+                    and not isinstance(refund_amount, bool)
+                    else {}
+                ),
+            )
     updated = STORE.update(
         ma["id"], status="executed", result_ref=refund_id, executed_at=now_iso()
     ) or ma
@@ -1115,6 +1529,8 @@ def _execute_allowed(
             "refund_id": refund_id,
             "amount_paise": ma["amount_paise"],
             "payment_id": ma.get("razorpay_payment_id"),
+            "line_item_id": line_item_id,
+            "affected_breach_ids": ma.get("affected_breach_ids") or [],
             "sandbox": bool(refund.get("sandbox")),
             "mode": rzp_mode(),
         },
@@ -1122,20 +1538,39 @@ def _execute_allowed(
         causation_id=ma.get("remedy_proposal_id"),
     )
 
-    _transition_contract(contract_id, "REMEDIATED")
-    append_event(
-        aggregate_type="contract",
-        aggregate_id=contract_id,
-        event_type="CONTRACT_REMEDIATED",
-        payload={
-            "refund_id": refund_id,
-            "money_action_id": ma["id"],
-            "remedy_proposal_id": ma.get("remedy_proposal_id"),
-            "amount_paise": ma["amount_paise"],
-        },
-        correlation_id=contract_id,
-        causation_id=ma.get("remedy_proposal_id"),
-    )
+    fully_resolved = reconcile_contract_lifecycle(contract_id)
+    if fully_resolved:
+        append_event(
+            aggregate_type="contract",
+            aggregate_id=contract_id,
+            event_type="CONTRACT_REMEDIATED",
+            payload={
+                "refund_id": refund_id,
+                "money_action_id": ma["id"],
+                "remedy_proposal_id": ma.get("remedy_proposal_id"),
+                "line_item_id": line_item_id,
+                "affected_breach_ids": ma.get("affected_breach_ids") or [],
+                "amount_paise": ma["amount_paise"],
+            },
+            correlation_id=contract_id,
+            causation_id=ma.get("remedy_proposal_id"),
+        )
+    else:
+        append_event(
+            aggregate_type="contract",
+            aggregate_id=contract_id,
+            event_type="STATE_RECONCILED",
+            payload={
+                "reason": "line_remedy_executed_other_breaches_open",
+                "refund_id": refund_id,
+                "money_action_id": ma["id"],
+                "line_item_id": line_item_id,
+                "affected_breach_ids": ma.get("affected_breach_ids") or [],
+                "action": "remain_breach_detected",
+            },
+            correlation_id=contract_id,
+            causation_id=ma.get("remedy_proposal_id"),
+        )
 
     # Close out the originating entitlement, best-effort.
     prop = STORE.get(ma.get("remedy_proposal_id") or "")
