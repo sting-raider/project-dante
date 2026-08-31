@@ -1003,3 +1003,107 @@
     padding-inline: 1.5rem;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Purchase rights graph — make the derived relationship model approachable
+--------------------------------------------------------------------------- */
+
+.rights-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(47 111 237 / 4%), transparent 22rem),
+    var(--color-paper);
+}
+
+.rights-masthead {
+  max-width: 66rem;
+}
+
+.rights-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 2rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rights-summary-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 3px 12px rgb(16 24 40 / 3%);
+}
+
+.rights-summary-label,
+.rights-summary-detail {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.rights-summary-value {
+  margin-top: 0.65rem;
+  color: var(--color-ink);
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.rights-summary-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.rights-graph-surface {
+  overflow-x: auto;
+  background:
+    linear-gradient(135deg, rgb(47 111 237 / 4%), transparent 38%),
+    var(--color-paper-bright);
+  box-shadow: 0 8px 28px rgb(16 24 40 / 4%);
+}
+
+.rights-graph-surface > figure {
+  min-width: 720px;
+}
+
+.rights-drawer {
+  box-shadow: 0 12px 30px rgb(16 24 40 / 12%);
+}
+
+.rights-legend {
+  border-top: 1px solid var(--color-rule);
+  padding-top: 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .rights-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .rights-summary-card {
+    padding: 1.15rem;
+  }
+
+  .rights-graph-surface {
+    padding: 1.5rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .rights-graph-surface {
+    margin-inline: -0.25rem;
+  }
+
+  .rights-graph-surface > figure {
+    min-width: 640px;
+  }
+}
