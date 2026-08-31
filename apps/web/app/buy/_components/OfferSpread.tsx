@@ -202,7 +202,7 @@ export function OfferSpread({
   if (isBundle) {
     const canConfirm = selectionComplete && selectionWithinBudget && !!onConfirmItems;
     return (
-      <div>
+      <div className="buy-offer-board buy-offer-board-bundle">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 className="text-2xl font-semibold tracking-[-0.035em] text-ink">Build your bundle</h3>
@@ -247,7 +247,7 @@ export function OfferSpread({
 
   const sorted = sortedResults(results);
   return (
-    <div>
+    <div className="buy-offer-board buy-offer-board-single">
       <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-2xl font-semibold tracking-[-0.035em] text-ink">The merchant shelf</h3><span className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-soft">{feasible.length} eligible · {infeasible.length} rejected</span></div>
       <div className="mt-5 divide-y divide-rule overflow-hidden rounded-lg border border-rule bg-paper-bright">{sorted.map((result) => <OfferLine key={result.offer.id} result={result} selected={selectedOfferId === result.offer.id} submitting={submitting} onSelect={onSelect} />)}</div>
       <Rule className="my-6" />

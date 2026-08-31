@@ -414,6 +414,241 @@
   min-height: calc(100dvh - 4.25rem);
 }
 
+/* ---------------------------------------------------------------------------
+   Buyer desk — the main conversion surface
+--------------------------------------------------------------------------- */
+
+.buy-page-header {
+  display: grid;
+  align-items: end;
+  gap: 2rem;
+}
+
+.buy-header-note {
+  max-width: 18rem;
+  border-left: 2px solid var(--color-signal);
+  padding-left: 1rem;
+}
+
+.buy-metric-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.buy-metric-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+}
+
+.buy-metric-label,
+.buy-metric-detail,
+.buy-results-meta {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.buy-metric-label,
+.buy-metric-detail {
+  color: var(--color-ink-soft);
+}
+
+.buy-metric-value {
+  margin-top: 0.65rem;
+  color: var(--color-ink);
+  font-size: 1.05rem;
+  letter-spacing: -0.025em;
+}
+
+.buy-metric-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  line-height: 1.45;
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+
+.buy-compose-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at 100% 0%, rgb(47 111 237 / 8%), transparent 34%),
+    var(--color-paper-bright);
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgb(16 24 40 / 5%);
+}
+
+.buy-compose-card::before {
+  position: absolute;
+  inset: 0 auto auto 0;
+  height: 3px;
+  width: 100%;
+  background: linear-gradient(90deg, var(--color-signal), var(--color-action), transparent);
+  content: "";
+}
+
+.buy-brief-input-wrap {
+  position: relative;
+  margin-top: 1.5rem;
+}
+
+.buy-brief-index {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 1;
+  color: var(--color-signal);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+}
+
+.buy-brief-input {
+  display: block;
+  min-height: 13rem;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper);
+  padding: 2.65rem 1.1rem 1.1rem 3.25rem;
+  color: var(--color-ink);
+  caret-color: var(--color-action);
+  font-size: 1.05rem;
+  line-height: 1.65;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.buy-brief-input::placeholder {
+  color: color-mix(in srgb, var(--color-ink-soft) 65%, transparent);
+}
+
+.buy-brief-input:hover {
+  border-color: color-mix(in srgb, var(--color-action) 38%, var(--color-rule));
+}
+
+.buy-brief-input:focus {
+  border-color: var(--color-action);
+  background: var(--color-paper-bright);
+  box-shadow: 0 0 0 4px rgb(47 111 237 / 10%);
+}
+
+.buy-compose-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.1rem;
+}
+
+.buy-workflow-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 100%;
+  border: 1px solid #243b65;
+  border-radius: var(--radius-xl);
+  background: linear-gradient(145deg, #101828 0%, #172b4d 100%);
+  padding: 1.5rem;
+  color: white;
+}
+
+.buy-workflow-glow {
+  position: absolute;
+  top: -5rem;
+  right: -4rem;
+  z-index: -1;
+  height: 15rem;
+  width: 15rem;
+  border-radius: 999px;
+  background: rgb(47 111 237 / 30%);
+  filter: blur(2px);
+}
+
+.buy-workflow-dot {
+  height: 0.5rem;
+  width: 0.5rem;
+  border-radius: 999px;
+  background: #32d583;
+  box-shadow: 0 0 0 4px rgb(50 213 131 / 13%);
+}
+
+.buy-brief-result > section,
+.buy-results-section .buy-offer-board,
+.buy-empty-state {
+  box-shadow: 0 6px 22px rgb(16 24 40 / 3%);
+}
+
+.buy-results-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--color-ink-soft);
+}
+
+.buy-offer-board {
+  border-radius: var(--radius-lg);
+}
+
+.bundle-line-card {
+  overflow: hidden;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 2px 8px rgb(16 24 40 / 3%);
+}
+
+.bundle-offer-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  border-radius: var(--radius-md);
+  padding: 1rem 0.75rem;
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.bundle-offer-row:hover {
+  background: var(--color-paper);
+}
+
+.bundle-offer-row.is-selected {
+  background: var(--color-action-soft);
+  box-shadow: inset 3px 0 0 var(--color-action);
+}
+
+.bundle-offer-row.is-rejected {
+  opacity: 0.78;
+}
+
+@media (min-width: 768px) {
+  .buy-page-header {
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.35fr);
+  }
+
+  .buy-metric-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .buy-compose-card,
+  .buy-workflow-card {
+    padding: 2rem;
+  }
+}
+
 @media (max-width: 767px) {
   .app-sidebar {
     display: none;
@@ -441,5 +676,32 @@
   .app-topbar-cta {
     padding: 0.5rem 0.6rem;
     font-size: 0.68rem;
+  }
+
+  .buy-header-note {
+    max-width: none;
+  }
+
+  .buy-compose-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .buy-compose-footer button {
+    width: 100%;
+  }
+
+  .buy-brief-input {
+    min-height: 15rem;
+    font-size: 1rem;
+  }
+
+  .bundle-offer-row {
+    flex-direction: column;
+  }
+
+  .bundle-offer-row > :last-child {
+    margin-left: 1.75rem;
+    text-align: left;
   }
 }
