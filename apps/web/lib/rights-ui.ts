@@ -129,6 +129,8 @@ export type EntitlementStatus =
 export type Entitlement = {
   id: string;
   contract_id?: string | null;
+  line_item_id?: string | null;
+  affected_breach_ids?: string[];
   issuer_type?: string;
   issuer_name?: string;
   /** Stable human slug when the engine provides one, else the raw id. */

@@ -165,7 +165,20 @@ test.describe("sandbox hero arc", () => {
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/MISMATCH/).first()).toBeVisible();
 
-    // ---- 10. gated remedy pipeline -> REMEDIATED ---------------------------
+    // ---- 10. rights graph remains readable and interactive -----------------
+    await page.goto(`/contract/${contractId}/rights`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", { name: "What this purchase entitles you to." }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Purchase rights", { exact: true })).toBeVisible();
+    await expect(page.getByText("Remedy planner →", { exact: true })).toBeVisible();
+    await expect(page.getByRole("group", { name: /Rights graph with/ })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // ---- 11. gated remedy pipeline -> REMEDIATED ---------------------------
     await page.goto(`/contract/${contractId}/remedy`, {
       waitUntil: "domcontentloaded",
     });
