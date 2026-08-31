@@ -34,6 +34,18 @@ def _posix_fcntl() -> _Fcntl:
     return cast(_Fcntl, importlib.import_module("fcntl"))
 
 
+class _Msvcrt(Protocol):
+    LK_NBLCK: int
+    LK_UNLCK: int
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
+
+
+def _windows_msvcrt() -> _Msvcrt:
+    """Load the Windows-only lock module with a platform-neutral type."""
+    return cast(_Msvcrt, importlib.import_module("msvcrt"))
+
+
 def _configured_string(env_name: str, settings_name: str, default: str) -> str:
     """Read a runtime string from process env, then the loaded .env settings."""
     value = os.environ.get(env_name)
@@ -129,7 +141,7 @@ class Store:
         locked = False
         try:
             if os.name == "nt":
-                import msvcrt
+                msvcrt = _windows_msvcrt()
 
                 handle.seek(0, os.SEEK_END)
                 if handle.tell() == 0:
@@ -163,7 +175,7 @@ class Store:
         finally:
             if locked:
                 if os.name == "nt":
-                    import msvcrt
+                    msvcrt = _windows_msvcrt()
 
                     handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
