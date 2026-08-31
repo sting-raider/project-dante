@@ -248,7 +248,9 @@ def test_find_matches_json_store_semantics(store: PostgresStore):
 
         cases: list[tuple[dict[str, object], set[str]]] = [
             ({"contract_id": "c1"}, {"m1", "m2"}),
-            ({"payload": None}, {"m2"}),  # None equality — Python fallback path
+            # Missing keys compare as None, matching dict.get semantics in
+            # both stores; explicit and absent payloads therefore match.
+            ({"payload": None}, {"m2", "m3", "m4"}),
             ({"contract_id": "missing"}, set()),
         ]
         for fields, expected in cases:
