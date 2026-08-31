@@ -259,9 +259,19 @@ export default function AuditPage() {
   );
 
   const contract = detail?.contract;
+  const auditCategories = new Set(events.map((event) => event.category)).size;
+  const compilerRun = agentRuns.find((run) => run.agent_name === "IntentCompiler");
+  const compilerState = compilerRun
+    ? compilerRun.engine === "llm"
+      ? "LLM compiled"
+      : "Rules fallback"
+    : "Awaiting trace";
+  const moneyState = moneyActions.length > 0
+    ? moneyActions[moneyActions.length - 1]?.status ?? "recorded"
+    : "No money action";
 
   return (
-    <main className="min-h-screen bg-paper font-mono text-xs text-ink">
+    <main className="audit-dossier-page min-h-screen bg-paper font-mono text-xs text-ink">
       <div className="dante-container py-8 md:py-12">
         <Folio issue="AUDIT DOSSIER / RAW" running={`TRACE ${contractId.slice(0, 18).toUpperCase()}`} />
 
@@ -284,8 +294,31 @@ export default function AuditPage() {
           </p>
         )}
 
+        <section className="audit-summary-grid" aria-label="Audit summary">
+          <div className="audit-summary-card">
+            <span className="audit-summary-label">Contract state</span>
+            <strong className="audit-summary-value">{contract?.status ?? "loading"}</strong>
+            <span className="audit-summary-detail">frozen record and lifecycle truth</span>
+          </div>
+          <div className="audit-summary-card">
+            <span className="audit-summary-label">Event stream</span>
+            <strong className="audit-summary-value tabular">{events.length}</strong>
+            <span className="audit-summary-detail">{auditCategories} categories · no filter applied</span>
+          </div>
+          <div className="audit-summary-card">
+            <span className="audit-summary-label">Compilation evidence</span>
+            <strong className="audit-summary-value">{compilerState}</strong>
+            <span className="audit-summary-detail">persisted server provenance only</span>
+          </div>
+          <div className="audit-summary-card">
+            <span className="audit-summary-label">Money lane</span>
+            <strong className="audit-summary-value">{moneyState}</strong>
+            <span className="audit-summary-detail">policy, refund, and replay records</span>
+          </div>
+        </section>
+
         {/* ------------------------------------------------ contract record */}
-        <section className="mt-10" aria-label="Contract record">
+        <section className="audit-section audit-contract-record mt-10" aria-label="Contract record">
           <SectionLabel>CONTRACT RECORD · HASHES FULL-LENGTH</SectionLabel>
           {!contract ? (
             <p className="mt-3 text-ink-soft">loading…</p>
@@ -323,7 +356,7 @@ export default function AuditPage() {
         </section>
 
         {/* ------------------------------------------------ money actions */}
-        <section className="mt-12" aria-label="Money actions">
+        <section className="audit-section mt-12" aria-label="Money actions">
           <SectionLabel>MONEY ACTIONS · POLICY SNAPSHOT HASHES</SectionLabel>
           {moneyActions.length === 0 ? (
             <p className="mt-3 text-ink-soft">
@@ -333,7 +366,7 @@ export default function AuditPage() {
           ) : (
             <ul className="mt-3 space-y-3">
               {moneyActions.map((ma) => (
-                <li key={ma.key} className="rounded-md border border-rule bg-paper-bright p-4">
+                <li key={ma.key} className="audit-money-card rounded-md border border-rule bg-paper-bright p-4">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                     <span className="font-medium uppercase">{ma.type ?? "money action"}</span>
                     {ma.amount_paise != null && (
@@ -392,11 +425,11 @@ export default function AuditPage() {
 
         {/* ------------------------------------------------ agent runs */}
         {agentRuns.length > 0 && (
-          <section className="mt-12" aria-label="Agent runs">
+          <section className="audit-section mt-12" aria-label="Agent runs">
             <SectionLabel>AGENT RUNS · INPUTS/OUTPUTS ONLY, NO HIDDEN REASONING</SectionLabel>
             <ul className="mt-3 space-y-2">
               {agentRuns.map((r, i) => (
-                <li key={`${r.created_at}:${i}`} className="border-l-2 border-rule pl-3">
+                <li key={`${r.created_at}:${i}`} className="audit-agent-row border-l-2 border-rule pl-3">
                   <span className="font-medium uppercase">{r.agent_name}</span>
                   {r.engine && <span className="text-ink-soft"> · engine: {r.engine}</span>}
                   <span className="text-ink-soft"> · {(r.created_at ?? "").replace("T", " ").slice(11, 19)}</span>
@@ -409,7 +442,7 @@ export default function AuditPage() {
         )}
 
         {/* ------------------------------------------------ webhook events */}
-        <section className="mt-12" aria-label="Webhook events">
+        <section className="audit-section mt-12" aria-label="Webhook events">
           <SectionLabel>RAZORPAY WEBHOOK EVENTS · DUPLICATES FLAGGED</SectionLabel>
           {webhookEvents.length === 0 ? (
             <p className="mt-3 text-ink-soft">no webhook traffic on this trace.</p>
@@ -433,13 +466,13 @@ export default function AuditPage() {
         </section>
 
         {/* ------------------------------------------------ full event stream */}
-        <section className="mt-12" aria-label="Complete event stream">
+        <section className="audit-section mt-12" aria-label="Complete event stream">
           <SectionLabel>COMPLETE EVENT STREAM · UNFILTERED</SectionLabel>
           <p className="mt-1 text-ink-soft">
             {events.length} events · columns: time | type | category | idempotency_key |
             trace_id | synthetic
           </p>
-          <div className="mt-3 overflow-x-auto rounded-md border border-rule bg-paper-bright">
+          <div className="audit-event-table mt-3 overflow-x-auto rounded-md border border-rule bg-paper-bright">
             <table className="w-full min-w-[54rem] border-collapse">
               <thead>
                 <tr className="border-b border-ink text-left uppercase tracking-[0.12em] text-ink-soft">
