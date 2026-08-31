@@ -337,6 +337,7 @@
       "expect_feasible_skus": [
         "AST-MN-001",
         "AST-MN-002",
+        "AST-MN-004",
         "AST-MN-006",
         "AST-MN-008"
       ],
@@ -344,10 +345,6 @@
         {
           "sku": "AST-MN-003",
           "failing_key": "warranty.type"
-        },
-        {
-          "sku": "AST-MN-004",
-          "failing_key": "warranty.region"
         },
         {
           "sku": "AST-MN-005",
@@ -358,7 +355,7 @@
           "failing_key": "condition"
         }
       ],
-      "notes": "MN-002 (899900) and MN-006 (799900) fit; MN-003 seller warranty; MN-004 US warranty region; MN-005 AE warranty region; MN-007 refurbished."
+      "notes": "MN-004 (1249900), MN-002 (899900), and MN-006 (799900) fit; MN-003 seller warranty; MN-005 AE warranty region; MN-007 refurbished."
     },
     {
       "id": "OFF-014",

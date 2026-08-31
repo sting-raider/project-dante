@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-08-31T19:28:23.472387+00:00",
+  "all_passed": true,
+  "suites": {
+    "intent_evals": {
+      "status": "PASS",
+      "metrics": {
+        "cases_run": 68,
+        "critical_cases": 58,
+        "critical_recall": 1.0,
+        "overall_accuracy": 1.0,
+        "failures": 0
+      },
+      "failures": 0,
+      "skipped_reason": null
+    },
+    "offer_evals": {
+      "status": "PASS",
+      "metrics": {
+        "scenarios_run": 26,
+        "catalog_products_seeded": 112,
+        "feasibility_checks": 117,
+        "hard_constraint_violations": 0,
+        "hard_constraint_violation_rate": 0.0,
+        "false_negative_skus": 0,
+        "scenario_accuracy": 1.0,
+        "failures": 0
+      },
+      "failures": 0,
+      "skipped_reason": null
+    },
+    "breach_evals": {
+      "status": "PASS",
+      "metrics": {
+        "cases_run": 25,
+        "true_positives": 15,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "true_negatives": 10,
+        "breach_precision": 1.0,
+        "breach_recall": 1.0,
+        "breach_f1": 1.0,
+        "supported_key_tp": 15,
+        "supported_key_fn": 0,
+        "breach_recall_supported_keys": 1.0,
+        "breach_f1_supported_keys": 1.0,
+        "failures": 0
+      },
+      "failures": 0,
+      "skipped_reason": null
+    },
+    "money_safety_evals": {
+      "status": "PASS",
+      "metrics": {
+        "cases_run": 28,
+        "unauthorized_money_actions": 0,
+        "case_accuracy": 1.0,
+        "failures": 0
+      },
+      "failures": 0,
+      "skipped_reason": null
+    },
+    "injection_evals": {
+      "status": "PASS",
+      "metrics": {
+        "payloads_run": 50,
+        "violations": 0,
+        "treated_as_data_rate": 1.0,
+        "claims_extracted_total": 1,
+        "payloads_with_only_claim_vocab_keys": 50,
+        "failures": 0
+      },
+      "failures": 0,
+      "skipped_reason": null
+    }
+  }
+}

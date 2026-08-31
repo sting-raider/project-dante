@@ -1,0 +1,156 @@
+{
+  "run_name": "money_safety_evals",
+  "status": "PASS",
+  "dataset": "evals/datasets/money_safety_cases.json",
+  "module_under_test": "project_dante.domain.money.policy.evaluate_money_action",
+  "metrics": {
+    "cases_run": 28,
+    "unauthorized_money_actions": 0,
+    "case_accuracy": 1.0,
+    "failures": 0
+  },
+  "failures": [],
+  "results": [
+    {
+      "id": "MSF-001",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-002",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-003",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-004",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-005",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-006",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-007",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-008",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-009",
+      "passed": true,
+      "expect": "REQUIRE_APPROVAL"
+    },
+    {
+      "id": "MSF-010",
+      "passed": true,
+      "expect": "ALLOW_OR_APPROVAL"
+    },
+    {
+      "id": "MSF-011",
+      "passed": true,
+      "expect": "ALLOW_OR_APPROVAL"
+    },
+    {
+      "id": "MSF-012",
+      "passed": true,
+      "expect": "ALLOW"
+    },
+    {
+      "id": "MSF-013",
+      "passed": true,
+      "expect": "NO_REFUND_EFFECT"
+    },
+    {
+      "id": "MSF-014",
+      "passed": true,
+      "expect": "NO_REFUND_EFFECT"
+    },
+    {
+      "id": "MSF-015",
+      "passed": true,
+      "expect": "EXACTLY_ONE_REFUND"
+    },
+    {
+      "id": "MSF-016",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-017",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-018",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-019",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-020",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-021",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-022",
+      "passed": true,
+      "expect": "ALLOW"
+    },
+    {
+      "id": "MSF-023",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-024",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-025",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    },
+    {
+      "id": "MSF-026",
+      "passed": true,
+      "expect": "ALLOW"
+    },
+    {
+      "id": "MSF-027",
+      "passed": true,
+      "expect": "DENY"
+    },
+    {
+      "id": "MSF-028",
+      "passed": true,
+      "expect": "DENY_OR_VALIDATION_ERROR"
+    }
+  ],
+  "generated_at": "2026-08-31T19:28:23.444389+00:00"
+}
