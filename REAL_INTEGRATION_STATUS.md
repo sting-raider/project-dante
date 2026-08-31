@@ -53,7 +53,7 @@ gateway is on the other end:
 
 | Claim about the real world | Sandbox can prove it? | What could still break for real |
 | --- | --- | --- |
-| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (and they do — 478 passed, 15 skipped, 1 warning, 4 subtests passed; Postgres integration is skipped when unavailable) | nothing code-level, but see every row below |
+| Code paths (freeze → order → webhook → refund) work end-to-end | Yes (CI: 513 passed, zero database-related skips, 1 warning, 4 subtests passed; local runs may skip Postgres when unavailable) | nothing code-level, but see every row below |
 | Request/response shapes match Razorpay's actual REST API | No — shapes follow current docs, unverified against the service | undocumented required fields; error envelopes we don't map |
 | Auth works with a real account's credentials | No — synthetic key only | revoked/wrong keys, IP rules, account holds |
 | A browser can complete Standard Checkout against OUR order id | No — no real checkout session exists | key/amount/currency mismatches rejected client-side |
@@ -106,7 +106,7 @@ the real Standard Checkout payment. On PAID it prints the REAL `pay_...` id
 plus webhook evidence from the timeline, then ships, delivers the wrong
 variant, checks breach/rights/remedy/policy, executes the refund (printing the
 REAL `rfnd_...` id), repeats execute to assert an identical refund id, and
-verifies REMEDIATED + the audit trail. Exit code 0 only when all ten criteria
+verifies REMEDIATED + the audit trail. Exit code 0 only when all eleven criteria
 above are met; every step appends timestamped evidence lines between marked
 BEGIN-RUN / END-RUN blocks below.
 

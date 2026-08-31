@@ -2,7 +2,7 @@
 
 **Plan:** PROJECT_DANTE_AUTONOMOUS_FINISH_PLAN.md
 **Baseline:** main @ 85e1649 (current checkout, aligned with origin/main).
-**Updated:** 2026-08-30; local hardening and verification complete.
+**Updated:** 2026-09-01; local hardening and verification complete; final proof pending.
 
 ## Completed workstreams
 
@@ -17,7 +17,8 @@
 
 ## Current gates
 
-- Backend: 478 passed (15 PG integration skips without a reachable DB — honest)
+- Backend CI: 513 passed with zero Postgres-related skips; local runs may skip
+  the 15 integration cases when no database is reachable.
 - Ruff / mypy / tsc / next build: clean
 - Playwright/browser smoke: hero arc + checkout-options spec green (×3 consecutive runs); rendered audit/timeline/merchant surfaces verified
 - Sandbox E2E: PASSED across [01]–[16], including signed webhook, breach, policy, refund, idempotency, and audit
@@ -25,11 +26,14 @@
 ## Final phase
 
 - §42 review assault: COMPLETE; local review findings are remediated and the final gates are green
-- Real Razorpay Test Mode evidence: NOT_YET_PROVEN; see `REAL_INTEGRATION_STATUS.md` and `docs/BLOCKERS.md`
+- Historical single-line Razorpay Test Mode evidence is recorded; the amended
+  exact two-line LLM basket proof remains NOT_YET_PROVEN. See
+  `REAL_INTEGRATION_STATUS.md` and `docs/BLOCKERS.md`.
 
 ## Human blockers (docs/BLOCKERS.md)
 
 1. **One human Standard Checkout payment + webhook delivery** → the current local API
    already has Razorpay Test Mode configured and has created a real order; the remaining
    requirement-5 proof is the payment, webhook, and downstream refund run.
-2. Deployment account auth for Railway/Vercel (configs are copy-paste ready)
+2. Deployment account auth for Railway/Vercel (configs are copy-paste ready;
+   Railway's release posture is managed PostgreSQL)

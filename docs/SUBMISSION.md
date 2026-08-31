@@ -140,9 +140,10 @@ distribution behind lost agentic GMV.
   IDs through genuinely computed HMAC signature flows, and every surface is
   badged **SANDBOX**; the health endpoint reports `sandbox-adapter` vs
   `live-test-mode`. The sandbox-verified arc is proven by tests and
-  `scripts/verify_e2e.py`; proof against the *real* gateway in Test Mode has
-  not yet been run in this environment and is tracked criterion-by-criterion
-  (currently NOT_YET_PROVEN) in `REAL_INTEGRATION_STATUS.md`. Live
+  `scripts/verify_e2e.py`; historical single-line Test Mode evidence is recorded
+  criterion-by-criterion; the amended exact two-line LLM basket proof remains
+  NOT_YET_PROVEN in
+  `REAL_INTEGRATION_STATUS.md`. Live
   (`rzp_live_*`) keys are hard-rejected at startup.
 - **Fulfillment is synthetic and labeled.** Ship, delivery, and device-metadata
   observations come from a simulator; every record carries `"synthetic": true`,
@@ -157,13 +158,14 @@ distribution behind lost agentic GMV.
 - **No statutory/legal-right reasoning.** Entitlements are demo-defined purchase
   rights from four issuer types; no consumer-law analysis is performed.
 - **Known limits stated plainly:** one fictional merchant (Aster Electronics,
-  112 SKUs, static fixture), JSON-persisted store in P0 (Postgres-swappable
-  interface), one payment provider, outcome verification only as strong as the
-  available evidence.
+  112 SKUs, static fixture), managed PostgreSQL is the final Railway store with
+  JSON retained only as an emergency fallback, one payment provider, outcome
+  verification only as strong as the available evidence.
 - Proof discipline: real-gateway claims are tracked criterion-by-criterion in
   `REAL_INTEGRATION_STATUS.md` and flip to PROVEN only when
-  `scripts/verify_real_integration.py` observes them. Until then they read
-  NOT_YET_PROVEN — do not upgrade them by hand.
+  `scripts/verify_real_integration.py` observes them. The final row cannot be
+  upgraded by hand: it requires persisted `engine=llm` evidence for the exact
+  two-line basket.
 
 ## Submission-day checklist
 
@@ -173,5 +175,6 @@ distribution behind lost agentic GMV.
 3. Capture 11 screenshots per docs/SCREENSHOTS.md; refresh README table.
 4. Re-run gates: pytest suite, eval runners, `scripts/verify_e2e.py`,
    `cd apps/web && npx tsc --noEmit && npm run build`.
-5. If real Razorpay keys became available: run `scripts/verify_real_integration.py`
-   and paste its BEGIN-RUN evidence block into `REAL_INTEGRATION_STATUS.md`.
+5. With the Test Mode keys and LLM provider configured: run
+   `scripts/verify_real_integration.py`; it appends its own BEGIN-RUN evidence
+   block to `REAL_INTEGRATION_STATUS.md`.

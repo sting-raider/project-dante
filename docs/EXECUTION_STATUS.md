@@ -1,17 +1,18 @@
 # EXECUTION STATUS — Project Dante Build
 
 **Plan:** PROJECT_DANTE_RAZORPAY_BUILDATHON_MASTER_PLAN.md
-**Updated:** 2026-08-30; final hardening and verification complete.
+**Updated:** 2026-09-01; final hardening and verification complete; release gates in progress.
 
 ## Current phase
 
-**Final verification** — quality-assault findings remediated; real-gateway proof remains
-credential-gated and is tracked separately.
+**Final verification** — quality-assault findings remediated; PostgreSQL CI is green;
+the amended exact two-line real-gateway/LLM proof remains tracked separately.
 
 ## Verified state
 
-- **Full backend suite green**: 478 passed, 15 skipped because Postgres/Docker is
-  unavailable, 1 existing Starlette/httpx warning, 4 subtests passed.
+- **CI backend suite green**: 513 passed, zero database-related skips, 1 existing
+  Starlette/httpx warning, 4 subtests passed. Local runs may still skip the
+  Postgres integration when no database is available.
 - **All 5 eval suites PASS** (`evals/reports/summary.json`): 68/68 intent,
   26/26 offer, 25/25 breach, 28/28 money safety, and 50/50 injection cases;
   zero reported case failures.
@@ -20,13 +21,16 @@ credential-gated and is tracked separately.
   rights graph → replacement rejected → policy ALLOW → idempotent refund → REMEDIATED → audit
 - **Backend type-check green**: mypy reports no issues across all 51 API source files;
   Ruff is clean across `project_dante` and `tests`.
-- Frontend: ESLint clean, tsc clean, Next production build green (11 routes).
+- Frontend: ESLint clean, tsc clean, Next production build green (11 routes);
+  the mandatory browser journey is green (8 tests).
 - **CI parity**: `.github/workflows/ci.yml` now enforces the backend mypy gate,
   root verification-script lint, all five deterministic evaluation suites, and the
   frontend ESLint gate alongside tests, Ruff, tsc, and the production build.
 - **Deployment artifacts**: Railway TOML, Docker Compose, and Vercel JSON parse
-  cleanly; Docker image builds were not executable in this environment because
-  the Docker Desktop Linux engine was unavailable.
+  cleanly. Railway is configured for managed PostgreSQL (`DANTE_STORE_BACKEND=postgres`
+  with a `DATABASE_URL` reference); JSON is documented only as an emergency
+  single-replica fallback. Docker image builds were not executable in this
+  environment because the Docker Desktop Linux engine was unavailable.
 
 ## Security posture
 
@@ -64,9 +68,9 @@ exercises Dante's code paths with genuinely computed HMAC signatures but no real
 gateway on the other end. Claims that additionally require the **real Razorpay
 Test Mode gateway** (real order/payment/refund ids, dashboard-secret webhook)
 are tracked criterion-by-criterion in
-[REAL_INTEGRATION_STATUS.md](../REAL_INTEGRATION_STATUS.md), where all ten
-currently read NOT_YET_PROVEN until real `rzp_test_*` keys are configured and
-`scripts/verify_real_integration.py` observes them.
+[REAL_INTEGRATION_STATUS.md](../REAL_INTEGRATION_STATUS.md). Rows 1–10 have
+historical single-line Test Mode evidence; amended finalization row 11 requires
+the exact two-line brief to be compiled by the configured real LLM.
 
 - [x] intent → selected offer → frozen contract → payment order created
       *(sandbox verified; real-gateway order creation: see ledger #1)*

@@ -1,11 +1,12 @@
 # BLOCKERS — human action required for final proof
 
 The local API is currently configured with Razorpay Test Mode and Groq in
-process memory, and a real Razorpay order already exists. The only remaining
-requirement-5 action that cannot be completed headlessly is the human Standard
-Checkout payment that must cause Razorpay's webhook to reach the public HTTPS
-endpoint; after that, the verifier can finish the synthetic breach, rights,
-remedy, refund, replay, and evidence checks.
+process memory. Historical single-line Test Mode evidence exists, but the
+amended requirement-5 proof is a fresh two-line monitor + keyboard basket. The
+remaining external steps are registering the public HTTPS webhook endpoint in
+the authenticated Razorpay Test Mode dashboard and completing the Standard
+Checkout payment; after that, the verifier finishes the synthetic breach,
+rights, scoped remedy, refund, replay, and evidence checks automatically.
 
 ## 1. If starting a fresh API process: Razorpay Test Mode credentials
 
@@ -29,7 +30,7 @@ If that wait expires after an order was created, use
 `--resume-contract con_... --wait 600` to continue the same contract without
 resetting the store or creating a second Razorpay order.
 
-## 2. LLM API key (optional but recommended for the final demo)
+## 2. LLM API key (required for the amended final basket proof)
 
 Any one of:
 ```dotenv
