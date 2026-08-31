@@ -65,10 +65,11 @@ satisfied or remediated:
 · A deterministic remedy planner ranks candidates by a visible scoring function
   (replacement tried first, refund next), a financial policy engine makes the
   ALLOW / REQUIRE_APPROVAL / DENY call, and an idempotent refund executes
-  behind the same gates — implemented and verified end-to-end against the
-  built-in sandbox rail, and wired to execute as real Razorpay Test Mode calls
-  whenever `rzp_test_*` keys are configured (real-gateway proof is tracked in
-  REAL_INTEGRATION_STATUS.md). Replay-safe to exactly one money effect.
+   behind the same gates — implemented and verified end-to-end against the
+   built-in sandbox rail, and wired to execute as real Razorpay Test Mode calls
+   whenever `rzp_test_*` keys are configured. The exact two-line LLM basket has
+   now completed the real-gateway proof: all eleven criteria are PROVEN in
+   REAL_INTEGRATION_STATUS.md. Replay-safe to exactly one money effect.
 
 The result for Track 1: agentic commerce that earns repeat trust. Buyers get an
 auditable memory of every purchase and autonomous, bounded remediation; merchants
@@ -140,10 +141,9 @@ distribution behind lost agentic GMV.
   IDs through genuinely computed HMAC signature flows, and every surface is
   badged **SANDBOX**; the health endpoint reports `sandbox-adapter` vs
   `live-test-mode`. The sandbox-verified arc is proven by tests and
-  `scripts/verify_e2e.py`; historical single-line Test Mode evidence is recorded
-  criterion-by-criterion; the amended exact two-line LLM basket proof remains
-  NOT_YET_PROVEN in
-  `REAL_INTEGRATION_STATUS.md`. Live
+  `scripts/verify_e2e.py`; historical single-line Test Mode evidence and the
+  fresh exact two-line LLM basket proof are recorded criterion-by-criterion in
+  `REAL_INTEGRATION_STATUS.md`, with all eleven rows PROVEN. Live
   (`rzp_live_*`) keys are hard-rejected at startup.
 - **Fulfillment is synthetic and labeled.** Ship, delivery, and device-metadata
   observations come from a simulator; every record carries `"synthetic": true`,
@@ -175,6 +175,7 @@ distribution behind lost agentic GMV.
 3. Capture 11 screenshots per docs/SCREENSHOTS.md; refresh README table.
 4. Re-run gates: pytest suite, eval runners, `scripts/verify_e2e.py`,
    `cd apps/web && npx tsc --noEmit && npm run build`.
-5. With the Test Mode keys and LLM provider configured: run
-   `scripts/verify_real_integration.py`; it appends its own BEGIN-RUN evidence
-   block to `REAL_INTEGRATION_STATUS.md`.
+5. [x] With the Test Mode keys and LLM provider configured, run
+   `scripts/verify_real_integration.py`; the completed run appended its own
+   BEGIN-RUN evidence block to `REAL_INTEGRATION_STATUS.md` and promoted all
+   eleven criteria to PROVEN.
