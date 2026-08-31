@@ -194,6 +194,37 @@ def test_replacement_unavailable_scopes_each_basket_line(isolated_env):
     assert all(fact["value"] is False for fact in facts)
 
 
+def test_replacement_unavailable_route_can_target_one_basket_line(isolated_env, monkeypatch):
+    import project_dante.api.routes.demo as demo_mod
+
+    store = isolated_env["store"]
+    store.put(
+        {
+            "_type": "contract",
+            "id": "con_scoped_replacement",
+            "status": "BREACH_DETECTED",
+            "amount_paise": 300000,
+            "line_items": [
+                {"id": "li_monitor", "amount_paise": 200000},
+                {"id": "li_keyboard", "amount_paise": 100000},
+            ],
+        }
+    )
+    app = FastAPI()
+    app.include_router(demo_router, prefix="/api")
+    monkeypatch.setattr(demo_mod, "STORE", store)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/demo/contracts/con_scoped_replacement/replacement-unavailable",
+        json={"line_item_id": "li_monitor"},
+    )
+    assert resp.status_code == 200
+    facts = resp.json()["observed_facts"]
+    assert {fact["line_item_id"] for fact in facts} == {"li_monitor"}
+    assert all(fact["value"] is False for fact in facts)
+
+
 # ------------------------------------------------------------------ demo routes
 
 

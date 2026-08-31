@@ -50,9 +50,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 APPS_API = REPO_ROOT / "apps" / "api"
 STATUS_FILE = REPO_ROOT / "REAL_INTEGRATION_STATUS.md"
 
-HERO_TEXT = (
-    "Buy me over-ear ANC headphones under Rs 12,000. I need an Indian manufacturer "
-    "warranty, they must arrive within 3 days, and do not spend over Rs 12,000."
+BUNDLE_TEXT = (
+    "Buy me a 27-inch QHD monitor under ₹25,000 and a mechanical keyboard under "
+    "₹8,000. The monitor must have an IPS panel, at least a 144 Hz refresh rate, "
+    "DisplayPort, and an Indian manufacturer warranty. The keyboard should be 75% "
+    "or TKL, hot-swappable, wireless, and also have an Indian manufacturer warranty. "
+    "I prefer tactile switches, but linear switches are acceptable. Both items must "
+    "arrive within 5 days. Do not show me any monitor over ₹25,000 or any keyboard "
+    "over ₹8,000. Keep the total order under ₹33,000."
 )
 
 # Requirement 5 checklist, mirrored one-to-one in REAL_INTEGRATION_STATUS.md.
@@ -67,6 +72,7 @@ CRITERIA: list[tuple[str, str]] = [
     ("remedy", "remedy planned: refund_full chosen, policy decision ALLOW"),
     ("refund", "real refund executed: Razorpay rfnd_... id returned"),
     ("idempotent", "repeat execute returns the SAME refund id - no second refund"),
+    ("llm_basket", "real LLM compiled the exact two-line monitor + keyboard basket"),
 ]
 
 
@@ -203,6 +209,58 @@ def operator_headers(settings: Any | None = None) -> dict[str, str]:
         tok = str(getattr(settings, "demo_operator_token", "") or "")
     tok = tok.strip()
     return {"X-Demo-Operator-Token": tok} if tok else {}
+
+
+def record_llm_basket_proof(
+    c: httpx.Client,
+    contract_id: str,
+    contract: dict[str, Any],
+) -> None:
+    """Prove the final basket used the LLM compiler, from persisted evidence.
+
+    The response from ``/compile`` is not enough: this proof reads the
+    contract's canonical timeline and frozen line items, so a UI label or a
+    transient provider response cannot make the run claim LLM execution.
+    """
+    r = c.get(f"/api/contracts/{contract_id}/timeline")
+    expect(r.status_code == 200, f"timeline fetch for LLM proof failed: {r.status_code}")
+    events = r.json().get("events", [])
+    compiled = next(
+        (event for event in events if event.get("event_type") == "INTENT_COMPILED"),
+        None,
+    )
+    expect(compiled is not None, "timeline lacks INTENT_COMPILED provenance evidence")
+    payload = compiled.get("payload") or {}
+    provenance = payload.get("compilation_provenance") or {}
+    expect(
+        provenance.get("engine") == "llm",
+        f"exact basket was not LLM compiled: engine={provenance.get('engine')!r}",
+    )
+    expected_item_ids = {"monitor-1", "keyboard-1"}
+    line_items = contract.get("line_items") or []
+    frozen_item_ids = {
+        str(line.get("intent_item_id"))
+        for line in line_items
+        if isinstance(line, dict) and line.get("intent_item_id")
+    }
+    expect(
+        len(line_items) == 2 and frozen_item_ids == expected_item_ids,
+        f"frozen contract is not the exact two-line basket: {frozen_item_ids}",
+    )
+    expect(
+        provenance.get("item_count") == 2
+        and set(payload.get("item_ids") or []) == expected_item_ids,
+        f"persisted LLM provenance does not prove both basket lines: {provenance}",
+    )
+    detail = (
+        f"engine=llm provider={provenance.get('provider') or 'unknown'} "
+        f"model={provenance.get('model') or 'unknown'} item_count=2 "
+        f"fallback={provenance.get('fallback_reason') or 'none'} "
+        f"compiler_version={provenance.get('compiler_version') or 'unknown'} "
+        f"retries={provenance.get('validation_retries', 0)}"
+    )
+    EV.criterion("llm_basket", True, detail)
+    log(f"LLM-BASKET: exact two-line monitor+keyboard provenance proven; {detail}")
 
 
 def load_settings_or_exit() -> Any:
@@ -418,7 +476,7 @@ def run_flow(
         log(f"reset: products={r.json().get('products')} (clean store for unambiguous evidence)")
 
         # ---- 1-3. intent -> search -> freeze -------------------------------------
-        r = c.post("/api/intents/compile", json={"raw_text": HERO_TEXT})
+        r = c.post("/api/intents/compile", json={"raw_text": BUNDLE_TEXT})
         expect(r.status_code == 200, f"compile failed: {r.status_code} {r.text[:300]}")
         intent = r.json()["intent"]
         engine = r.json().get("engine")
@@ -428,38 +486,66 @@ def run_flow(
             f"hard_constraints={len(intent.get('hard_constraints', []))} "
             "(LLM never executes money)"
         )
+        expect(engine == "llm", f"final LLM basket proof requires engine=llm, got {engine!r}")
 
         r = c.post(f"/api/intents/{iid}/search")
         expect(r.status_code == 200, f"search failed: {r.status_code} {r.text[:300]}")
-        results = r.json()["results"]
-        feasible = [x for x in results if x["evaluation"]["feasible"]]
-        expect(feasible, "no feasible offers found")
-        hero = next((x for x in feasible if x["offer"]["sku"] == "AST-HP-ANC-001"), feasible[0])
-        raw_amount = (
-            hero["evaluation"].get("total_paise")
-            or hero["offer"].get("unit_amount_paise")
-            or hero["offer"].get("price_paise")
+        search_body = r.json()
+        groups = search_body.get("items") or []
+        recommendation = search_body.get("bundle_recommendation") or {}
+        expected_item_ids = {"monitor-1", "keyboard-1"}
+        expect(
+            {str(group.get("item_id")) for group in groups} == expected_item_ids,
+            f"search did not return the exact two basket lines: {groups}",
         )
-        expect(raw_amount is not None, "no price field on chosen offer")
-        amount_paise = int(raw_amount)
-        log(f"search: {len(results)} results, {len(feasible)} feasible; sku={hero['offer']['sku']} "
-            f"amount_paise={amount_paise}")
+        expect(recommendation.get("available") is True, "no feasible two-line bundle found")
+        recommended_ids = recommendation.get("offer_ids") or {}
+        expect(set(recommended_ids) == expected_item_ids, "bundle recommendation omitted a line")
+        selected_rows: list[dict[str, str]] = []
+        selected_skus: list[tuple[str, str | None]] = []
+        for group in groups:
+            item_id = str(group["item_id"])
+            offer_id = str(recommended_ids.get(item_id) or "")
+            row = next(
+                (
+                    candidate
+                    for candidate in group.get("results", [])
+                    if candidate.get("offer", {}).get("id") == offer_id
+                ),
+                None,
+            )
+            expect(row is not None, f"recommended offer missing from group {item_id}")
+            expect(
+                (row.get("evaluation") or {}).get("feasible") is True,
+                f"recommended offer for {item_id} is not hard-feasible",
+            )
+            selected_rows.append({"item_id": item_id, "offer_id": offer_id})
+            selected_skus.append((item_id, row["offer"].get("sku")))
+        amount_paise = int(recommendation["total_amount_paise"])
+        log(
+            f"search: candidates={sum(len(group.get('results', [])) for group in groups)} "
+            f"lines={len(groups)} recommended={selected_skus} "
+            f"amount_paise={amount_paise}"
+        )
 
-        r = c.post(f"/api/intents/{iid}/select-offer", json={"offer_id": hero["offer"]["id"]})
+        r = c.post(f"/api/intents/{iid}/select-offer", json={"items": selected_rows})
         expect(r.status_code == 200, f"select-offer failed: {r.status_code} {r.text[:300]}")
         body = r.json()
         contract = body["contract"]
         cid = contract["id"]
         n_promises = len(body.get("promises", []))
         expect(n_promises >= 5, f"frozen promises too few: {n_promises}")
+        expect(len(contract.get("line_items") or []) == 2, "frozen contract is not a two-line basket")
         expect(contract.get("promise_set_hash"), "promise_set_hash missing")
-        log(f"freeze: contract={cid} promises={n_promises} "
-            f"psh={str(contract.get('promise_set_hash'))[:12]}")
+        log(
+            f"freeze: contract={cid} lines={len(contract.get('line_items') or [])} "
+            f"promises={n_promises} psh={str(contract.get('promise_set_hash'))[:12]}"
+        )
 
         # ---- 4. authorize ---------------------------------------------------------
         r = c.post(f"/api/contracts/{cid}/authorize", json={})
         expect(r.status_code == 200, f"authorize failed: {r.status_code} {r.text[:300]}")
-        log(f"authorize: hash={str(contract.get('contract_hash'))[:12]} scope=single_purchase")
+        log(f"authorize: hash={str(contract.get('contract_hash'))[:12]} scope=two-line-basket")
 
         # ---- 5. REAL payment order -------------------------------------------------
         r = c.post(f"/api/contracts/{cid}/payment-order", json={})
@@ -473,6 +559,11 @@ def run_flow(
         )
         expect(order_id.startswith("order_"), f"order id not Razorpay-shaped: {order_id}")
         expect(key_id.startswith("rzp_test_"), f"checkout key_id not rzp_test_*: '{key_id}'")
+
+    # This is deliberately checked from the persisted timeline and frozen
+    # contract, including resume runs, rather than trusting the compile
+    # response or the browser's provenance label.
+    record_llm_basket_proof(c, cid, contract)
 
     # A resumed run reuses the proof-producing order; a fresh run just minted
     # it above. Either way, this criterion is recorded from a real API result.
@@ -570,26 +661,50 @@ def run_flow(
                  "(no CHECKOUT_COMPLETED_CLIENT/PAYMENT_VERIFIED_SERVER events exist)")
     log("PAID-FROM-WEBHOOK: proven structurally (client-verify paths unused)")
 
-    # ---- 8-9. synthetic wrong-variant fulfillment + breach ----------------------
+    # ---- 8-9. synthetic wrong-variant fulfillment + one-line breach -------------
+    line_items = [line for line in (contract.get("line_items") or []) if isinstance(line, dict)]
+    expect(len(line_items) == 2, "final proof requires exactly two frozen line items")
+    affected_line = next(
+        (line for line in line_items if line.get("intent_item_id") == "monitor-1"),
+        line_items[0],
+    )
+    affected_line_id = str(affected_line.get("id") or "")
+    expect(affected_line_id, "affected monitor line has no frozen line_item_id")
+    unaffected_line_ids = {
+        str(line.get("id")) for line in line_items if str(line.get("id")) != affected_line_id
+    }
+    expect(len(unaffected_line_ids) == 1, "final proof needs one unaffected basket line")
+
     r = c.post(f"/api/demo/contracts/{cid}/ship", json={})
     expect(r.status_code == 200, f"ship failed: {r.status_code} {r.text[:200]} "
                                  "(is X-Demo-Operator-Token accepted by the server gate?)")
-    r = c.post(f"/api/demo/contracts/{cid}/replacement-unavailable", json={})
-    expect(r.status_code in (200, 404), "replacement-unavailable call errored")
-    r = c.post(f"/api/demo/contracts/{cid}/deliver", json={"scenario": "wrong_variant"})
+    r = c.post(
+        f"/api/demo/contracts/{cid}/replacement-unavailable",
+        json={"line_item_id": affected_line_id},
+    )
+    expect(r.status_code == 200, f"scoped replacement-unavailable failed: {r.status_code} {r.text[:200]}")
+    r = c.post(
+        f"/api/demo/contracts/{cid}/deliver",
+        json={"scenario": "wrong_variant", "line_item_id": affected_line_id},
+    )
     expect(r.status_code == 200, f"deliver(wrong_variant) failed: {r.status_code} {r.text[:200]}")
     d = r.json()
     expect(d.get("synthetic") is True, "delivery response missing synthetic marker")
     EV.criterion("wrong_variant", True,
-                 "synthetic wrong_variant delivery applied via /demo/deliver with "
-                 "X-Demo-Operator-Token (response synthetic=true)")
-    log("DELIVERY: wrong_variant (synthetic, operator-token gated)")
+                 f"synthetic wrong_variant delivery applied to line {affected_line_id} "
+                 "via /demo/deliver with X-Demo-Operator-Token (response synthetic=true)")
+    log(f"DELIVERY: wrong_variant line={affected_line_id} (synthetic, operator-token gated)")
 
     breaches = d.get("breaches", [])
     codes = [b.get("reason_code") or b.get("key") or b.get("promise_key") for b in breaches]
     expect(breaches, f"expected a breach on wrong_variant delivery; got {d}")
-    EV.criterion("breach", True, f"PROMISE_BREACH_DETECTED reasons={codes}")
-    log(f"BREACH: reasons={codes}")
+    breach_line_ids = {str(b.get("line_item_id")) for b in breaches if b.get("line_item_id")}
+    expect(
+        breach_line_ids == {affected_line_id},
+        f"wrong_variant breached more than the affected line: {breach_line_ids}",
+    )
+    EV.criterion("breach", True, f"PROMISE_BREACH_DETECTED line={affected_line_id} reasons={codes}")
+    log(f"BREACH: line={affected_line_id} reasons={codes}")
 
     # ---- 10. rights --------------------------------------------------------------
     r = c.get(f"/api/contracts/{cid}/rights")
@@ -599,20 +714,39 @@ def run_flow(
     eligible = [e for e in ents if e.get("status") == "eligible"]
     blocked = [e for e in ents if e.get("status") == "blocked"]
     expect(graph.get("nodes"), "empty rights graph")
-    expect(eligible, f"no eligible entitlements; statuses={[e.get('status') for e in ents]}")
+    eligible_affected = [e for e in eligible if e.get("line_item_id") == affected_line_id]
+    expect(
+        eligible_affected,
+        f"no eligible entitlement for affected line; statuses={[e.get('status') for e in ents]}",
+    )
     EV.criterion("rights", True, f"rights graph nodes={len(graph['nodes'])} "
                                  f"edges={len(graph.get('edges', []))} eligible={len(eligible)} "
-                                 f"blocked={len(blocked)}")
-    log(f"RIGHTS: nodes={len(graph['nodes'])} eligible={len(eligible)} blocked={len(blocked)}")
+                                 f"blocked={len(blocked)} affected_line={affected_line_id}")
+    log(f"RIGHTS: nodes={len(graph['nodes'])} eligible={len(eligible)} blocked={len(blocked)} line={affected_line_id}")
 
     # ---- 11. remedy plan + policy --------------------------------------------------
     r = c.get(f"/api/contracts/{cid}/remedies")
     expect(r.status_code == 200, f"remedies failed: {r.status_code}")
     props = r.json()["proposals"]
-    chosen = next((p for p in props if p.get("rejected_reason") is None), None)
-    expect(chosen, "no chosen remedy proposal")
+    chosen = next(
+        (
+            p
+            for p in props
+            if p.get("line_item_id") == affected_line_id
+            and p.get("rejected_reason") is None
+            and p.get("rank") == 1
+        ),
+        None,
+    )
+    expect(chosen, f"no chosen remedy proposal for affected line {affected_line_id}")
     expect(chosen["remedy_type"] == "refund_full",
            f"expected refund_full as chosen remedy, got {chosen['remedy_type']}")
+    affected_amount = int(affected_line.get("amount_paise") or 0)
+    expect(affected_amount > 0, "affected line has no frozen amount")
+    expect(
+        chosen.get("amount_paise") == affected_amount,
+        f"chosen remedy is not capped to affected line: {chosen.get('amount_paise')} vs {affected_amount}",
+    )
     rid = chosen["id"]
     r = c.post(f"/api/remedies/{rid}/policy")
     expect(r.status_code == 200, f"policy eval failed: {r.status_code} {r.text[:200]}")
@@ -630,6 +764,9 @@ def run_flow(
     expect(ex.get("executed") is True, f"not executed: {ex}")
     ma = ex.get("money_action") or {}
     refund_ref = ma.get("result_ref")
+    expect(ma.get("line_item_id") == affected_line_id, "money action lost affected line scope")
+    expect(ma.get("amount_paise") == affected_amount, "money action amount escaped line ceiling")
+    expect((ex.get("refund") or {}).get("line_item_id") == affected_line_id, "refund lost line scope")
     # This verifier has already proved live-test-mode above.  Accepting the
     # sandbox adapter's ``rf_`` shape here would let a miswired live run be
     # reported as real evidence, so the real-gateway ledger requires the
@@ -638,9 +775,9 @@ def run_flow(
         isinstance(refund_ref, str) and refund_ref.startswith("rfnd_"),
         f"refund id missing/not a real Razorpay refund id (expected rfnd_): {refund_ref!r}",
     )
-    EV.criterion("refund", True, f"real Razorpay refund id {refund_ref} "
-                                 f"(money_action={ma.get('id')})")
-    log(f"REFUND (REAL): {refund_ref}")
+    EV.criterion("refund", True, f"real Razorpay refund id {refund_ref} line={affected_line_id} "
+                                 f"amount_paise={affected_amount} (money_action={ma.get('id')})")
+    log(f"REFUND (REAL): {refund_ref} line={affected_line_id} amount_paise={affected_amount}")
 
     # ---- 13. repeat execute => same refund, no second money effect ---------------------
     r2 = c.post(f"/api/remedies/{rid}/execute", json={})
@@ -669,6 +806,17 @@ def run_flow(
         time.sleep(0.5)
     expect(term == "REMEDIATED", f"contract never reached REMEDIATED (last={term})")
 
+    final_contract_response = c.get(f"/api/contracts/{cid}")
+    expect(final_contract_response.status_code == 200, "final contract fetch failed")
+    final_contract = final_contract_response.json().get("contract") or {}
+    final_lines = final_contract.get("line_items") or []
+    expect(
+        {str(line.get("id")) for line in final_lines if isinstance(line, dict)}
+        == {str(line.get("id")) for line in line_items},
+        "unaffected basket line disappeared during scoped remediation",
+    )
+    expect(final_contract.get("amount_paise") == amount_paise, "basket total drifted after line refund")
+
     # Re-fetch the timeline AFTER the refund so the audit check sees the full arc.
     r = c.get(f"/api/contracts/{cid}/timeline")
     expect(r.status_code == 200, "final timeline fetch failed")
@@ -681,9 +829,23 @@ def run_flow(
     }
     missing = sorted(needed - set(etypes_final))
     expect(not missing, f"audit trail missing events: {missing}")
+    scoped_refunds = [
+        e for e in final_events
+        if e.get("event_type") == "REFUND_PROCESSED"
+        and (e.get("payload") or {}).get("line_item_id") == affected_line_id
+    ]
+    expect(scoped_refunds, "audit trail lacks the affected line on REFUND_PROCESSED")
+    expect(
+        not any(
+            e.get("event_type") == "REFUND_PROCESSED"
+            and (e.get("payload") or {}).get("line_item_id") in unaffected_line_ids
+            for e in final_events
+        ),
+        "audit trail shows a refund against the unaffected line",
+    )
     synth = [e for e in final_events if e.get("synthetic")]
     log(f"AUDIT: {len(final_events)} timeline events, {len(synth)} synthetic-labeled, "
-        f"all key events present, terminal={term}")
+        f"scoped_refund_line={affected_line_id}, unaffected_line_preserved=true, terminal={term}")
     return True
 
 
