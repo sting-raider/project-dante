@@ -96,18 +96,19 @@ def _recompute_contract_hash(contract: dict) -> str | None:
     contract pipeline froze it. Returns None when inputs are missing (nothing
     to drift-check — e.g. fixtures created outside Agent D's pipeline)."""
     line_items = contract.get("line_items") or []
+    resolved_offers: list[dict[str, Any]]
     if line_items:
-        offers = [
-            _current_merchant_offer(str(item.get("offer_id") or ""))
-            for item in line_items
-        ]
-        if any(offer is None for offer in offers):
-            return None
+        resolved_offers = []
+        for item in line_items:
+            offer = _current_merchant_offer(str(item.get("offer_id") or ""))
+            if offer is None:
+                return None
+            resolved_offers.append(offer)
     else:
         offer = _current_merchant_offer(str(contract.get("offer_id") or ""))
         if offer is None:
             return None
-        offers = [offer]
+        resolved_offers = [offer]
     # Canonical formulas come from the promise pipeline so this check compares
     # like-for-like with what select-offer froze (volatile keys stripped from
     # the offer view; set hash over sorted normalized key/value pairs).
@@ -137,7 +138,7 @@ def _recompute_contract_hash(contract: dict) -> str | None:
                 for key, value in offer.items()
                 if key not in VOLATILE_OFFER_KEYS and key != "_type"
             }
-            for offer in offers
+            for offer in resolved_offers
         ]
         if len(stable_offers) == 1:
             offer_hash = sha256_hex(stable_offers[0])
@@ -145,7 +146,7 @@ def _recompute_contract_hash(contract: dict) -> str | None:
             offer_hash = sha256_hex([sha256_hex(offer) for offer in stable_offers])
         candidates = {compute_contract_hash(offer_hash, promise_set_hash)}
         if len(stable_offers) == 1:
-            offer_view = {k: v for k, v in offers[0].items() if k != "_type"}
+            offer_view = {k: v for k, v in resolved_offers[0].items() if k != "_type"}
             candidates.update(
                 {
                     sha256_hex({"offer": offer_view, "promise_set_hash": legacy_psh}),

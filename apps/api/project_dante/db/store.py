@@ -11,13 +11,27 @@ Every record carries its type under `_type`; `id` is unique across the store.
 from __future__ import annotations
 
 import builtins
+import importlib
 import json
 import os
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Protocol, cast
+
+
+class _Fcntl(Protocol):
+    LOCK_EX: int
+    LOCK_NB: int
+    LOCK_UN: int
+
+    def flock(self, fd: int, operation: int) -> None: ...
+
+
+def _posix_fcntl() -> _Fcntl:
+    """Load the POSIX-only lock module with a platform-neutral type."""
+    return cast(_Fcntl, importlib.import_module("fcntl"))
 
 
 def _configured_string(env_name: str, settings_name: str, default: str) -> str:
@@ -133,7 +147,7 @@ class Store:
                             ) from exc
                         time.sleep(_FILE_LOCK_RETRY_SECONDS)
             else:
-                import fcntl
+                fcntl = _posix_fcntl()
 
                 while not locked:
                     try:
@@ -154,7 +168,7 @@ class Store:
                     handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
-                    import fcntl
+                    fcntl = _posix_fcntl()
 
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             handle.close()
