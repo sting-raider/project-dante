@@ -132,7 +132,7 @@ export default function BuyPage() {
         </aside>
       </div>
 
-      <div className="mt-6"><BuyingBrief intent={flow.intent} engine={flow.engine} /></div>
+      <div className="mt-6"><BuyingBrief intent={flow.intent} /></div>
 
       {flow.phase === "idle" && <div className="mt-6 hidden md:block"><ActivityTicker phase={flow.phase} /></div>}
       {flow.phase !== "idle" && <div className="mt-6"><ActivityTicker phase={flow.phase} error={flow.error} onRetry={["error_compile", "error_search", "error_select"].includes(flow.phase) ? () => flow.compileAndSearch(brief) : undefined} /></div>}

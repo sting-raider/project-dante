@@ -29,6 +29,9 @@ from project_dante.db.store import STORE
 from project_dante.domain.events import append_event, new_id, now_iso
 from project_dante.domain.types import (
     BuyerIntent,
+    CompilationEngine,
+    CompilationFallbackReason,
+    CompilationProvenance,
     Constraint,
     IntentItem,
     OutcomeSpec,
@@ -157,6 +160,19 @@ class CompiledIntentSchema(BaseModel):
 
     desired_outcome: _Outcome | None = None
 
+    # A multi-item brief is compiled as a basket, not as one flattened list of
+    # constraints.  The item objects are manually domain-validated in
+    # ``_from_llm_draft`` because their fields reuse the strict nested schemas
+    # above while keeping this public provider schema backward-compatible with
+    # existing single-item responses.
+    items: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "For a multi-item request, one object per requested line with "
+            "label, hard_constraints, soft_preferences, max_price_paise, and quantity."
+        ),
+    )
+
     @field_validator("max_total_amount_paise", mode="before")
     @classmethod
     def _money_strict_int(cls, v: Any) -> Any:
@@ -195,18 +211,23 @@ stated, omit the field entirely; never write "unknown".
 - All money is integer paise (1 rupee = 100 paise); convert stated rupee caps.
 - Hard constraints are absolute; never relax or drop them.
 - Use only these exact evaluator keys: category, brand, sku, max_price_paise, \
-min_price_paise, attributes.form_factor, attributes.anc, \
-attributes.screen_size_inches, attributes.resolution, attributes.panel, \
-attributes.refresh_rate_hz, attributes.connectivity, attributes.hot_swappable, \
-attributes.switch_type, warranty.type, warranty.region, \
+  min_price_paise, attributes.form_factor, attributes.anc, \
+  attributes.screen_size_inches, attributes.resolution, attributes.panel, \
+  attributes.refresh_rate_hz, attributes.connectivity, attributes.hot_swappable, \
+  attributes.mechanical, attributes.switch_type, warranty.type, warranty.region, \
 warranty.duration_months, variant.color, variant.storage, condition, region, \
 terms.region, and delivery_deadline. Do not invent aliases \
 such as "price", "delivery_time", "warranty", or "headphone_type".
 - A delivery window is represented by delivery_deadline as an ISO-8601 date; \
 warranty.type and warranty.region are separate constraints.
 - Extract every distinct requirement stated by the buyer; when one phrase \
-carries multiple facts, emit one constraint for each fact and do not omit \
-category, warranty type, warranty region, or delivery deadline.
+  carries multiple facts, emit one constraint for each fact and do not omit \
+  category, warranty type, warranty region, or delivery deadline.
+- For two or more distinct products, populate `items` with one object per \
+  requested line. Keep each product's category, price cap, features, and \
+  preferences inside that item; keep only genuinely shared order constraints \
+  (such as a combined budget or delivery deadline) at the top level. The \
+  item `quantity` is an integer and defaults to 1.
 - Normalize evaluator values exactly: for example, India becomes IN and \
 "manufacturer warranty" becomes manufacturer. Before returning JSON, check \
 that every explicit requirement is represented by the canonical key/value pair.
@@ -1349,6 +1370,20 @@ def rule_compile(raw_text: str) -> BuyerIntent:
 # ---------------------------------------------------------------- agent
 
 
+def _provider_name(provider: ModelProvider | None) -> str | None:
+    if provider is None:
+        return None
+    name = getattr(provider, "provider_name", None)
+    return name if isinstance(name, str) and name else None
+
+
+def _provider_model(provider: ModelProvider | None) -> str | None:
+    if provider is None:
+        return None
+    model = getattr(provider, "model", None)
+    return model if isinstance(model, str) and model else None
+
+
 class IntentCompilerAgent:
     name = "IntentCompilerAgent"
 
@@ -1360,6 +1395,7 @@ class IntentCompilerAgent:
         trace_id = trace_id or new_id("trace_")
         raw_text = _sanitize_input(raw_text)
         started = time.monotonic()
+        self.validation_retries = 0
         append_event(
             aggregate_type="intent",
             aggregate_id="pending",
@@ -1368,7 +1404,10 @@ class IntentCompilerAgent:
             trace_id=trace_id,
         )
 
-        engine = "llm" if self.provider is not None else "rules"
+        engine: CompilationEngine = "llm" if self.provider is not None else "rules"
+        fallback_reason: CompilationFallbackReason | None = (
+            "not_configured" if self.provider is None else None
+        )
         intent: BuyerIntent | None = None
         if self.provider is not None:
             try:
@@ -1384,12 +1423,34 @@ class IntentCompilerAgent:
                 self.validation_retries = getattr(self.provider, "retries", 0)
                 intent = self._from_llm_draft(raw_text, draft)
                 engine = "llm"
-            except Exception:  # noqa: BLE001 — fail safe down to rules (plan §19)
+            except Exception as exc:  # noqa: BLE001 — fail safe down to rules (plan §19)
                 intent = None
+                fallback_reason = (
+                    "output_rejected"
+                    if isinstance(exc, (TypeError, ValueError))
+                    else "provider_error"
+                )
         if intent is None:
             engine = "rules"
             self.validation_retries = 0
             intent = rule_compile(raw_text)
+
+        provenance = CompilationProvenance(
+            engine=engine,
+            provider=_provider_name(self.provider),
+            model=_provider_model(self.provider),
+            compiler_version="llm-v1" if engine == "llm" else COMPILER_VERSION,
+            validation_retries=self.validation_retries,
+            trace_id=trace_id,
+            item_count=len(intent.items),
+            fallback_reason=fallback_reason,
+        )
+        intent = intent.model_copy(
+            update={
+                "compiler_version": provenance.compiler_version,
+                "compilation_provenance": provenance,
+            }
+        )
 
         record = intent.model_dump(mode="json")
         record["_type"] = "intent"
@@ -1401,6 +1462,7 @@ class IntentCompilerAgent:
             event_type="INTENT_COMPILED",
             payload={
                 "engine": engine,
+                "compilation_provenance": provenance.model_dump(mode="json"),
                 "hard_constraint_keys": [c["key"] for c in record["hard_constraints"]],
                 "item_ids": [item["id"] for item in record.get("items") or []],
                 "item_quantities": {
@@ -1419,6 +1481,8 @@ class IntentCompilerAgent:
             started=started,
             validation_retries=self.validation_retries,
             trace_id=trace_id,
+            intent_id=intent.id,
+            compilation_provenance=provenance.model_dump(mode="json"),
         )
         return intent
 
@@ -1493,6 +1557,137 @@ class IntentCompilerAgent:
             raise ValueError("LLM spend cap does not match deterministic parse")
         if bool(d.get("substitutions_allowed", True)) != rules_intent.substitutions_allowed:
             raise ValueError("LLM substitution flag does not match deterministic parse")
+
+        def strict_money(value: Any, field_name: str) -> int | None:
+            if value is None:
+                return None
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(
+                    f"LLM {field_name} must be a positive integer paise value"
+                )
+            return value
+
+        def strict_quantity(value: Any) -> int:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError("LLM item quantity must be a positive integer")
+            return value
+
+        def parse_item_constraints(raw: Any, field_name: str) -> list[Constraint]:
+            if raw is None:
+                return []
+            if not isinstance(raw, list):
+                raise ValueError(f"LLM {field_name} must be a list")
+            parsed_constraints: list[Constraint] = []
+            for index, raw_constraint in enumerate(raw):
+                if not isinstance(raw_constraint, dict):
+                    raise ValueError(
+                        f"LLM {field_name}[{index}] must be an object"
+                    )
+                try:
+                    validated = CompiledIntentSchema._Constraint.model_validate(
+                        raw_constraint
+                    )
+                    parsed_constraint = Constraint(**validated.model_dump())
+                except Exception as exc:  # noqa: BLE001 — fail safe to rules
+                    raise ValueError(
+                        f"LLM {field_name}[{index}] failed domain validation"
+                    ) from exc
+                if parsed_constraint.key not in _CANONICAL_INTENT_KEYS:
+                    raise ValueError(
+                        f"LLM used unsupported intent key: {parsed_constraint.key}"
+                    )
+                parsed_constraints.append(parsed_constraint)
+            return parsed_constraints
+
+        def parse_item_preferences(raw: Any, field_name: str) -> list[Preference]:
+            if raw is None:
+                return []
+            if not isinstance(raw, list):
+                raise ValueError(f"LLM {field_name} must be a list")
+            parsed_preferences: list[Preference] = []
+            for index, raw_preference in enumerate(raw):
+                if not isinstance(raw_preference, dict):
+                    raise ValueError(
+                        f"LLM {field_name}[{index}] must be an object"
+                    )
+                try:
+                    validated = CompiledIntentSchema._Preference.model_validate(
+                        raw_preference
+                    )
+                    parsed_preference = Preference(**validated.model_dump())
+                except Exception as exc:  # noqa: BLE001 — fail safe to rules
+                    raise ValueError(
+                        f"LLM {field_name}[{index}] failed domain validation"
+                    ) from exc
+                if parsed_preference.key not in _CANONICAL_INTENT_KEYS:
+                    raise ValueError(
+                        f"LLM used unsupported preference key: {parsed_preference.key}"
+                    )
+                parsed_preferences.append(parsed_preference)
+            return parsed_preferences
+
+        def item_signature(
+            hard_constraints: list[Constraint],
+            soft_preferences: list[Preference],
+            max_price_paise: int | None,
+            quantity: int,
+        ) -> str:
+            return json.dumps(
+                {
+                    "hard_constraints": constraint_signature(hard_constraints),
+                    "soft_preferences": preference_signature(soft_preferences),
+                    "max_price_paise": max_price_paise,
+                    "quantity": quantity,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+        # A successful LLM proof must account for every basket line.  Returning
+        # the deterministic result below is intentional—the rules parser is
+        # authoritative—but an LLM response that omits or changes a line is a
+        # rejected compilation, not an ``engine=llm`` claim.
+        if rules_intent.items:
+            raw_items = d.get("items")
+            if not isinstance(raw_items, list) or not raw_items:
+                raise ValueError("LLM omitted required basket items")
+            if len(raw_items) != len(rules_intent.items):
+                raise ValueError("LLM basket item count does not match deterministic parse")
+
+            draft_signatures: list[str] = []
+            for index, raw_item in enumerate(raw_items):
+                if not isinstance(raw_item, dict):
+                    raise ValueError(f"LLM items[{index}] must be an object")
+                item_hard = parse_item_constraints(
+                    raw_item.get("hard_constraints"), f"items[{index}].hard_constraints"
+                )
+                item_soft = parse_item_preferences(
+                    raw_item.get("soft_preferences"), f"items[{index}].soft_preferences"
+                )
+                draft_signatures.append(
+                    item_signature(
+                        item_hard,
+                        item_soft,
+                        strict_money(
+                            raw_item.get("max_price_paise"),
+                            f"items[{index}].max_price_paise",
+                        ),
+                        strict_quantity(raw_item.get("quantity", 1)),
+                    )
+                )
+
+            rules_signatures = [
+                item_signature(
+                    item.hard_constraints,
+                    item.soft_preferences,
+                    item.max_price_paise,
+                    item.quantity,
+                )
+                for item in rules_intent.items
+            ]
+            if sorted(draft_signatures) != sorted(rules_signatures):
+                raise ValueError("LLM basket lines do not match deterministic parse")
 
         # The deterministic result is authoritative even after a successful
         # semantic match: it supplies the grounded outcome and the exact fields

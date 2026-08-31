@@ -45,6 +45,12 @@ type AgentRun = {
   latency_ms?: number;
   validation_retries?: number;
   trace_id?: string;
+  compilation_provenance?: {
+    provider?: string | null;
+    model?: string | null;
+    item_count?: number;
+    fallback_reason?: string | null;
+  };
   created_at: string;
 };
 
@@ -193,15 +199,36 @@ export default function AuditPage() {
     for (const e of events) {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       if (e.event_type === "INTENT_COMPILED") {
+        const evidence =
+          p.compilation_provenance && typeof p.compilation_provenance === "object"
+            ? (p.compilation_provenance as Record<string, unknown>)
+            : null;
+        const evidenceEngine = str(evidence?.engine);
+        const engine = evidenceEngine === "llm" ? "llm" : evidence ? "rules" : str(p.engine) ?? "rules";
+        const provider = str(evidence?.provider);
+        const model = str(evidence?.model);
+        const itemCount = num(evidence?.item_count);
         runs.push({
           agent_name: "IntentCompiler",
-          engine: str(p.engine) ?? "rules",
+          engine,
           input_summary: "raw buyer brief → typed hard constraints + soft preferences",
-          output_summary: `constraint keys: ${(Array.isArray(p.hard_constraint_keys)
+          output_summary: `${engine === "llm" ? "LLM compiled" : "Deterministic fallback"}${
+            provider || model
+              ? ` · ${provider ?? "provider"} · ${model ?? "model"}`
+              : ""
+          }${itemCount != null ? ` · ${itemCount} basket lines verified` : ""} · constraint keys: ${(Array.isArray(p.hard_constraint_keys)
             ? (p.hard_constraint_keys as unknown[])
             : []
           ).join(", ")}`,
           trace_id: e.trace_id ?? undefined,
+          compilation_provenance: evidence
+            ? {
+                provider,
+                model,
+                item_count: itemCount ?? undefined,
+                fallback_reason: str(evidence.fallback_reason),
+              }
+            : undefined,
           created_at: e.created_at ?? "",
         });
       } else if (e.event_type === "OFFER_EVALUATED") {

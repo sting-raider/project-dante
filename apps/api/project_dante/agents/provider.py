@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -62,21 +62,26 @@ def _log_agent_run(
     started: float,
     validation_retries: int,
     trace_id: str,
+    intent_id: str | None = None,
+    compilation_provenance: dict[str, Any] | None = None,
 ) -> None:
-    STORE.put(
-        {
-            "id": new_id("run_"),
-            "_type": "agent_run",
-            "agent_name": agent_name,
-            "engine": engine,
-            "input_summary": input_summary[:500],
-            "output_summary": output_summary[:500],
-            "latency_ms": int((time.monotonic() - started) * 1000),
-            "validation_retries": validation_retries,
-            "trace_id": trace_id,
-            "created_at": now_iso(),
-        }
-    )
+    record: dict[str, Any] = {
+        "id": new_id("run_"),
+        "_type": "agent_run",
+        "agent_name": agent_name,
+        "engine": engine,
+        "input_summary": input_summary[:500],
+        "output_summary": output_summary[:500],
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "validation_retries": validation_retries,
+        "trace_id": trace_id,
+        "created_at": now_iso(),
+    }
+    if intent_id is not None:
+        record["intent_id"] = intent_id
+    if compilation_provenance is not None:
+        record["compilation_provenance"] = compilation_provenance
+    STORE.put(record)
 
 
 class AnthropicProvider:
@@ -94,6 +99,7 @@ class AnthropicProvider:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = settings.llm_api_key
+        self.provider_name = "anthropic"
         self.model = settings.llm_model or "claude-sonnet-4-5"
         self._transport = transport  # test seam: httpx.MockTransport
         self.retries = 0
@@ -188,6 +194,8 @@ class OpenAICompatibleProvider:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = settings.llm_api_key.strip()
+        configured_provider = settings.llm_provider.strip().lower()
+        self.provider_name = configured_provider or "openai-compatible"
         self.model = settings.llm_model.strip() or "gpt-4o-mini"
         self.base_url = (settings.llm_base_url.strip() or OPENAI_DEFAULT_BASE_URL).rstrip("/")
         self._transport = transport  # test seam: httpx.MockTransport
