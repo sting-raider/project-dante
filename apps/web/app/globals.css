@@ -705,3 +705,183 @@
     text-align: left;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Contract dossier — the immutable purchase record
+--------------------------------------------------------------------------- */
+
+.contract-dossier-page {
+  position: relative;
+}
+
+.contract-masthead {
+  display: grid;
+  align-items: end;
+  gap: 2rem;
+}
+
+.contract-masthead-state {
+  border-left: 2px solid var(--color-signal);
+  padding-left: 1rem;
+}
+
+.contract-masthead-state > .folio-label,
+.contract-masthead-state > div:last-child {
+  margin-top: 0.85rem;
+}
+
+.contract-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.contract-summary-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+}
+
+.contract-summary-label,
+.contract-summary-detail {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.contract-summary-value {
+  margin-top: 0.65rem;
+  color: var(--color-ink);
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.contract-summary-value-small {
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.contract-summary-unit {
+  color: var(--color-ink-soft);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.contract-summary-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.contract-status-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.8rem;
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem 1.25rem;
+  box-shadow: 0 3px 12px rgb(16 24 40 / 3%);
+}
+
+.contract-status-banner-success {
+  border: 1px solid rgb(3 152 85 / 30%);
+}
+
+.contract-status-banner-breach {
+  border: 1px solid rgb(255 86 48 / 60%);
+}
+
+.contract-status-banner-warning {
+  border: 1px solid rgb(181 71 8 / 50%);
+}
+
+.contract-status-banner a {
+  color: var(--color-ink);
+}
+
+.contract-intent-section blockquote {
+  box-shadow: 0 4px 16px rgb(16 24 40 / 3%);
+}
+
+.contract-primary-grid > div > section,
+.contract-payment-section .md\:col-span-7 > section,
+.contract-payment-section .md\:col-span-5 > section {
+  height: 100%;
+}
+
+.contract-ledger-section,
+.contract-payment-section {
+  position: relative;
+}
+
+.contract-ledger-section::before,
+.contract-payment-section::before {
+  position: absolute;
+  top: -0.45rem;
+  left: 0;
+  height: 0.2rem;
+  width: 2.5rem;
+  background: var(--color-action);
+  content: "";
+}
+
+.contract-footer {
+  padding-bottom: 1rem;
+}
+
+.contract-sticky-bar {
+  box-shadow: 0 -8px 28px rgb(16 24 40 / 8%);
+}
+
+.contract-sticky-inner {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .contract-masthead {
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.35fr);
+  }
+
+  .contract-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .contract-summary-card {
+    padding: 1.15rem;
+  }
+
+  .contract-masthead-state {
+    justify-self: end;
+    min-width: 15rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .contract-masthead-state {
+    max-width: none;
+  }
+
+  .contract-sticky-inner > section {
+    max-height: min(64dvh, 34rem);
+    overflow-y: auto;
+  }
+
+  .contract-sticky-inner > button {
+    width: 100%;
+  }
+}

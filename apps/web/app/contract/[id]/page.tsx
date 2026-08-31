@@ -74,6 +74,20 @@ const POST_AUTHORIZE_PHASES: FlowPhase[] = [
   "paid",
 ];
 
+type ContractBadgeTone = "neutral" | "success" | "danger" | "warning" | "signal";
+
+function statusTone(status: string): ContractBadgeTone {
+  if (["PAID", "SATISFIED", "REMEDIATED"].includes(status)) return "success";
+  if (["BREACH_DETECTED", "FAILED", "CANCELLED"].includes(status)) return "danger";
+  if (["PAYMENT_PENDING", "PAYMENT_ORDER_CREATED", "REMEDY_PLANNING", "AWAITING_REMEDY_APPROVAL"].includes(status)) return "warning";
+  if (["CONTRACT_FROZEN", "AWAITING_BUYER_AUTH"].includes(status)) return "signal";
+  return "neutral";
+}
+
+function statusLabel(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
 export default function ContractPage() {
   const params = useParams<{ id: string }>();
   const contractId = params?.id ?? null;
@@ -268,9 +282,18 @@ export default function ContractPage() {
     contract.status === "AWAITING_BUYER_AUTH" ||
     contract.status === "CONTRACT_FROZEN";
   const authorized = contract.buyer_authority != null;
+  const lineCount = Math.max(contract.line_items?.length ?? 0, 1);
+  const paymentLabel = contract.sandbox_mode ? "Sandbox adapter" : "Razorpay Test Mode";
+  const buyerAction = paid
+    ? "Payment verified"
+    : awaitingAuth
+      ? "Your authorization"
+      : contract.status === "BREACH_DETECTED"
+        ? "Review remedy"
+        : "Server reconciliation";
 
   return (
-      <main className="dante-container min-h-screen pb-40 pt-8 md:pt-10">
+    <main className="contract-dossier-page dante-container min-h-screen pb-40 pt-8 md:pt-10">
       {/* Razorpay checkout.js — lazyOnload; opened on demand from the
           Stage 2 Pay click (never auto-opened without a user gesture) */}
       {!contract.sandbox_mode && !rzpScriptReady && (
@@ -283,21 +306,53 @@ export default function ContractPage() {
       )}
 
       {/* masthead */}
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="folio-label text-action-deep">Purchase dossier</p><h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] text-ink md:text-4xl">{contract.display_code ?? contract.id}</h1></div>
-        <Dateline>
-          Frozen {contract.frozen_at ? new Date(contract.frozen_at).toLocaleString("en-IN") : "—"}
-          {contract.sandbox_mode && (
-            <span className="ml-3">
-              <SandboxBadge />
-            </span>
-          )}
-        </Dateline>
+      <header className="contract-masthead">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Folio>Purchase dossier / issue 02</Folio>
+            {lineCount > 1 && <Badge tone="signal">{`${lineCount} frozen lines`}</Badge>}
+          </div>
+          <h1 className="mt-3 text-4xl font-semibold tracking-[-0.055em] text-ink md:text-6xl">{contract.display_code ?? contract.id}</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-ink-soft md:text-base">A frozen purchase record: every line, promise, and payment boundary is readable before the next buyer action.</p>
+        </div>
+        <div className="contract-masthead-state">
+          <span className="contract-summary-label">Lifecycle state</span>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge tone={statusTone(contract.status)}>{statusLabel(contract.status)}</Badge>
+            {contract.sandbox_mode && <SandboxBadge />}
+          </div>
+          <Dateline>
+            Frozen {contract.frozen_at ? new Date(contract.frozen_at).toLocaleString("en-IN") : "—"}
+          </Dateline>
+        </div>
       </header>
+
+      <div className="contract-summary-grid" aria-label="Contract summary">
+        <div className="contract-summary-card">
+          <span className="contract-summary-label">Frozen amount</span>
+          <strong className="contract-summary-value">{rupees(contract.amount_paise)}</strong>
+          <span className="contract-summary-detail">immutable checkout ceiling</span>
+        </div>
+        <div className="contract-summary-card">
+          <span className="contract-summary-label">Promise ledger</span>
+          <strong className="contract-summary-value">{flow.promises.length} <span className="contract-summary-unit">facts</span></strong>
+          <span className="contract-summary-detail">{flow.promises.filter((promise) => promise.material_to_intent).length} material to intent</span>
+        </div>
+        <div className="contract-summary-card">
+          <span className="contract-summary-label">Basket scope</span>
+          <strong className="contract-summary-value">{lineCount} <span className="contract-summary-unit">{lineCount === 1 ? "line" : "lines"}</span></strong>
+          <span className="contract-summary-detail">quantity lines remain atomic</span>
+        </div>
+        <div className="contract-summary-card">
+          <span className="contract-summary-label">Next buyer action</span>
+          <strong className="contract-summary-value contract-summary-value-small">{buyerAction}</strong>
+          <span className="contract-summary-detail">{paymentLabel} · server truth</span>
+        </div>
+      </div>
 
       {/* PAID banner */}
       {paid && (
-        <div className="mt-6 rounded-lg border border-success/30 bg-paper-bright px-5 py-4 shadow-[0_1px_2px_rgba(16,24,40,0.03)]">
+        <div className="contract-status-banner contract-status-banner-success mt-6">
           <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-success">
             Paid — verified by webhook truth
           </span>{" "}
@@ -316,10 +371,10 @@ export default function ContractPage() {
       {(contract.status === "BREACH_DETECTED" ||
         contract.status === "REMEDIATED") && (
         <div
-          className={`mt-6 rounded-lg border px-5 py-4 ${
+          className={`contract-status-banner mt-6 ${
             contract.status === "BREACH_DETECTED"
-              ? "border-signal/60 bg-paper-bright"
-              : "border-success/50 bg-paper-bright"
+              ? "contract-status-banner-breach"
+              : "contract-status-banner-success"
           }`}
         >
           <span
@@ -341,7 +396,7 @@ export default function ContractPage() {
       )}
 
       {dismissedNote && !paid && (
-        <div className="mt-6 rounded-[2px] border border-warning/50 bg-paper-bright px-5 py-3 font-body text-[13px] leading-snug text-warning">
+        <div className="contract-status-banner contract-status-banner-warning mt-6 font-body text-[13px] leading-snug text-warning">
           {dismissedNote}
         </div>
       )}
@@ -382,7 +437,7 @@ export default function ContractPage() {
       )}
 
       {/* §1 intent recap */}
-      <section className="mt-10">
+      <section className="contract-intent-section mt-10">
         <SectionLabel index="§1">The original intent</SectionLabel>
           <blockquote className="mt-4 rounded-r-lg border-l-4 border-signal bg-signal/[0.04] px-5 py-4 text-[clamp(1.1rem,2vw,1.7rem)] font-medium leading-snug tracking-[-0.025em] text-ink">
           {brief ?? (
@@ -395,7 +450,7 @@ export default function ContractPage() {
       </section>
 
       {/* §2+§3 selected offer */}
-      <section className="mt-12 grid gap-6 md:grid-cols-12">
+      <section className="contract-primary-grid mt-12 grid gap-6 md:grid-cols-12">
         <div className="md:col-span-7">
           <SelectedOfferPanel
             offer={offerMemo?.offer ?? null}
@@ -450,7 +505,7 @@ export default function ContractPage() {
       </section>
 
       {/* §4 material promises */}
-      <section className="mt-14">
+      <section className="contract-ledger-section mt-14">
         <Rule />
         <div className="mt-8">
           <MaterialPromises promises={flow.promises} />
@@ -458,7 +513,7 @@ export default function ContractPage() {
       </section>
 
       {/* §7 razorpay */}
-      <section className="mt-14" id="razorpay">
+      <section className="contract-payment-section mt-14" id="razorpay">
         <Rule />
         <div className="mt-8 grid gap-6 md:grid-cols-12">
           <div className="md:col-span-7">
@@ -530,7 +585,7 @@ export default function ContractPage() {
       </section>
 
       {/* footer nav */}
-      <footer className="mt-16 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-5">
+      <footer className="contract-footer mt-16 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-5">
         <Dateline>
           Aster Electronics · Dante contract runtime · every money action bounded & gated
         </Dateline>
@@ -548,8 +603,8 @@ export default function ContractPage() {
       {awaitingAuth &&
         !checkoutOpen &&
         !POST_AUTHORIZE_PHASES.includes(flow.phase) && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper/95 backdrop-blur">
-          <div className="mx-auto max-w-6xl px-5 py-4 md:px-10">
+        <div className="contract-sticky-bar fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper/95 backdrop-blur" role="region" aria-label="Buyer authorization">
+          <div className="contract-sticky-inner mx-auto max-w-6xl px-5 py-4 md:px-10">
             <AuthorizationCard
               contract={contract}
               promises={flow.promises}
@@ -578,7 +633,7 @@ export default function ContractPage() {
         !checkoutOpen &&
         (contract.status === "PAYMENT_ORDER_CREATED" ||
           contract.status === "PAYMENT_PENDING") && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper-bright">
+        <div className="contract-sticky-bar fixed inset-x-0 bottom-0 z-40 border-t-2 border-signal bg-paper-bright" role="region" aria-label="Razorpay payment">
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
             <p className="font-body text-[13px] leading-snug text-ink-soft">
               Order {shortHash(flow.orderInfo?.checkout_config.order_id)} created
@@ -603,7 +658,7 @@ export default function ContractPage() {
         !paid &&
         contract.sandbox_mode &&
         (flow.phase === "sandbox_ready" || flow.phase === "opening_checkout") && (
-          <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-warning bg-paper-bright">
+          <div className="contract-sticky-bar fixed inset-x-0 bottom-0 z-40 border-t-2 border-warning bg-paper-bright" role="region" aria-label="Sandbox payment">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
               <p className="font-body text-[13px] leading-snug text-warning">
                 Order created in sandbox mode — no Razorpay keys configured.
@@ -621,7 +676,7 @@ export default function ContractPage() {
         )}
 
       {(flow.phase === "error_authorize" || flow.phase === "error_order") && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-danger bg-paper-bright">
+        <div className="contract-sticky-bar fixed inset-x-0 bottom-0 z-40 border-t-2 border-danger bg-paper-bright" role="region" aria-label="Payment error">
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
             <p className="font-body text-[13px] text-danger">{flow.error}</p>
             <Button variant="secondary" onClick={() => flow.resetError()}>
