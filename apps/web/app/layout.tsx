@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Instrument_Serif, Inter } from "next/font/google";
+import AppShell from "@/components/layout/AppShell";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -33,7 +34,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#F2F0EA",
+  themeColor: "#F6F8FB",
 };
 
 export default function RootLayout({
@@ -45,7 +46,7 @@ export default function RootLayout({
       className={`${instrumentSerif.variable} ${inter.variable} ${plexMono.variable}`}
     >
       <body className="bg-paper text-ink font-body antialiased">
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

@@ -2773,7 +2773,10 @@
       "attributes": {
         "form_factor": "tkl",
         "connectivity": "wired-usb",
-        "backlit": true
+        "backlit": true,
+        "mechanical": true,
+        "hot_swappable": false,
+        "switch_type": "clicky"
       },
       "terms": {
         "warranty_type": "manufacturer",
@@ -2807,7 +2810,10 @@
       "attributes": {
         "form_factor": "full-size",
         "connectivity": "wired-usb",
-        "backlit": true
+        "backlit": true,
+        "mechanical": true,
+        "hot_swappable": false,
+        "switch_type": "linear"
       },
       "terms": {
         "warranty_type": "unknown",
@@ -2841,7 +2847,9 @@
       "attributes": {
         "form_factor": "full-size",
         "connectivity": "wired-usb",
-        "backlit": false
+        "backlit": false,
+        "mechanical": false,
+        "hot_swappable": false
       },
       "terms": {
         "warranty_type": "none",
@@ -2875,7 +2883,9 @@
       "attributes": {
         "form_factor": "full-size",
         "connectivity": "wireless-multi",
-        "backlit": false
+        "backlit": false,
+        "mechanical": false,
+        "hot_swappable": false
       },
       "terms": {
         "warranty_type": "manufacturer",
@@ -2909,7 +2919,9 @@
       "attributes": {
         "form_factor": "60-percent",
         "connectivity": "wired-usbc",
-        "backlit": true
+        "backlit": true,
+        "mechanical": true,
+        "hot_swappable": true
       },
       "terms": {
         "warranty_type": "manufacturer",
@@ -2943,7 +2955,9 @@
       "attributes": {
         "form_factor": "tkl",
         "connectivity": "wireless-bluetooth",
-        "backlit": false
+        "backlit": false,
+        "mechanical": false,
+        "hot_swappable": false
       },
       "terms": {
         "warranty_type": "none",
@@ -2977,7 +2991,10 @@
       "attributes": {
         "form_factor": "tkl",
         "connectivity": "wired-usb",
-        "backlit": true
+        "backlit": true,
+        "mechanical": true,
+        "hot_swappable": false,
+        "switch_type": "tactile"
       },
       "terms": {
         "warranty_type": "manufacturer",
@@ -3001,7 +3018,7 @@
       "id": "off_AST-KB-008",
       "merchant_id": "aster-electronics",
       "sku": "AST-KB-008",
-      "title": "Voltaq TypeFree Mini Wireless Keyboard",
+      "title": "Voltaq TypeFree 75% Wireless Hot-Swap Mechanical Keyboard (Tactile)",
       "brand": "Voltaq",
       "category": "keyboards",
       "variant": {},
@@ -3009,9 +3026,12 @@
       "currency": "INR",
       "inventory": 3,
       "attributes": {
-        "form_factor": "compact",
+        "form_factor": "75-percent",
         "connectivity": "wireless-multi",
-        "backlit": false
+        "backlit": false,
+        "mechanical": true,
+        "hot_swappable": true,
+        "switch_type": "tactile"
       },
       "terms": {
         "warranty_type": "manufacturer",
@@ -3243,7 +3263,8 @@
       "attributes": {
         "screen_size_inches": 27,
         "panel": "ips",
-        "refresh_rate": "60hz",
+        "resolution": "4k",
+        "refresh_rate_hz": 60,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3278,7 +3299,8 @@
       "attributes": {
         "screen_size_inches": 24,
         "panel": "ips",
-        "refresh_rate": "75hz",
+        "resolution": "qhd",
+        "refresh_rate_hz": 75,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3313,7 +3335,8 @@
       "attributes": {
         "screen_size_inches": 22,
         "panel": "va",
-        "refresh_rate": "60hz",
+        "resolution": "fhd",
+        "refresh_rate_hz": 60,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3348,13 +3371,14 @@
       "attributes": {
         "screen_size_inches": 27,
         "panel": "fast-ips",
-        "refresh_rate": "165hz",
+        "resolution": "qhd",
+        "refresh_rate_hz": 165,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
         "warranty_type": "manufacturer",
         "warranty_duration_months": 12,
-        "warranty_region": "US",
+        "warranty_region": "IN",
         "return_window_days": 15,
         "replacement_window_days": 7,
         "condition": "new",
@@ -3362,7 +3386,7 @@
       },
       "delivery_promise": {
         "min_days": 3,
-        "max_days": 7,
+        "max_days": 4,
         "promised_by_date": null,
         "service": "SameDay Metro"
       },
@@ -3383,7 +3407,8 @@
       "attributes": {
         "screen_size_inches": 24,
         "panel": "va",
-        "refresh_rate": "144hz",
+        "resolution": "fhd",
+        "refresh_rate_hz": 144,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3418,7 +3443,8 @@
       "attributes": {
         "screen_size_inches": 24,
         "panel": "ips",
-        "refresh_rate": "100hz",
+        "resolution": "fhd",
+        "refresh_rate_hz": 100,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3453,7 +3479,8 @@
       "attributes": {
         "screen_size_inches": 27,
         "panel": "ips",
-        "refresh_rate": "60hz",
+        "resolution": "4k",
+        "refresh_rate_hz": 60,
         "connectivity": "hdmi-displayport"
       },
       "terms": {
@@ -3488,7 +3515,8 @@
       "attributes": {
         "screen_size_inches": 15,
         "panel": "oled",
-        "refresh_rate": "60hz",
+        "resolution": "fhd",
+        "refresh_rate_hz": 60,
         "connectivity": "hdmi-displayport"
       },
       "terms": {

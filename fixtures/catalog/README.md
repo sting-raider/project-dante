@@ -12,6 +12,10 @@
   (`apps/api/project_dante/domain/types.py`).
 - Warranty metadata is deliberately mixed (~55% manufacturer / 15% seller /
   10% none / 20% unknown) so merchant analytics surface real blockers.
+- Monitor and keyboard listings expose canonical structured attributes (for
+  example `resolution`, `refresh_rate_hz`, `mechanical`, and
+  `hot_swappable`). A title is presentation only; evaluator gates use these
+  structured fields.
 - Hero SKU `AST-HP-ANC-001` carries the exact demo-storyboard values
   (Rs 11,499 · ANC over-ear · manufacturer warranty IN · 2–4 day delivery),
   plus five feasible alternates and several near-miss decoys.

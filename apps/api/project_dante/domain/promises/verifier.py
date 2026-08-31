@@ -75,13 +75,26 @@ def _breach_from_record(record: dict[str, Any]) -> Breach:
     return Breach.model_validate({k: v for k, v in record.items() if not k.startswith("_")})
 
 
-def _latest_fact(facts: list[dict[str, Any]], promise_key: str) -> dict[str, Any] | None:
-    """Latest observed fact whose key maps onto the given promise key."""
+def _latest_fact(
+    facts: list[dict[str, Any]], promise_key: str, line_item_id: str | None = None
+) -> dict[str, Any] | None:
+    """Latest observed fact for a promise, scoped to its frozen line.
+
+    A multi-item delivery can report different outcomes per line.  Never let a
+    fact for one line satisfy or breach a promise belonging to another line.
+    Legacy single-item records remain unscoped and continue to match normally.
+    """
     candidates = []
     for fact in facts:
         key = fact.get("key")
         if isinstance(key, str) and _FACT_TO_PROMISE.get(key) == promise_key:
             candidates.append(fact)
+    if line_item_id is not None:
+        candidates = [
+            fact for fact in candidates if fact.get("line_item_id") == line_item_id
+        ]
+    else:
+        candidates = [fact for fact in candidates if not fact.get("line_item_id")]
     if not candidates:
         return None
     return max(candidates, key=lambda f: f.get("observed_at") or "")
@@ -102,6 +115,7 @@ def _make_breach(
     return Breach(
         id=new_id("br_"),
         contract_id=fact["contract_id"],
+        line_item_id=fact.get("line_item_id"),
         promise_id=promise["id"],
         observed_fact_id=fact["id"],
         severity=severity,  # type: ignore[arg-type]
@@ -266,17 +280,17 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
     }
 
     new_breaches: list[Breach] = []
-    satisfied_keys: set[str] = set()
+    satisfied_keys: set[tuple[str, str | None]] = set()
     severity_floor = _evaluation_floor(contract_id)
 
     for promise in promises:
         promise["key"] = _canonical_promise_key(promise["key"])
-        fact = _latest_fact(facts, promise["key"])
+        fact = _latest_fact(facts, promise["key"], promise.get("line_item_id"))
         if fact is None:
             continue  # nothing observed yet: neither satisfied nor breached
         breach = _compare_pair(promise, fact)
         if breach is None:
-            satisfied_keys.add(promise["key"])
+            satisfied_keys.add((promise["key"], promise.get("line_item_id")))
             continue
         # Selection-time critical constraints floor mismatch severity at
         # material: the buyer explicitly gated selection on these keys.
@@ -332,8 +346,12 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
         if p.get("material_to_intent")
         and _canonical_promise_key(p["key"]) in _OBSERVABLE_KEYS
     ]
-    observed = {p["key"] for p in verifiable if _latest_fact(facts, p["key"]) is not None}
-    all_keys = {p["key"] for p in verifiable}
+    observed = {
+        (p["key"], p.get("line_item_id"))
+        for p in verifiable
+        if _latest_fact(facts, p["key"], p.get("line_item_id")) is not None
+    }
+    all_keys = {(p["key"], p.get("line_item_id")) for p in verifiable}
     satisfied = bool(verifiable) and observed == all_keys and len(satisfied_keys) == len(all_keys)
 
     status_target = (
@@ -378,7 +396,10 @@ def evaluate_contract(contract_id: str) -> dict[str, Any]:
             p["key"]
             for p in promises
             if p.get("material_to_intent")
-            and p["key"] in _OBSERVABLE_KEYS
-            and _latest_fact(facts, p["key"]) is None
+            and _canonical_promise_key(p["key"]) in _OBSERVABLE_KEYS
+            and _latest_fact(
+                facts, _canonical_promise_key(p["key"]), p.get("line_item_id")
+            )
+            is None
         ),
     }

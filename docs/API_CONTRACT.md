@@ -20,10 +20,25 @@ POST /api/intents/{intent_id}/search
   → 200 {intent, results: [{offer: MerchantOffer,
           evaluation: {feasible: bool, hard_failures: [{key, op, expected, actual}],
                        soft_scores: [{key, weight, score, note}], explanation: str}}],
-         engine}
+         items: [{item_id, label, quantity, max_price_paise, feasible_count,
+                  recommended_offer_id, results: [...]}],
+         bundle_recommendation: {available, engine, offer_ids,
+                                total_amount_paise, score, reason}, engine}
 
-POST /api/intents/{intent_id}/select-offer   {offer_id: str}
+  For a multi-item intent, `intent.items[]` is the typed line-item envelope.
+  Each line is evaluated independently against its own hard constraints and
+  unit cap. `bundle_recommendation` is optional decision support: it can only
+  choose rows whose deterministic evaluation is already feasible and whose
+  quantity-adjusted aggregate stays within `intent.max_total_amount_paise`.
+  An unavailable recommendation is fail-closed and never relaxes a line.
+
+POST /api/intents/{intent_id}/select-offer
+  single item: {offer_id: str}
+  bundle: {items: [{item_id: str, offer_id: str}]}
   → 200 {contract: DanteContract, promises: Promise[], evidence: EvidenceArtifact[]}
+  The server requires every requested line exactly once, rechecks its stored
+  feasible evaluation, rechecks quantity inventory and the parent total cap,
+  then creates one aggregate contract with one frozen line per selection.
   (compiles intent→OFFER_SELECTED, freezes promise set → CONTRACT_FROZEN)
 ```
 
@@ -32,6 +47,9 @@ POST /api/intents/{intent_id}/select-offer   {offer_id: str}
 ```
 GET  /api/contracts/{id}
   → {contract, promises: Promise[], entitlements: Entitlement[]}
+  `contract.line_items[]` carries the frozen `intent_item_id`, offer identity,
+  quantity, unit/line amount, offer hash and line promise ids. `amount_paise`
+  is the sum of every frozen line amount.
 
 POST /api/contracts/{id}/authorize   {}
   → {contract}   # sets AuthorityEnvelope bound to contract_hash; BUYER_AUTHORIZED event

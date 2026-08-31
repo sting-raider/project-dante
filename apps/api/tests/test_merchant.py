@@ -108,6 +108,29 @@ def test_price_and_inventory_bounds_respected():
         assert p["delivery_promise"]["max_days"] <= 7, p["sku"]
 
 
+def test_monitor_and_keyboard_feature_fields_are_structured():
+    """Catalog claims used by the buyer brief must not live only in titles."""
+    by_sku = {p["sku"]: p for p in load_catalog()}
+
+    monitor = by_sku["AST-MN-004"]
+    assert monitor["attributes"] == {
+        "screen_size_inches": 27,
+        "panel": "fast-ips",
+        "resolution": "qhd",
+        "refresh_rate_hz": 165,
+        "connectivity": "hdmi-displayport",
+    }
+    assert monitor["terms"]["warranty_region"] == "IN"
+    assert monitor["delivery_promise"]["max_days"] == 4
+
+    keyboard = by_sku["AST-KB-008"]
+    assert keyboard["attributes"]["form_factor"] == "75-percent"
+    assert keyboard["attributes"]["connectivity"] == "wireless-multi"
+    assert keyboard["attributes"]["mechanical"] is True
+    assert keyboard["attributes"]["hot_swappable"] is True
+    assert keyboard["attributes"]["switch_type"] == "tactile"
+
+
 # ------------------------------------------------------------------ search
 
 

@@ -113,11 +113,29 @@ class OutcomeSpec(DanteModel):
     keys: list[str] = Field(default_factory=list)  # observed-fact keys that matter
 
 
+class IntentItem(DanteModel):
+    """One independently constrained line item inside a buyer brief.
+
+    ``BuyerIntent`` keeps its original top-level fields for compatibility with
+    single-item callers.  Multi-item briefs use this additive list so a
+    monitor's cap and features cannot accidentally become constraints on a
+    keyboard (or vice versa).
+    """
+
+    id: str
+    label: str
+    hard_constraints: list[Constraint] = Field(default_factory=list)
+    soft_preferences: list[Preference] = Field(default_factory=list)
+    max_price_paise: int | None = None
+    quantity: int = Field(default=1, ge=1)
+
+
 class BuyerIntent(DanteModel):
     id: str
     raw_text: str
     hard_constraints: list[Constraint] = Field(default_factory=list)
     soft_preferences: list[Preference] = Field(default_factory=list)
+    items: list[IntentItem] = Field(default_factory=list)
     max_total_amount_paise: int | None = None
     autonomous_spend_limit_paise: int | None = None
     substitutions_allowed: bool = False
@@ -171,6 +189,7 @@ class MerchantOffer(DanteModel):
 class EvidenceArtifact(DanteModel):
     id: str
     contract_id: str | None = None
+    line_item_id: str | None = None
     source_type: SourceTypeEnum
     raw_payload_ref: str
     sha256: str
@@ -187,6 +206,7 @@ class EvidenceArtifact(DanteModel):
 class Promise(DanteModel):
     id: str
     contract_id: str | None = None
+    line_item_id: str | None = None
     key: str  # dotted path, e.g. "warranty.type"
     value: Any
     normalized_value: Any = None
@@ -214,11 +234,27 @@ class AuthorityEnvelope(DanteModel):
     contract_hash_at_authorization: str | None = None
 
 
+class ContractLineItem(DanteModel):
+    """Frozen offer snapshot metadata for one checkout line."""
+
+    id: str
+    intent_item_id: str | None = None
+    offer_id: str
+    sku: str
+    title: str
+    quantity: int = Field(default=1, ge=1)
+    unit_amount_paise: int
+    amount_paise: int
+    offer_hash: str | None = None
+    promise_ids: list[str] = Field(default_factory=list)
+
+
 class DanteContract(DanteModel):
     id: str
     display_code: str | None = None  # e.g. COV-1842
     intent_id: str
     offer_id: str
+    line_items: list[ContractLineItem] = Field(default_factory=list)
     promise_ids: list[str] = Field(default_factory=list)
     entitlement_ids: list[str] = Field(default_factory=list)
 
@@ -241,6 +277,7 @@ class DanteContract(DanteModel):
 class ObservedFact(DanteModel):
     id: str
     contract_id: str
+    line_item_id: str | None = None
     key: str
     value: Any
     source_artifact_id: str | None = None
@@ -255,6 +292,7 @@ class ObservedFact(DanteModel):
 class Breach(DanteModel):
     id: str
     contract_id: str
+    line_item_id: str | None = None
     promise_id: str
     observed_fact_id: str
     severity: BreachSeverity = "material"

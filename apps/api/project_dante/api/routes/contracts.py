@@ -87,11 +87,62 @@ async def authorize_contract(contract_id: str) -> dict[str, Any]:
         for p in STORE.list("promise")
         if p.get("contract_id") == contract_id and p.get("key") == "price.amount_paise"
     ]
-    amount_paise = next(
-        (p["value"] for p in price_promises if isinstance(p.get("value"), int)), None
-    )
-    if amount_paise is None:
+    line_items = contract.get("line_items") or []
+    if line_items:
+        amount_paise = 0
+        for line_item in line_items:
+            line_item_id = line_item.get("id")
+            price = next(
+                (
+                    promise.get("value")
+                    for promise in price_promises
+                    if promise.get("line_item_id") == line_item_id
+                ),
+                None,
+            )
+            quantity = line_item.get("quantity", 1)
+            if (
+                isinstance(price, bool)
+                or not isinstance(price, int)
+                or price <= 0
+                or isinstance(quantity, bool)
+                or not isinstance(quantity, int)
+                or quantity <= 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cannot authorize: frozen line-item price unknown",
+                )
+            amount_paise += price * quantity
+    else:
+        amount_paise = next(
+            (p["value"] for p in price_promises if isinstance(p.get("value"), int)),
+            None,
+        )
+    if amount_paise is None or amount_paise <= 0:
         raise HTTPException(status_code=409, detail="Cannot authorize: frozen price unknown")
+    if contract.get("amount_paise") != amount_paise:
+        raise HTTPException(
+            status_code=409,
+            detail="Frozen line-item total does not match contract amount",
+        )
+
+    # Stage 1 is two network calls (authorize, then create payment order).  If
+    # the first response is lost, the browser must be able to retry without
+    # being stranded on an already-authorized contract.  Return the existing
+    # envelope only when it is bound to this exact hash and amount; any
+    # disagreement still fails closed.
+    existing_authority = contract.get("buyer_authority")
+    if contract.get("status") == "AWAITING_BUYER_AUTH" and existing_authority:
+        same_binding = (
+            existing_authority.get("contract_hash_at_authorization") == expected_hash
+            and existing_authority.get("max_amount_paise") == amount_paise
+            and existing_authority.get("currency") == "INR"
+            and existing_authority.get("scope") == "single_purchase"
+        )
+        if not same_binding:
+            raise HTTPException(status_code=409, detail="authorization_binding_mismatch")
+        return {"contract": _to_model(DanteContract, contract)}
 
     validate_transition(contract["status"], "AWAITING_BUYER_AUTH")
 

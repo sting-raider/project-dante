@@ -15,7 +15,7 @@ type Health = {
   razorpay?: string;
 };
 
-export default function RailStatus() {
+export default function RailStatus({ compact = false }: { compact?: boolean }) {
   const [rail, setRail] = useState<"probing" | "sandbox-adapter" | "live-test-mode" | "unknown">(
     "probing"
   );
@@ -34,15 +34,27 @@ export default function RailStatus() {
     };
   }, []);
 
+  const label =
+    rail === "live-test-mode"
+      ? compact
+        ? "Razorpay Test Mode"
+        : "Payments on Razorpay Test Mode · No real money moves"
+      : rail === "sandbox-adapter"
+        ? compact
+          ? "Sandbox adapter"
+          : "Payments on the sandbox adapter · Razorpay keys not configured"
+        : rail === "probing"
+          ? compact
+            ? "Checking payment rail…"
+            : "Payment rail · probing…"
+          : compact
+            ? "Payment rail unavailable"
+            : "Payment rail · status unavailable";
+
   return (
-    <span className="folio-label" data-rail={rail}>
-      {rail === "live-test-mode"
-        ? "Payments on Razorpay Test Mode · No real money moves"
-        : rail === "sandbox-adapter"
-          ? "Payments on the sandbox adapter · Razorpay keys not configured"
-          : rail === "probing"
-            ? "Payment rail · probing…"
-            : "Payment rail · status unavailable"}
+    <span className={compact ? "app-rail-pill" : "folio-label"} data-rail={rail}>
+      <span className="app-rail-dot" aria-hidden="true" />
+      {label}
     </span>
   );
 }

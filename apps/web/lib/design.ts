@@ -7,16 +7,19 @@
  */
 
 export const palette = {
-  paper: "#F2F0EA",
-  paperBright: "#FAF9F5",
-  ink: "#0C0C0C",
-  inkSoft: "#3E3D39",
-  rule: "#C9C5BC",
-  signal: "#F04A2D",
-  signalDeep: "#C93817",
-  success: "#235D3A",
-  warning: "#A05A00",
-  danger: "#B42318",
+  paper: "#F6F8FB",
+  paperBright: "#FFFFFF",
+  ink: "#101828",
+  inkSoft: "#667085",
+  rule: "#E4E7EC",
+  signal: "#FF5630",
+  signalDeep: "#E04422",
+  success: "#039855",
+  warning: "#B54708",
+  danger: "#D92D20",
+  action: "#2F6FED",
+  actionDeep: "#155EEF",
+  actionSoft: "#EEF4FF",
 } as const;
 
 /** Contract lifecycle states that mean "the promise held". */

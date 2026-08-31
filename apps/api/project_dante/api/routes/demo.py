@@ -127,10 +127,19 @@ def deliver(
         raise HTTPException(status_code=404, detail=f"Unknown contract: {contract_id}")
 
     scenario = (body or {}).get("scenario", "correct")
+    line_item_id = (body or {}).get("line_item_id")
     if scenario not in ("correct", "wrong_variant", "late"):
         raise HTTPException(status_code=422, detail=f"Unknown scenario: {scenario}")
 
-    result = service.apply_fulfillment_event(contract_id, "deliver", scenario=scenario)
+    try:
+        result = service.apply_fulfillment_event(
+            contract_id,
+            "deliver",
+            scenario=scenario,
+            line_item_id=line_item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     breaches: list[dict] = []
     contract_status: str | None = None

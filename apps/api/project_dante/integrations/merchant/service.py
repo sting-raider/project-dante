@@ -276,8 +276,9 @@ def _fact(
     value: Any,
     source_artifact_id: str,
     scenario_id: str | None,
+    line_item_id: str | None = None,
 ) -> dict:
-    return {
+    fact = {
         "id": new_id("obs"),
         "_type": "fact",
         "contract_id": contract_id,
@@ -288,17 +289,32 @@ def _fact(
         "synthetic": True,
         "scenario_id": scenario_id,
     }
+    if line_item_id is not None:
+        fact["line_item_id"] = line_item_id
+    return fact
 
 
 def _contract_promises(contract_id: str) -> list[dict]:
     return [p for p in STORE.list("promise") if p.get("contract_id") == contract_id]
 
 
-def _promise_value(promises: list[dict], key: str, default: Any = None) -> Any:
+def _promise_value(
+    promises: list[dict],
+    key: str,
+    default: Any = None,
+    line_item_id: str | None = None,
+) -> Any:
+    fallback: Any = default
     for promise in promises:
         if promise.get("key") == key:
-            return promise.get("value", default)
-    return default
+            if line_item_id is not None:
+                if promise.get("line_item_id") == line_item_id:
+                    return promise.get("value", default)
+                continue
+            if promise.get("line_item_id") is None:
+                return promise.get("value", default)
+            fallback = promise.get("value", fallback)
+    return fallback
 
 
 def _store_fact(fact: dict) -> dict:
@@ -311,6 +327,11 @@ def _store_fact(fact: dict) -> dict:
             "key": fact["key"],
             "value": fact["value"],
             "observed_fact_id": fact["id"],
+            **(
+                {"line_item_id": fact["line_item_id"]}
+                if fact.get("line_item_id") is not None
+                else {}
+            ),
             "synthetic": True,
         },
         synthetic=True,
@@ -325,6 +346,7 @@ def _materialize_evidence(
     artifact_id: str,
     scenario_id: str,
     payload: dict,
+    line_item_id: str | None = None,
 ) -> None:
     """Create the REAL evidence artifact the facts/events reference.
 
@@ -342,6 +364,7 @@ def _materialize_evidence(
             synthetic=True,
             scenario_id=scenario_id,
             contract_id=contract_id,
+            line_item_id=line_item_id,
         )
         rec["id"] = artifact_id
         STORE.put(rec)
@@ -351,6 +374,7 @@ def _materialize_evidence(
                 "id": artifact_id,
                 "_type": "evidence",
                 "contract_id": contract_id,
+                "line_item_id": line_item_id,
                 "source_type": source_type,
                 "raw_payload_ref": f"store://{artifact_id}",
                 "sha256": "",
@@ -363,7 +387,12 @@ def _materialize_evidence(
         )
 
 
-def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = None) -> dict:
+def apply_fulfillment_event(
+    contract_id: str,
+    kind: str,
+    scenario: str | None = None,
+    line_item_id: str | None = None,
+) -> dict:
     """Inject a synthetic fulfillment observation for a demo contract.
 
     kind: "ship" | "deliver" | "replacement_check".
@@ -371,6 +400,26 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
     every record carries synthetic=true and a scenario_id.
     """
     scenario_id = f"scenario_{scenario}" if scenario else "scenario_manual"
+
+    contract = STORE.get(contract_id) or {}
+    lines = contract.get("line_items") or []
+    line_ids = [
+        str(line.get("id"))
+        for line in lines
+        if isinstance(line, dict) and line.get("id")
+    ]
+    if line_item_id is not None and line_item_id not in line_ids:
+        raise ValueError(f"Unknown contract line item: {line_item_id}")
+    target_line_ids: list[str | None]
+    if line_item_id is not None:
+        target_line_ids = [line_item_id]
+    elif line_ids:
+        # A demo event without a line selector applies to every frozen line;
+        # the facts are still written separately so verification cannot leak
+        # one line's outcome into another.
+        target_line_ids = line_ids
+    else:
+        target_line_ids = [None]
 
     if kind == "ship":
         artifact_id = new_id("ev")
@@ -380,6 +429,7 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
             artifact_id,
             scenario_id,
             {"carrier": "SynthEx", "status": "shipped", "synthetic": True},
+            line_item_id=line_item_id,
         )
         append_event(
             aggregate_type="contract",
@@ -395,8 +445,22 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
             scenario_id=scenario_id,
         )
         facts = [
-            _fact(contract_id, "shipment.status", "shipped", artifact_id, scenario_id),
-            _fact(contract_id, "shipment.carrier", "SynthEx", artifact_id, scenario_id),
+            _fact(
+                contract_id,
+                "shipment.status",
+                "shipped",
+                artifact_id,
+                scenario_id,
+                line_item_id,
+            ),
+            _fact(
+                contract_id,
+                "shipment.carrier",
+                "SynthEx",
+                artifact_id,
+                scenario_id,
+                line_item_id,
+            ),
         ]
         return {"kind": "ship", "scenario": scenario, "facts": [_store_fact(f) for f in facts]}
 
@@ -409,9 +473,17 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
             artifact_id,
             scenario_id,
             {"query": "replacement.inventory", "available": available, "synthetic": True},
+            line_item_id=line_item_id,
         )
         facts = [
-            _fact(contract_id, "replacement.available", available, artifact_id, scenario_id)
+            _fact(
+                contract_id,
+                "replacement.available",
+                available,
+                artifact_id,
+                scenario_id,
+                line_item_id,
+            )
         ]
         return {
             "kind": "replacement_check",
@@ -422,24 +494,6 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
     if kind != "deliver":
         raise ValueError(f"Unsupported fulfillment kind: {kind}")
 
-    promises = _contract_promises(contract_id)
-    promised_warranty = _promise_value(promises, "warranty.type", "unknown")
-    promised_region = _promise_value(promises, "product.region", "IN")
-    promised_warranty_region = _promise_value(promises, "warranty.region", "IN")
-    promised_condition = _promise_value(promises, "condition", "new")
-    promised_by_date = _promise_value(promises, "delivery.promised_by_date")
-
-    delivered_warranty = promised_warranty
-    delivered_region = promised_region
-    delivered_warranty_region = promised_warranty_region
-    delay_days = 0
-    if scenario == "wrong_variant":
-        delivered_warranty = "seller"
-        delivered_region = "AE"
-        delivered_warranty_region = "AE"
-    elif scenario == "late":
-        delay_days = 3
-
     artifact_id = new_id("ev")
     _materialize_evidence(
         contract_id,
@@ -449,11 +503,10 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
         {
             "scenario": scenario or "correct",
             "carrier": "SynthEx",
-            "delivered_warranty": delivered_warranty,
-            "delivered_region": delivered_region,
-            "delay_days": delay_days,
+            "delay_days": 3 if scenario == "late" else 0,
             "synthetic": True,
         },
+        line_item_id=line_item_id if len(target_line_ids) == 1 else None,
     )
     append_event(
         aggregate_type="contract",
@@ -463,7 +516,7 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
             "scenario": scenario or "correct",
             "carrier": "SynthEx",
             "evidence_artifact_id": artifact_id,
-            "delay_days": delay_days,
+            "delay_days": 3 if scenario == "late" else 0,
             "synthetic": True,
         },
         synthetic=True,
@@ -472,54 +525,122 @@ def apply_fulfillment_event(contract_id: str, kind: str, scenario: str | None = 
 
     today = datetime.now(UTC).date()
     base_delivery = today - timedelta(days=2)  # plausible transit time before "today"
-    if promised_by_date and scenario == "late":
-        try:
-            promised_date = datetime.fromisoformat(str(promised_by_date)[:10]).date()
-            delivered_date = promised_date + timedelta(days=3)
-        except ValueError:
-            delivered_date = today + timedelta(days=3)
-    else:
-        delivered_date = base_delivery
+    promises = _contract_promises(contract_id)
+    line_by_id = {
+        str(line.get("id")): line
+        for line in lines
+        if isinstance(line, dict) and line.get("id")
+    }
+    facts: list[dict] = []
+    for target_id in target_line_ids:
+        promised_warranty = _promise_value(
+            promises, "warranty.type", "unknown", target_id
+        )
+        promised_region = _promise_value(promises, "product.region", "IN", target_id)
+        promised_warranty_region = _promise_value(
+            promises, "warranty.region", "IN", target_id
+        )
+        promised_condition = _promise_value(promises, "condition", "new", target_id)
+        promised_by_date = _promise_value(
+            promises, "delivery.promised_by_date", None, target_id
+        )
 
-    # Price/condition observed values: the contract record is truth for what
-    # was actually paid; condition follows the promised value on all
-    # scenarios (wrong_variant swaps warranty/region only).
-    contract = STORE.get(contract_id) or {}
-    paid_amount = contract.get("amount_paise")
-    if paid_amount is None:
-        paid_amount = _promise_value(promises, "price.amount_paise")
+        delivered_warranty = promised_warranty
+        delivered_region = promised_region
+        delivered_warranty_region = promised_warranty_region
+        if scenario == "wrong_variant":
+            delivered_warranty = "seller"
+            delivered_region = "AE"
+            delivered_warranty_region = "AE"
 
-    facts = [
-        _fact(contract_id, "warranty.type", delivered_warranty, artifact_id, scenario_id),
-        _fact(contract_id, "warranty.region", delivered_warranty_region, artifact_id, scenario_id),
-        _fact(contract_id, "product.region", delivered_region, artifact_id, scenario_id),
-        _fact(contract_id, "condition", promised_condition, artifact_id, scenario_id),
-        _fact(contract_id, "price.amount_paise", paid_amount, artifact_id, scenario_id),
-        _fact(
-            contract_id,
-            "delivery.delivered_date",
-            delivered_date.isoformat(),
-            artifact_id,
-            scenario_id,
-        ),
-    ]
+        if promised_by_date and scenario == "late":
+            try:
+                promised_date = datetime.fromisoformat(str(promised_by_date)[:10]).date()
+                delivered_date = promised_date + timedelta(days=3)
+            except ValueError:
+                delivered_date = today + timedelta(days=3)
+        else:
+            delivered_date = base_delivery
+
+        paid_amount = None
+        if target_id is not None:
+            paid_amount = (line_by_id.get(target_id) or {}).get("unit_amount_paise")
+        if paid_amount is None:
+            paid_amount = contract.get("amount_paise")
+        if paid_amount is None:
+            paid_amount = _promise_value(
+                promises, "price.amount_paise", None, target_id
+            )
+
+        facts.extend(
+            [
+                _fact(
+                    contract_id,
+                    "warranty.type",
+                    delivered_warranty,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+                _fact(
+                    contract_id,
+                    "warranty.region",
+                    delivered_warranty_region,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+                _fact(
+                    contract_id,
+                    "product.region",
+                    delivered_region,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+                _fact(
+                    contract_id,
+                    "condition",
+                    promised_condition,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+                _fact(
+                    contract_id,
+                    "price.amount_paise",
+                    paid_amount,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+                _fact(
+                    contract_id,
+                    "delivery.delivered_date",
+                    delivered_date.isoformat(),
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                ),
+            ]
+        )
+        if scenario == "late":
+            facts.append(
+                _fact(
+                    contract_id,
+                    "delivery.days_late",
+                    3,
+                    artifact_id,
+                    scenario_id,
+                    target_id,
+                )
+            )
 
     result: dict[str, Any] = {
         "kind": "deliver",
         "scenario": scenario or "correct",
         "facts": [_store_fact(f) for f in facts],
     }
-    # Late deliveries additionally expose the SLA delta as its own fact so
-    # remedy planners can size compensation without recomputing dates.
-    if scenario == "late":
-        late_fact = _fact(
-            contract_id,
-            "delivery.days_late",
-            3,
-            artifact_id,
-            scenario_id,
-        )
-        result["facts"].append(_store_fact(late_fact))
     return result
 
 

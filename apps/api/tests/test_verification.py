@@ -43,20 +43,27 @@ def _mk_contract(
     return cid, result
 
 
-def _fact(cid: str, key: str, value: Any, at: str | None = None) -> str:
+def _fact(
+    cid: str,
+    key: str,
+    value: Any,
+    at: str | None = None,
+    line_item_id: str | None = None,
+) -> str:
     fid = f"obs_{key.replace('.', '_')}_{abs(hash((cid, key, str(value)))) % 10**8}"
-    STORE.put(
-        {
-            "_type": "fact",
-            "id": fid,
-            "contract_id": cid,
-            "key": key,
-            "value": value,
-            "observed_at": at or datetime.now(UTC).isoformat(),
-            "synthetic": True,
-            "scenario_id": "test",
-        }
-    )
+    record = {
+        "_type": "fact",
+        "id": fid,
+        "contract_id": cid,
+        "key": key,
+        "value": value,
+        "observed_at": at or datetime.now(UTC).isoformat(),
+        "synthetic": True,
+        "scenario_id": "test",
+    }
+    if line_item_id is not None:
+        record["line_item_id"] = line_item_id
+    STORE.put(record)
     return fid
 
 
@@ -94,6 +101,71 @@ def test_region_alias_fact_satisfies():
         _fact(cid, k, v)
     res = evaluate_contract(cid)
     assert res["satisfied"] is True
+
+
+def test_multi_line_verification_scopes_facts_to_their_frozen_line():
+    """A wrong delivery on one bundle line cannot breach the other line."""
+    intent = _intent()
+    offer_a = _offer(id="off_line_a", sku="AST-LINE-A")
+    offer_b = _offer(id="off_line_b", sku="AST-LINE-B")
+    frozen_a = freeze_promise_set(offer_a, intent, line_item_id="li_line_a")
+    frozen_b = freeze_promise_set(offer_b, intent, line_item_id="li_line_b")
+    cid = (
+        "con_line_"
+        f"{abs(hash((frozen_a['promise_set_hash'], frozen_b['promise_set_hash']))) % 10**8}"
+    )
+    STORE.put(
+        {
+            "_type": "contract",
+            "id": cid,
+            "intent_id": intent["id"],
+            "offer_id": offer_a["id"],
+            "promise_ids": frozen_a["promise_ids"] + frozen_b["promise_ids"],
+            "line_items": [
+                {"id": "li_line_a", "offer_id": offer_a["id"], "quantity": 1},
+                {"id": "li_line_b", "offer_id": offer_b["id"], "quantity": 1},
+            ],
+            "amount_paise": 2_299_800,
+            "status": "DELIVERED",
+        }
+    )
+    bind_to_contract(
+        cid,
+        promise_ids=frozen_a["promise_ids"] + frozen_b["promise_ids"],
+        evidence_ids=frozen_a["evidence_ids"] + frozen_b["evidence_ids"],
+    )
+
+    common = [
+        ("condition", "new"),
+        ("price.amount_paise", 1_149_900),
+        ("delivery.delivered_date", "2026-08-27T18:00:00+00:00"),
+    ]
+    for key, value in [
+        ("warranty.type", "manufacturer"),
+        ("warranty.region", "IN"),
+        ("product.region", "IN"),
+        *common,
+    ]:
+        _fact(cid, key, value, line_item_id="li_line_a")
+    for key, value in [
+        ("warranty.type", "seller"),
+        ("warranty.region", "AE"),
+        ("product.region", "AE"),
+        *common,
+    ]:
+        _fact(cid, key, value, line_item_id="li_line_b")
+
+    try:
+        result = evaluate_contract(cid)
+        assert result["satisfied"] is False
+        assert result["status_target"] == "BREACH_DETECTED"
+        assert result["breaches"]
+        assert {breach.line_item_id for breach in result["breaches"]} == {"li_line_b"}
+    finally:
+        for record_type in ("fact", "breach", "promise", "evidence", "contract"):
+            for record in STORE.list(record_type):
+                if record.get("contract_id") == cid:
+                    STORE.delete(record["id"])
 
 
 # ---------------------------------------------------------------- hero breach

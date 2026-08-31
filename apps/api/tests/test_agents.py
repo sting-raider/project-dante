@@ -103,6 +103,20 @@ def test_expensive_offer_fails_price_cap():
     assert "max_price_paise" in keys or "max_total_amount_paise" in keys
 
 
+def test_multi_quantity_requires_enough_inventory():
+    """A bundle line must have stock for every requested unit, not just one."""
+    ev = OfferEvaluatorAgent().evaluate(
+        _intent(quantity=2), [_offer(inventory=1)]
+    )[0]["evaluation"]
+    assert ev["feasible"] is False
+    assert any(
+        failure["key"] == "inventory"
+        and failure["expected"] == 2
+        and failure["actual"] == 1
+        for failure in ev["hard_failures"]
+    )
+
+
 def test_wrong_category_and_form_factor_fail():
     offer = _offer(category="earbuds", attributes={"form_factor": "earbuds", "anc": True})
     ev = OfferEvaluatorAgent().evaluate(_intent(), [offer])[0]["evaluation"]
@@ -529,6 +543,220 @@ def test_select_stamps_evaluation_for_verifier_floor():
         STORE.delete(rec["id"])
     STORE.delete(cid)
     STORE.delete(iid)
+
+
+def test_payment_drift_check_prefers_live_merchant_truth_over_stale_seed():
+    """A persisted catalog seed may carry yesterday's derived delivery date.
+
+    Selection freezes the live merchant response, so the payment executor must
+    re-check that same merchant surface before falling back to the seeded STORE
+    offer.  Otherwise a fresh contract is falsely blocked as drifted.
+    """
+    import asyncio
+    from copy import deepcopy
+
+    from project_dante.api.routes.intents import (
+        compile_intent,
+        search_offers,
+        select_offer,
+    )
+    from project_dante.api.routes.payments import _recompute_contract_hash
+    from project_dante.db.store import STORE
+
+    compiled = asyncio.run(
+        compile_intent(
+            type(
+                "B",
+                (),
+                {
+                    "raw_text": (
+                        "Buy me over-ear ANC headphones under ₹12,000 with an "
+                        "Indian manufacturer warranty."
+                    )
+                },
+            )()
+        )
+    )
+    intent_id = compiled["intent"]["id"]
+    searched = asyncio.run(search_offers(intent_id))
+    selected = next(
+        result["offer"]
+        for result in searched["results"]
+        if result["evaluation"]["feasible"]
+    )
+
+    stale = deepcopy(selected)
+    stale["delivery_promise"]["promised_by_date"] = "2000-01-01"
+    stale["_type"] = "offer"
+    STORE.put(stale)
+
+    frozen = asyncio.run(
+        select_offer(
+            intent_id,
+            type("S", (), {"offer_id": selected["id"]})(),
+        )
+    )
+    contract = STORE.get(frozen["contract"]["id"])
+
+    assert contract is not None
+    assert _recompute_contract_hash(contract) == contract["contract_hash"]
+
+
+def test_authorize_retry_is_idempotent_after_partial_stage_one():
+    """A lost response after authorization must not strand checkout retries."""
+    import asyncio
+
+    from project_dante.api.routes.contracts import authorize_contract
+    from project_dante.api.routes.intents import (
+        compile_intent,
+        search_offers,
+        select_offer,
+    )
+    from project_dante.domain.events import LOG
+
+    compiled = asyncio.run(
+        compile_intent(
+            type(
+                "B",
+                (),
+                {
+                    "raw_text": (
+                        "Buy me over-ear ANC headphones under ₹12,000 with an "
+                        "Indian manufacturer warranty."
+                    )
+                },
+            )()
+        )
+    )
+    intent_id = compiled["intent"]["id"]
+    searched = asyncio.run(search_offers(intent_id))
+    selected_offer_id = next(
+        result["offer"]["id"]
+        for result in searched["results"]
+        if result["evaluation"]["feasible"]
+    )
+    frozen = asyncio.run(
+        select_offer(
+            intent_id,
+            type("S", (), {"offer_id": selected_offer_id})(),
+        )
+    )
+    contract_id = frozen["contract"]["id"]
+
+    first = asyncio.run(authorize_contract(contract_id))
+    second = asyncio.run(authorize_contract(contract_id))
+
+    assert first["contract"]["status"] == "AWAITING_BUYER_AUTH"
+    assert second["contract"] == first["contract"]
+    assert len(
+        [
+            event
+            for event in LOG.for_aggregate(contract_id)
+            if event["event_type"] == "BUYER_AUTHORIZED"
+        ]
+    ) == 1
+
+
+def test_multi_item_search_and_select_freezes_one_aggregate_contract():
+    """A two-product brief gets one offer per item and one checkout total."""
+    import asyncio
+
+    from project_dante.api.routes.intents import (
+        compile_intent,
+        search_offers,
+        select_offer,
+    )
+    from project_dante.db.store import STORE
+
+    brief = (
+        "Buy me a monitor under ₹20,000 and a keyboard under ₹8,000. "
+        "Both items must arrive within 5 days. Keep the total order under ₹30,000."
+    )
+    r1 = asyncio.run(compile_intent(type("B", (), {"raw_text": brief})()))
+    iid = r1["intent"]["id"]
+    r2 = asyncio.run(search_offers(iid))
+
+    assert [item["item_id"] for item in r2["items"]] == ["monitor-1", "keyboard-1"]
+    assert all(item["feasible_count"] > 0 for item in r2["items"])
+    recommendation = r2["bundle_recommendation"]
+    assert recommendation["available"] is True
+    assert set(recommendation["offer_ids"]) == {"monitor-1", "keyboard-1"}
+    assert recommendation["total_amount_paise"] <= 3_000_000
+
+    request_items = [
+        type(
+            "Item",
+            (),
+            {
+                "item_id": item["item_id"],
+                "offer_id": next(
+                    result["offer"]["id"]
+                    for result in item["results"]
+                    if result["evaluation"]["feasible"]
+                ),
+            },
+        )()
+        for item in r2["items"]
+    ]
+    body = type("S", (), {"offer_id": None, "items": request_items})()
+    r3 = asyncio.run(select_offer(iid, body))
+    contract = r3["contract"]
+
+    try:
+        assert len(contract["line_items"]) == 2
+        assert contract["amount_paise"] == sum(
+            item["amount_paise"] for item in contract["line_items"]
+        )
+        assert contract["amount_paise"] <= 3_000_000
+        assert len(r3["promises"]) > 0
+        assert {
+            promise.get("line_item_id") for promise in r3["promises"]
+        } == {item["id"] for item in contract["line_items"]}
+        assert {
+            evaluation.get("item_id")
+            for evaluation in STORE.find("evaluation", contract_id=contract["id"])
+        } == {"monitor-1", "keyboard-1"}
+    finally:
+        for record_type in ("evaluation", "promise", "evidence", "contract"):
+            for record in STORE.list(record_type):
+                if record.get("intent_id") == iid or record.get("contract_id") == contract["id"]:
+                    STORE.delete(record["id"])
+        STORE.delete(iid)
+
+
+def test_exact_monitor_keyboard_brief_returns_a_feasible_bundle():
+    """The brief used in the buyer-desk regression has a real fixture match."""
+    import asyncio
+
+    from project_dante.api.routes.intents import compile_intent, search_offers
+    from project_dante.db.store import STORE
+
+    brief = (
+        "Buy me a 27-inch QHD monitor under ₹25,000 and a mechanical keyboard under "
+        "₹8,000. The monitor must have an IPS panel, at least a 144 Hz refresh rate, "
+        "DisplayPort, and an Indian manufacturer warranty. The keyboard should be 75% "
+        "or TKL, hot-swappable, wireless, and also have an Indian manufacturer warranty. "
+        "I prefer tactile switches, but linear switches are acceptable. Both items must "
+        "arrive within 5 days. Do not show me any monitor over ₹25,000 or any keyboard "
+        "over ₹8,000. Keep the total order under ₹33,000."
+    )
+    r1 = asyncio.run(compile_intent(type("B", (), {"raw_text": brief})()))
+    iid = r1["intent"]["id"]
+    r2 = asyncio.run(search_offers(iid))
+
+    try:
+        assert {item["item_id"] for item in r2["items"]} == {"monitor-1", "keyboard-1"}
+        assert all(item["feasible_count"] > 0 for item in r2["items"])
+        recommendation = r2["bundle_recommendation"]
+        assert recommendation["available"] is True
+        assert set(recommendation["offer_ids"]) == {"monitor-1", "keyboard-1"}
+        assert recommendation["total_amount_paise"] < 3_300_000
+    finally:
+        for record_type in ("evaluation", "promise", "evidence", "contract"):
+            for record in STORE.list(record_type):
+                if record.get("intent_id") == iid:
+                    STORE.delete(record["id"])
+        STORE.delete(iid)
 
 class TitleFallbackScopingTests(unittest.TestCase):
     """Final-assault [12]: the title stand-in must apply ONLY to category.

@@ -43,6 +43,18 @@ export type DanteContractFull = {
   display_code?: string | null;
   intent_id: string;
   offer_id: string;
+  line_items?: {
+    id: string;
+    intent_item_id?: string | null;
+    offer_id: string;
+    sku: string;
+    title: string;
+    quantity: number;
+    unit_amount_paise: number;
+    amount_paise: number;
+    offer_hash?: string | null;
+    promise_ids?: string[];
+  }[];
   promise_ids?: string[];
   entitlement_ids?: string[];
   buyer_authority?: AuthorityEnvelope | null;
@@ -65,6 +77,7 @@ export type DanteContractFull = {
 export type PromiseRec = {
   id: string;
   contract_id?: string | null;
+  line_item_id?: string | null;
   key: string;
   value: unknown;
   normalized_value?: unknown;
@@ -81,6 +94,7 @@ export type PromiseRec = {
 export type EvidenceArtifactRec = {
   id: string;
   contract_id?: string | null;
+  line_item_id?: string | null;
   source_type: string;
   raw_payload_ref?: string;
   sha256: string;
@@ -94,6 +108,7 @@ export type EvidenceArtifactRec = {
 export type Breach = {
   id: string;
   contract_id: string;
+  line_item_id?: string | null;
   promise_id: string;
   observed_fact_id: string;
   severity: "informational" | "minor" | "material" | "critical";

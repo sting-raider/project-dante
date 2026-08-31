@@ -40,6 +40,7 @@ evals/reports/.pytest-subsets/
 
 # --- runtime JSON stores (any depth, any variant) ---
 **/.dante-*.json
+**/.dante-*.json.lock
 
 test-results/
 playwright-report/
