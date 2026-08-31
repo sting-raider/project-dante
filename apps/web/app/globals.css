@@ -1107,3 +1107,107 @@
     min-width: 640px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Remedy planner — connect ranked alternatives to the affected line
+--------------------------------------------------------------------------- */
+
+.remedy-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(3 152 85 / 4%), transparent 22rem),
+    var(--color-paper);
+}
+
+.remedy-masthead {
+  max-width: 66rem;
+}
+
+.remedy-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 2rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.remedy-summary-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 3px 12px rgb(16 24 40 / 3%);
+}
+
+.remedy-summary-label,
+.remedy-summary-detail {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.remedy-summary-value {
+  display: block;
+  margin-top: 0.65rem;
+  color: var(--color-ink);
+  font-size: 1.2rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.remedy-summary-value-small {
+  overflow: hidden;
+  font-size: 0.95rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remedy-summary-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.remedy-candidate-card {
+  overflow: hidden;
+  box-shadow: 0 5px 18px rgb(16 24 40 / 3%);
+}
+
+.remedy-scope-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-paper);
+  padding: 0.65rem 1.25rem;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+.remedy-scope-strip strong {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+@media (min-width: 768px) {
+  .remedy-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .remedy-summary-card {
+    padding: 1.15rem;
+  }
+}
