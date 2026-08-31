@@ -728,6 +728,70 @@ def test_multi_item_llm_provenance_requires_and_records_every_basket_line():
         STORE.delete(intent.id)
 
 
+def test_multi_item_semantic_retry_can_earn_llm_provenance():
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+
+    rules = rule_compile(MULTI_ITEM_BRIEF)
+    payload = {
+        "hard_constraints": [
+            constraint.model_dump(mode="json")
+            for constraint in rules.hard_constraints
+        ],
+        "soft_preferences": [
+            preference.model_dump(mode="json")
+            for preference in rules.soft_preferences
+        ],
+        "max_total_amount_paise": rules.max_total_amount_paise,
+        "substitutions_allowed": rules.substitutions_allowed,
+        "items": [
+            {
+                "label": item.label,
+                "hard_constraints": [
+                    constraint.model_dump(mode="json")
+                    for constraint in item.hard_constraints
+                ],
+                "soft_preferences": [
+                    preference.model_dump(mode="json")
+                    for preference in item.soft_preferences
+                ],
+                "max_price_paise": item.max_price_paise,
+                "quantity": item.quantity,
+            }
+            for item in rules.items
+        ],
+    }
+
+    class SequencedProvider:
+        provider_name = "groq"
+        model = "qwen/qwen3.8-27b"
+        retries = 0
+
+        def __init__(self):
+            self.calls = 0
+
+        async def structured(self, **_kwargs):
+            self.calls += 1
+            response = dict(payload)
+            if self.calls == 1:
+                response["items"] = []
+            return CompiledIntentSchema.model_validate(response)
+
+    provider = SequencedProvider()
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=provider).compile(MULTI_ITEM_BRIEF)
+    )
+    try:
+        assert provider.calls == 2
+        assert intent.compilation_provenance.engine == "llm"
+        assert intent.compilation_provenance.fallback_reason is None
+        assert intent.compilation_provenance.validation_retries == 1
+    finally:
+        STORE.delete(intent.id)
+
+
 def test_configured_llm_provider_error_is_persisted_as_deterministic_fallback():
     import asyncio
 
