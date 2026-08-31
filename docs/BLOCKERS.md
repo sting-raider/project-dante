@@ -1,14 +1,14 @@
-# BLOCKERS — human action required for final proof
+# BLOCKERS — submission work remaining
 
-The local API is currently configured with Razorpay Test Mode and Groq in
-process memory. Historical single-line Test Mode evidence exists, but the
-amended requirement-5 proof is a fresh two-line monitor + keyboard basket. The
-remaining external steps are registering the public HTTPS webhook endpoint in
-the authenticated Razorpay Test Mode dashboard and completing the Standard
-Checkout payment; after that, the verifier finishes the synthetic breach,
-rights, scoped remedy, refund, replay, and evidence checks automatically.
+The local API was configured with Razorpay Test Mode and Groq for the completed
+proof. The fresh two-line monitor + keyboard run is recorded in
+`REAL_INTEGRATION_STATUS.md`: the real order, payment, signed webhook, synthetic
+one-line breach, line-scoped remedy/refund, idempotent replay, and final audit
+reconciliation all passed. All eleven real-integration criteria are PROVEN.
+Remaining blockers are deployment access and submission assets, not payment
+verification.
 
-## 1. If starting a fresh API process: Razorpay Test Mode credentials
+## 1. If reproducing a fresh local proof: Razorpay Test Mode credentials
 
 Copy `.env.example` → `.env` at repo root and fill:
 
@@ -30,7 +30,7 @@ If that wait expires after an order was created, use
 `--resume-contract con_... --wait 600` to continue the same contract without
 resetting the store or creating a second Razorpay order.
 
-## 2. LLM API key (required for the amended final basket proof)
+## 2. LLM API key (required for a fresh LLM basket proof)
 
 Any one of:
 ```dotenv
@@ -53,3 +53,10 @@ LLM_API_KEY=<groq-api-key>
 If I cannot authenticate to Railway/Vercel from this environment, either run
 the deploy steps in docs/DEPLOYMENT.md yourself or grant access. All
 deployment config files are prepared so this is copy-paste.
+
+## 4. Submission assets and credential rotation
+
+Before public deployment, rotate the Test Mode and LLM credentials used for the
+local proof and configure only the rotated values in the deployed services. Then
+record the final video, refresh the 11 screenshots, and replace the
+`[LIVE_DEMO_URL]` and `[VIDEO_URL]` placeholders in `docs/SUBMISSION.md`.

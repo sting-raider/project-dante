@@ -8,8 +8,8 @@
 > is live when you record. Fulfillment is synthetic and labeled either way, and
 > agents propose while deterministic code disposes. Real-gateway proof status:
 > REAL_INTEGRATION_STATUS.md (historical single-line Test Mode rows 1–10 are
-> proven; the amended exact two-line LLM basket row 11 remains pending until
-> the final verifier run).
+> proven; the amended exact two-line LLM basket row 11 is now proven by the
+> completed verifier run).
 >
 > Pre-flight and fallbacks: docs/DEMO_SCRIPT.md. Capture checklist per shot:
 > docs/SCREENSHOTS.md.

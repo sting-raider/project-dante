@@ -1,12 +1,14 @@
 # EXECUTION STATUS — Project Dante Build
 
 **Plan:** PROJECT_DANTE_RAZORPAY_BUILDATHON_MASTER_PLAN.md
-**Updated:** 2026-09-01; final hardening and verification complete; release gates in progress.
+**Updated:** 2026-09-01; final hardening and real Test Mode verification complete;
+submission work remains.
 
 ## Current phase
 
-**Final verification** — quality-assault findings remediated; PostgreSQL CI is green;
-the amended exact two-line real-gateway/LLM proof remains tracked separately.
+**Submission preparation** — quality-assault findings remediated, PostgreSQL CI is
+green, and the fresh exact two-line real-gateway/LLM proof is complete. Deployment,
+screenshots, and video assets remain external submission work.
 
 ## Verified state
 
@@ -23,6 +25,11 @@ the amended exact two-line real-gateway/LLM proof remains tracked separately.
   Ruff is clean across `project_dante` and `tests`.
 - Frontend: ESLint clean, tsc clean, Next production build green (11 routes);
   the mandatory browser journey is green (8 tests).
+- **Fresh real-integration proof green**: the exact monitor-and-keyboard brief was
+  compiled with persisted `engine=llm` provenance using Groq/Qwen; Razorpay Test
+  Mode order, payment, signed webhook, one-line synthetic breach, line-scoped
+  refund, idempotent replay, and final reconciliation all passed. All eleven
+  criteria in `REAL_INTEGRATION_STATUS.md` are PROVEN.
 - **CI parity**: `.github/workflows/ci.yml` now enforces the backend mypy gate,
   root verification-script lint, all five deterministic evaluation suites, and the
   frontend ESLint gate alongside tests, Ruff, tsc, and the production build.
@@ -68,9 +75,9 @@ exercises Dante's code paths with genuinely computed HMAC signatures but no real
 gateway on the other end. Claims that additionally require the **real Razorpay
 Test Mode gateway** (real order/payment/refund ids, dashboard-secret webhook)
 are tracked criterion-by-criterion in
-[REAL_INTEGRATION_STATUS.md](../REAL_INTEGRATION_STATUS.md). Rows 1–10 have
-historical single-line Test Mode evidence; amended finalization row 11 requires
-the exact two-line brief to be compiled by the configured real LLM.
+[REAL_INTEGRATION_STATUS.md](../REAL_INTEGRATION_STATUS.md). Rows 1–10 retain
+historical single-line Test Mode evidence, and amended finalization row 11 now
+has a fresh exact two-line proof compiled by the configured real LLM.
 
 - [x] intent → selected offer → frozen contract → payment order created
       *(sandbox verified; real-gateway order creation: see ledger #1)*
@@ -82,3 +89,5 @@ the exact two-line brief to be compiled by the configured real LLM.
 - [x] breach → policy ALLOW → idempotent refund executed once → REMEDIATED
       *(sandbox verified; real-gateway refund + replay identity: ledger #9–10)*
 - [x] audit trail complete for the above (causal-chain timeline, append-only)
+- [x] exact two-line LLM basket → real Test Mode payment → signed webhook →
+      line-scoped breach/remedy/refund/replay proof *(ledger row 11)*

@@ -2,7 +2,8 @@
 
 **Plan:** PROJECT_DANTE_AUTONOMOUS_FINISH_PLAN.md
 **Baseline:** main @ 85e1649 (current checkout, aligned with origin/main).
-**Updated:** 2026-09-01; local hardening and verification complete; final proof pending.
+**Updated:** 2026-09-01; local hardening and fresh real-integration verification
+complete; submission assets remain.
 
 ## Completed workstreams
 
@@ -22,18 +23,23 @@
 - Ruff / mypy / tsc / next build: clean
 - Playwright/browser smoke: hero arc + checkout-options spec green (×3 consecutive runs); rendered audit/timeline/merchant surfaces verified
 - Sandbox E2E: PASSED across [01]–[16], including signed webhook, breach, policy, refund, idempotency, and audit
+- Fresh exact two-line real-integration proof: PROVEN across all eleven ledger
+  criteria, including `engine=llm`, Test Mode payment/webhook, one-line breach,
+  scoped refund, idempotent replay, and unaffected-line preservation
 
 ## Final phase
 
 - §42 review assault: COMPLETE; local review findings are remediated and the final gates are green
-- Historical single-line Razorpay Test Mode evidence is recorded; the amended
-  exact two-line LLM basket proof remains NOT_YET_PROVEN. See
-  `REAL_INTEGRATION_STATUS.md` and `docs/BLOCKERS.md`.
+- Historical single-line and fresh amended two-line Razorpay Test Mode evidence
+  are recorded; all eleven real-integration criteria are PROVEN. See
+  `REAL_INTEGRATION_STATUS.md`.
 
 ## Human blockers (docs/BLOCKERS.md)
 
-1. **One human Standard Checkout payment + webhook delivery** → the current local API
-   already has Razorpay Test Mode configured and has created a real order; the remaining
-   requirement-5 proof is the payment, webhook, and downstream refund run.
-2. Deployment account auth for Railway/Vercel (configs are copy-paste ready;
+1. **Deployment account auth for Railway/Vercel** (configs are copy-paste ready;
    Railway's release posture is managed PostgreSQL)
+2. **Submission assets** — record the final video and refresh the 11 screenshots
+   against the final commit; fill the live-demo and video links.
+3. **Credential rotation before public deployment** — replace the Test Mode and
+   LLM credentials used for the local proof, then configure the rotated values
+   in the deployed services.

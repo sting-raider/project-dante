@@ -146,10 +146,11 @@ endpoints to decide what it can hold the merchant to.
 
 *The checked-in images are local sandbox captures. Payment/refund behavior is
 explicitly badged SANDBOX and synthetic fulfillment is labeled. A prior
-single-line real Razorpay Test Mode smoke is recorded in
-`REAL_INTEGRATION_STATUS.md`; the final exact two-line LLM basket proof remains
-open until the amended verifier completes. Run locally — pages render best
-viewed wide.*
+single-line real Razorpay Test Mode smoke and the final exact two-line LLM basket
+proof are recorded in `REAL_INTEGRATION_STATUS.md`; all eleven real-integration
+criteria are now PROVEN. The final proof used real Test Mode order, payment,
+webhook, and line-scoped refund traffic; fulfillment remains synthetic and
+labeled. Run locally — pages render best viewed wide.*
 
 ---
 
