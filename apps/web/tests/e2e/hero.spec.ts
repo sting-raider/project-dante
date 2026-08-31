@@ -31,6 +31,11 @@ test.describe("sandbox hero arc", () => {
     // ---- reset the demo store so the arc starts from the seeded catalog ---
     const reset = await apiPost(api, "/api/demo/reset");
     if (reset.status === 403) {
+      if (process.env.CI) {
+        throw new Error(
+          "demo endpoints are locked in CI; the browser gate requires the sandbox rail or an operator token",
+        );
+      }
       test.skip(true, "demo endpoints locked (live-test-mode without operator token) — run with DANTE_DEMO_OPERATOR_TOKEN or unset RAZORPAY keys");
     }
     expect(reset.status, "POST /api/demo/reset").toBe(200);

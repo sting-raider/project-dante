@@ -1,21 +1,18 @@
 /**
  * Playwright E2E config — Project Dante browser gate (finish plan §22).
  *
- * Topology assumed by this file:
- *   - API  : http://localhost:8000   started externally
- *            (.venv/Scripts/python.exe -m uvicorn project_dante.api.app:app --port 8000)
- *   - Web  : http://localhost:3000   started externally (npm run dev)
+ * Service addresses used by this file:
+ *   - API  : http://localhost:8000   (uvicorn)
+ *   - Web  : http://localhost:3000   (Next dev server)
  *
- * There is deliberately NO `webServer` auto-start block: the demo story is
- * "two long-lived servers, tests attach to them". Playwright's built-in
- * `reuseExistingServer` behaviour only applies when a command is configured,
- * so instead every spec waits on real readiness itself:
+ * The config starts both services in CI and reuses an already-running local
+ * service when present. Every spec still waits on real readiness itself:
  *   - API reachability via GET /api/health before anything state-changing;
  *   - web reachability via the first page.goto retrying with expect.poll.
- * Run `npx playwright test` against already-running servers; if either is
- * down the specs SKIP with an explicit reason rather than failing noisily.
+ * Run `npx playwright test`; in CI, an unavailable service is a hard failure.
  */
 
+import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const API_BASE = process.env.DANTE_API_URL ?? "http://localhost:8000";
@@ -36,6 +33,22 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  webServer: [
+    {
+      command: "uv run uvicorn project_dante.api.app:app --host 127.0.0.1 --port 8000",
+      cwd: path.resolve(__dirname, "../api"),
+      url: `${API_BASE}/api/health`,
+      timeout: 120_000,
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      command: "npm run dev",
+      cwd: path.resolve(__dirname),
+      url: `${WEB_BASE}/buy`,
+      timeout: 120_000,
+      reuseExistingServer: !process.env.CI,
+    },
+  ],
 });
 
 /** Shared with the specs so they probe the same API base the config assumes. */
