@@ -7,7 +7,9 @@
 > without keys they run through the badged **SANDBOX** adapter — say which rail
 > is live when you record. Fulfillment is synthetic and labeled either way, and
 > agents propose while deterministic code disposes. Real-gateway proof status:
-> REAL_INTEGRATION_STATUS.md (all criteria NOT_YET_PROVEN until keys run).
+> REAL_INTEGRATION_STATUS.md (historical single-line Test Mode rows 1–10 are
+> proven; the amended exact two-line LLM basket row 11 remains pending until
+> the final verifier run).
 >
 > Pre-flight and fallbacks: docs/DEMO_SCRIPT.md. Capture checklist per shot:
 > docs/SCREENSHOTS.md.

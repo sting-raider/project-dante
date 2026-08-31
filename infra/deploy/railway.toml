@@ -5,10 +5,17 @@
 # select this file as the service config). One service = the FastAPI app;
 # the web tier deploys separately to Vercel (see vercel.json).
 #
-# SINGLE REPLICA IS MANDATORY (master plan §11.4): idempotency dedupe and
-# webhook ordering live in the process-wide JSON-snapshot store, so two
-# replicas would double-process concurrent first-time events. Keep
-# replica count at exactly 1; scale vertically, not horizontally.
+# FINAL STORAGE POSTURE: the release Railway service uses a managed PostgreSQL
+# service. In the API service's Variables tab, set
+#   DANTE_STORE_BACKEND=postgres
+#   DATABASE_URL=${{Postgres.DATABASE_URL}}
+# (the reference is resolved by Railway; do not paste database credentials into
+# this repository). The JSON snapshot remains an emergency single-replica
+# fallback for local recovery only, not the preferred deployment store.
+#
+# SINGLE REPLICA IS STILL THE DEMO RELEASE POSTURE (master plan §11.4): keep
+# replica count at exactly 1 and scale vertically, not horizontally. Postgres
+# supplies durable state; it does not authorize a wider operational rollout.
 #
 # Required environment variables (set in the Railway dashboard -> Variables):
 #   APP_ENV                  — set to "production"
@@ -17,16 +24,19 @@
 #   RAZORPAY_WEBHOOK_SECRET  — must match the dashboard webhook      [SECRET]
 #   DEMO_MODE                — "true" for the buildathon demo posture
 #   DEMO_OPERATOR_TOKEN      — required when real test keys are set  [SECRET]
+#   DANTE_STORE_BACKEND      — "postgres" for the release service
+#   DATABASE_URL             — "${{Postgres.DATABASE_URL}}" reference [SECRET]
 #   LLM_PROVIDER             — "" | anthropic | openai-compatible
 #   LLM_MODEL                — model name when a provider is set
 #   LLM_API_KEY              — provider key (omit => rules engine)   [SECRET]
 #   PUBLIC_APP_URL           — https://<web-app>.vercel.app (CORS origin)
 #   API_BASE_URL             — public https URL of THIS service
 #
-# Optional:
-#   DANTE_STORE_PATH         — default ".dante-store.json" in the deploy
-#                              root; mount a volume for persistence across
-#                              restarts.
+# Emergency JSON fallback only (do not set for the final Railway service):
+#   DANTE_STORE_BACKEND=json and DANTE_STORE_PATH=/data/.dante-store.json,
+#   with a Railway volume mounted at /data. The fallback is intentionally
+#   documented so recovery remains possible without making it the release
+#   default.
 # ======================================================================
 
 [build]

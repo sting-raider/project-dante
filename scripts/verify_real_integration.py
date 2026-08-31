@@ -417,7 +417,7 @@ def main() -> None:
         if all_proven:
             try:
                 EV.promote_checklist()
-                EV.log("checklist: all ten real-integration rows promoted to PROVEN")
+                EV.log("checklist: all eleven real-integration rows promoted to PROVEN")
             except Exception as exc:  # noqa: BLE001 - evidence must fail closed
                 all_proven = False
                 fail_msg = f"checklist promotion failed: {exc}"

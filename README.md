@@ -145,9 +145,11 @@ endpoints to decide what it can hold the merchant to.
 | [Append-only audit dossier](docs/screenshots/11-audit.png) | [Merchant intelligence](docs/screenshots/11-merchant.png) |
 
 *The checked-in images are local sandbox captures. Payment/refund behavior is
-explicitly badged SANDBOX and synthetic fulfillment is labeled; real Razorpay
-Test Mode order/payment/webhook/refund evidence remains NOT_YET_PROVEN. Run
-locally — pages render best viewed wide.*
+explicitly badged SANDBOX and synthetic fulfillment is labeled. A prior
+single-line real Razorpay Test Mode smoke is recorded in
+`REAL_INTEGRATION_STATUS.md`; the final exact two-line LLM basket proof remains
+open until the amended verifier completes. Run locally — pages render best
+viewed wide.*
 
 ---
 
@@ -195,7 +197,8 @@ escalation attempts, demo-mode guards, repo-wide secrets scan, state-machine abu
 ## Run it
 
 ### Prereqs
-- Node 20+, Python 3.12+ via [uv](https://docs.astral.sh/uv/), Docker (optional — Postgres/Redis reserved for future swap-in)
+- Node 20+, Python 3.12+ via [uv](https://docs.astral.sh/uv/), Docker (optional
+  for local development; CI and the final Railway deployment use PostgreSQL)
 
 ### Backend
 
@@ -259,7 +262,7 @@ apps/
       agents/           compiler, evaluator, provider (rules + Anthropic/OpenAI-compatible)
       domain/           types, state machine, events, hashing, promises, rights, remedies, money
       integrations/     razorpay (dual adapter), merchant (catalog + fulfillment sim)
-      db/               store (JSON-persisted, Postgres-swappable interface), seed
+      db/               store (Postgres release backend, JSON emergency fallback), seed
     tests/              full suite incl. red-team + webhook chaos
   web/                 Next.js 15 App Router frontend (editorial design system)
 evals/                 datasets, runners, reports
@@ -286,7 +289,8 @@ with real payment execution behind deterministic gates.
 One fictional merchant; synthetic fulfillment; no statutory/legal-right reasoning;
 no automated Razorpay Buyer Protection claim API; one payment provider;
 entitlements are demo-defined; outcome verification is only as strong as available
-evidence; JSON store rather than Postgres in P0 (interface mirrors relational model).
+evidence; the final Railway deployment uses managed Postgres while JSON remains
+an emergency single-replica recovery fallback.
 
 ## Future
 

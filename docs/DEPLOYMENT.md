@@ -17,11 +17,14 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
 ```
 
 - Money = integer paise end to end; no floats anywhere.
-- Single replica is **mandatory** (§11.4): webhook idempotency dedupe and
-  ordering live in the process-wide store. Scale vertically only.
-- The store is a JSON snapshot (`DANTE_STORE_PATH`, default
-  `.dante-store.json`). On Railway, mount a volume at the service root so
-  state survives restarts.
+- The final Railway service uses **managed PostgreSQL**. It is the durable
+  source of truth for contracts, webhook claims, audit events, and money
+  actions; JSON is not the preferred deployment store.
+- Single replica remains the buildathon release posture (§11.4): scale
+  vertically only while the demo is in production.
+- The JSON snapshot (`DANTE_STORE_BACKEND=json`) is an emergency single-replica
+  recovery fallback only. Use it with a mounted volume, never as the normal
+  final deployment path.
 
 ---
 
@@ -29,9 +32,11 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
 
 ### Click-path
 
-1. Sign in at [railway.com](https://railway.com) → **New Project** →
-   **Deploy from GitHub repo** → pick this repository.
-2. In the service card → ⋯ menu → **Settings**:
+1. Sign in at [railway.com](https://railway.com) → **New Project** → add
+   **Database → PostgreSQL**. Keep the database private to the Railway
+   project; Railway exposes a managed `DATABASE_URL` variable.
+2. **Deploy from GitHub repo** → pick this repository. In the service card →
+   ⋯ menu → **Settings**:
    - **Root Directory**: leave empty (repo root); the config below handles paths.
    - **Config file / Start command**: if the dashboard asks, point it at
      `infra/deploy/railway.toml`. Otherwise set the **Custom Start Command**
@@ -45,10 +50,12 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
    reads `healthcheckPath` from `railway.toml` automatically when the config
    file is used.)
 4. **Deploy → Replicas**: exactly **1**. Do not enable autoscaling.
-5. **Variables** tab: add the environment variables from §1.1.
+5. **Variables** tab: add the environment variables from §1.1. Set
+   `DANTE_STORE_BACKEND=postgres` and set `DATABASE_URL` to the Railway
+   reference `${{Postgres.DATABASE_URL}}` — do not copy database credentials.
 6. **Deploy** → watch build logs; first deploy takes a few minutes (uv sync).
-7. Optional persistence: **Storage → New Volume**, mount at `/data`, then set
-   `DANTE_STORE_PATH=/data/.dante-store.json` in Variables.
+7. Open `/api/ready` after deployment and require
+   `store_backend: "postgres"` before taking traffic.
 
 ### 1.1 Environment variables (API / Railway)
 
@@ -60,12 +67,14 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
 | `RAZORPAY_KEY_SECRET` | **SECRET** | Test-mode key secret (shown once — copy immediately). |
 | `RAZORPAY_WEBHOOK_SECRET` | **SECRET** | The secret you type into the Razorpay webhook form (§2). Must match exactly. |
 | `DEMO_OPERATOR_TOKEN` | **SECRET** | Required for `/api/demo/*` state changes and human remedy approvals (`/api/remedies/{proposal_id}/approve`) via `X-Demo-Operator-Token`. Empty ⇒ those writes are LOCKED. Generate with `openssl rand -hex 32`. |
+| `DANTE_STORE_BACKEND` | no | `postgres` for the release service. `json` is emergency recovery only. |
+| `DATABASE_URL` | **SECRET** | Railway reference variable `${{Postgres.DATABASE_URL}}`; keep the Postgres service private. |
 | `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible` \| `groq` (`groq` uses the OpenAI-compatible adapter). Empty ⇒ deterministic rules engine. |
 | `LLM_MODEL` | no | Model name when a provider is configured. |
 | `LLM_API_KEY` | **SECRET** | Provider credential. Omit for rules engine. |
 | `PUBLIC_APP_URL` | no | Vercel web URL, e.g. `https://dante-web.vercel.app`. Used as the CORS allow-listed origin. |
 | `API_BASE_URL` | no | This service's public URL (Razorpay order/checkout callbacks). |
-| `DANTE_STORE_PATH` | no | Optional. Set to a volume-mounted path for restart-safe persistence. |
+| `DANTE_STORE_PATH` | no | Emergency JSON fallback only; use a mounted path such as `/data/.dante-store.json`. |
 
 ### 1.2 CORS
 
@@ -157,9 +166,11 @@ Run these in order after both deploys land.
 1. **Health** — `curl https://<api>/api/health` →
    `200 {"status":"ok", …,"razorpay":"live-test-mode","llm":…}`.
 2. **Ready** — `curl -i https://<api>/api/ready` →
-   `200 {"ready":true,"store_backend":"json-snapshot","razorpay_mode":
+   `200 {"ready":true,"store_backend":"postgres","razorpay_mode":
    "live-test-mode","llm_engine":…,"demo_mode":true}`. A `503` here means
-   the store can't persist (read-only volume?) — fix before taking traffic.
+   the managed database is unavailable or the schema cannot be reached — fix
+   it before taking traffic. Do not accept a JSON-snapshot response as the
+   final Railway posture.
    Neither endpoint ever returns secrets.
 3. **Webhook delivery** — Razorpay dashboard → Webhooks → Send Test Sample →
    attempt log shows `200`; check Railway logs for the intake line. Then run
@@ -184,10 +195,12 @@ Run these in order after both deploys land.
 
 ## 5. Operations notes
 
-- **Single replica forever** (§11.4): two replicas would double-process
-  concurrent first-time webhook events until Postgres-backed uniqueness lands.
-- **Restart safety**: without a volume, restarts wipe in-memory state (JSON
-  snapshot lost). Mount the volume before demo day.
+- **Single replica for this release** (§11.4): keep one API replica while the
+  demo is in production and scale vertically. Managed Postgres keeps state
+  across restarts and deploys; no API volume is required.
+- **Emergency recovery**: if Postgres is unavailable, only an operator may
+  switch to `DANTE_STORE_BACKEND=json` with a mounted `/data` path. That mode
+  must be recorded as a degraded deployment and is not final proof.
 - **Rollback**: Railway/Vercel both keep per-deploy snapshots — redeploy the
   previous build from their timelines.
 - **Request tracing**: each response exposes `X-Trace-Id` and
