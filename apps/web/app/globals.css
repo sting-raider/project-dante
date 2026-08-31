@@ -1346,6 +1346,162 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Evidence surfaces — readable timeline, inspectable raw audit
+--------------------------------------------------------------------------- */
+
+.timeline-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(47 111 237 / 4%), transparent 24rem),
+    var(--color-paper);
+}
+
+.timeline-masthead {
+  max-width: 76rem;
+}
+
+.timeline-masthead-meta {
+  border-left: 2px solid var(--color-action);
+  padding-left: 1rem;
+}
+
+.timeline-summary-grid,
+.audit-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 2rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.timeline-summary-card,
+.audit-summary-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 3px 12px rgb(16 24 40 / 3%);
+}
+
+.timeline-summary-label,
+.timeline-summary-detail,
+.audit-summary-label,
+.audit-summary-detail {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.timeline-summary-value,
+.audit-summary-value {
+  display: block;
+  margin-top: 0.65rem;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 1.2rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-summary-detail,
+.audit-summary-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.timeline-filter-bar {
+  border-top: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+  padding-block: 0.75rem;
+}
+
+.timeline-trace-surface {
+  margin-top: 1rem;
+  border-top: 2px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-rule);
+  background: rgb(255 255 255 / 42%);
+}
+
+.timeline-trace-surface > li:last-child {
+  border-bottom: 0;
+}
+
+.audit-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(16 24 40 / 3%), transparent 24rem),
+    var(--color-paper);
+}
+
+.audit-summary-grid {
+  margin-top: 2rem;
+}
+
+.audit-summary-card {
+  min-height: 6.75rem;
+}
+
+.audit-section {
+  border-top: 1px solid var(--color-rule);
+  padding-top: 1.25rem;
+}
+
+.audit-contract-record table {
+  background: rgb(255 255 255 / 42%);
+}
+
+.audit-money-card {
+  box-shadow: 0 4px 16px rgb(16 24 40 / 3%);
+}
+
+.audit-agent-row {
+  padding-block: 0.7rem;
+}
+
+.audit-event-table {
+  box-shadow: 0 4px 16px rgb(16 24 40 / 3%);
+}
+
+@media (min-width: 768px) {
+  .timeline-summary-grid,
+  .audit-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .timeline-summary-card,
+  .audit-summary-card {
+    padding: 1.15rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .timeline-masthead-meta {
+    border-left: 0;
+    border-top: 2px solid var(--color-action);
+    padding-top: 0.75rem;
+    padding-left: 0;
+  }
+
+  .timeline-filter-bar {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .timeline-filter-bar button {
+    flex-shrink: 0;
+  }
+}
+
 @media (max-width: 767px) {
   .demo-manual-summary {
     align-items: flex-start;

@@ -178,6 +178,22 @@ test.describe("sandbox hero arc", () => {
       timeout: 30_000,
     });
 
+    // ---- 10b. human timeline + raw audit surfaces ------------------------
+    await page.goto(`/contract/${contractId}/timeline`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", { name: /Everything that happened/ }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("navigation", { name: "Event category filters" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Timeline summary" })).toBeVisible();
+
+    await page.goto(`/audit/${contractId}`, { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByText("CONTRACT RECORD · HASHES FULL-LENGTH", { exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("region", { name: "Audit summary" })).toBeVisible();
+
     // ---- 11. gated remedy pipeline -> REMEDIATED ---------------------------
     await page.goto(`/contract/${contractId}/remedy`, {
       waitUntil: "domcontentloaded",
