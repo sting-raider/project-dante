@@ -23,6 +23,11 @@ Each row flips to `PROVEN` **only** by a run of
 `rzp_test_*` keys; the script appends timestamped BEGIN-RUN / END-RUN blocks
 with the observed ids at the bottom of this file.
 
+The first ten rows below preserve the prior single-line Test Mode smoke
+evidence. The finalization gate adds row 11: it requires the exact two-line
+monitor + keyboard brief to be compiled by the configured real LLM and frozen
+as a two-line basket. A prior one-line run cannot satisfy that amended proof.
+
 | # | Criterion | Status | Evidence required | Observed |
 | --- | --- | --- | --- | --- |
 | 1 | **Real order created** — Razorpay Test Mode returns a real `order_...` id for the frozen contract amount | `PROVEN` | `order_` id printed by the script from `/api/contracts/{id}/payment-order` (`checkout_config.order_id`) with checkout key `rzp_test_*` | real Razorpay order id order_TW01twaOofBkn0 (amount 649900 paise, checkout key rzp_test_<redacted>) |
@@ -35,6 +40,7 @@ with the observed ids at the bottom of this file.
 | 8 | **Remedy planned + policy ALLOW** — planner proposes remedies, `refund_full` chosen, policy decision `ALLOW` | `PROVEN` | proposal id + `ALLOW` with policy ids | proposal rem_cd15f4cc32ae refund_full chosen; policy ALLOW policies=['P-REFUND-01', 'P-REFUND-02', 'P-REFUND-03'] |
 | 9 | **Real refund executed** — Razorpay Test Mode returns a real `rfnd_...` refund id | `PROVEN` | provider `rfnd_` id as `money_action.result_ref` from `/api/remedies/{id}/execute` | real Razorpay refund id rfnd_TW0AZfX02UIWfi (money_action=ma_cc4170ac59d7) |
 | 10 | **Repeat execute ⇒ no second refund** — replaying execute returns the identical refund id (one money effect) | `PROVEN` | second execute returns the same provider `rfnd_` id and same money-action id | repeat execute returned the SAME refund id rfnd_TW0AZfX02UIWfi (same money_action ma_cc4170ac59d7; single money effect) |
+| 11 | **Real LLM basket proof** — the exact monitor + keyboard brief is compiled by the configured LLM and frozen as two lines | `NOT_YET_PROVEN` | persisted `INTENT_COMPILED` provenance with `engine=llm`, `item_count=2`, and the frozen monitor + keyboard line ids | pending finalization run |
 
 ---
 
