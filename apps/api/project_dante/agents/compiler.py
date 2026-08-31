@@ -1420,12 +1420,14 @@ class IntentCompilerAgent:
         soft: list[Preference] = []
         for p in d.get("soft_preferences", []):
             try:
-                parsed = Preference(**p)
+                parsed_preference = Preference(**p)
             except Exception as exc:  # noqa: BLE001 — fail safe to rules
                 raise ValueError("LLM preference failed domain validation") from exc
-            if parsed.key not in _CANONICAL_INTENT_KEYS:
-                raise ValueError(f"LLM used unsupported preference key: {parsed.key}")
-            soft.append(parsed)
+            if parsed_preference.key not in _CANONICAL_INTENT_KEYS:
+                raise ValueError(
+                    f"LLM used unsupported preference key: {parsed_preference.key}"
+                )
+            soft.append(parsed_preference)
 
         def constraint_signature(items: list[Constraint]) -> list[str]:
             return sorted(

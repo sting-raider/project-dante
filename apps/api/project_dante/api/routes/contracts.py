@@ -87,6 +87,7 @@ async def authorize_contract(contract_id: str) -> dict[str, Any]:
         for p in STORE.list("promise")
         if p.get("contract_id") == contract_id and p.get("key") == "price.amount_paise"
     ]
+    amount_paise: int | None = None
     line_items = contract.get("line_items") or []
     if line_items:
         amount_paise = 0
@@ -115,10 +116,12 @@ async def authorize_contract(contract_id: str) -> dict[str, Any]:
                 )
             amount_paise += price * quantity
     else:
-        amount_paise = next(
+        legacy_amount = next(
             (p["value"] for p in price_promises if isinstance(p.get("value"), int)),
             None,
         )
+        if isinstance(legacy_amount, int) and not isinstance(legacy_amount, bool):
+            amount_paise = legacy_amount
     if amount_paise is None or amount_paise <= 0:
         raise HTTPException(status_code=409, detail="Cannot authorize: frozen price unknown")
     if contract.get("amount_paise") != amount_paise:

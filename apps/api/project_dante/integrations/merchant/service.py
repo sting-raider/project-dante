@@ -410,16 +410,16 @@ def apply_fulfillment_event(
     ]
     if line_item_id is not None and line_item_id not in line_ids:
         raise ValueError(f"Unknown contract line item: {line_item_id}")
-    target_line_ids: list[str | None]
+    target_line_ids: list[str | None] = []
     if line_item_id is not None:
-        target_line_ids = [line_item_id]
+        target_line_ids.append(line_item_id)
     elif line_ids:
         # A demo event without a line selector applies to every frozen line;
         # the facts are still written separately so verification cannot leak
         # one line's outcome into another.
-        target_line_ids = line_ids
+        target_line_ids.extend(line_ids)
     else:
-        target_line_ids = [None]
+        target_line_ids.append(None)
 
     if kind == "ship":
         artifact_id = new_id("ev")
@@ -444,7 +444,7 @@ def apply_fulfillment_event(
             synthetic=True,
             scenario_id=scenario_id,
         )
-        facts = [
+        shipment_facts = [
             _fact(
                 contract_id,
                 "shipment.status",
@@ -462,7 +462,11 @@ def apply_fulfillment_event(
                 line_item_id,
             ),
         ]
-        return {"kind": "ship", "scenario": scenario, "facts": [_store_fact(f) for f in facts]}
+        return {
+            "kind": "ship",
+            "scenario": scenario,
+            "facts": [_store_fact(f) for f in shipment_facts],
+        }
 
     if kind == "replacement_check":
         available = scenario != "unavailable"
@@ -475,7 +479,7 @@ def apply_fulfillment_event(
             {"query": "replacement.inventory", "available": available, "synthetic": True},
             line_item_id=line_item_id,
         )
-        facts = [
+        replacement_facts = [
             _fact(
                 contract_id,
                 "replacement.available",
@@ -488,7 +492,7 @@ def apply_fulfillment_event(
         return {
             "kind": "replacement_check",
             "scenario": scenario,
-            "facts": [_store_fact(f) for f in facts],
+            "facts": [_store_fact(f) for f in replacement_facts],
         }
 
     if kind != "deliver":
