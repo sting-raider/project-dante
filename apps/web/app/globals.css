@@ -885,3 +885,121 @@
     width: 100%;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Verification dossier — make breach scope legible before the details
+--------------------------------------------------------------------------- */
+
+.breach-dossier-page {
+  background:
+    linear-gradient(180deg, rgb(255 86 48 / 4%), transparent 18rem),
+    var(--color-paper);
+}
+
+.breach-masthead {
+  max-width: 62rem;
+}
+
+.breach-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 2rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.breach-summary-card {
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 3px 12px rgb(16 24 40 / 3%);
+}
+
+.breach-summary-label,
+.breach-summary-detail {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.breach-summary-value {
+  margin-top: 0.65rem;
+  color: var(--color-ink);
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.breach-summary-detail {
+  margin-top: 0.55rem;
+  font-size: 0.57rem;
+  letter-spacing: 0.08em;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.breach-comparison-section,
+.breach-verdict-section,
+.breach-evidence-section {
+  position: relative;
+}
+
+.breach-comparison-section {
+  overflow: hidden;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-bright);
+  padding: 1rem;
+  box-shadow: 0 6px 22px rgb(16 24 40 / 3%);
+}
+
+.breach-comparison-section > .grid {
+  margin-inline: -1rem;
+  padding-inline: 1rem;
+}
+
+.breach-comparison-section > div:not(.grid) {
+  margin-inline: -1rem;
+  padding-inline: 1rem;
+}
+
+.breach-verdict-section {
+  border-radius: var(--radius-lg);
+  background: rgb(255 255 255 / 55%);
+  padding-inline: 1rem;
+}
+
+.breach-evidence-section {
+  border-top: 1px solid var(--color-rule);
+  padding-top: 1.25rem;
+}
+
+.breach-next-actions a {
+  border-radius: var(--radius-md);
+}
+
+@media (min-width: 768px) {
+  .breach-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .breach-summary-card {
+    padding: 1.15rem;
+  }
+
+  .breach-comparison-section {
+    padding: 1.5rem;
+  }
+
+  .breach-comparison-section > .grid,
+  .breach-comparison-section > div:not(.grid) {
+    margin-inline: -1.5rem;
+    padding-inline: 1.5rem;
+  }
+}

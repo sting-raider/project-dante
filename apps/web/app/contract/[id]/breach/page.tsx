@@ -195,20 +195,26 @@ export default function BreachPage() {
     (max, b) => Math.max(max, severityRank[b.severity] ?? 0),
     0,
   );
+  const affectedLineIds = new Set(
+    (breaches ?? [])
+      .map((breach) => breach.line_item_id)
+      .filter((lineId): lineId is string => Boolean(lineId)),
+  );
+  const lineCount = Math.max(detail?.contract.line_items?.length ?? 0, 1);
 
   return (
-    <main className="min-h-screen bg-paper">
+    <main className="breach-dossier-page min-h-screen bg-paper">
       {/* Red breach rule entering the top of the page (plan §27.6). */}
       <div aria-hidden={true} className="h-1.5 w-full bg-signal" />
 
-      <div className="dante-container py-8 md:py-12">
+      <div className="breach-dossier-container dante-container py-8 md:py-12">
         <Folio
           issue="ISSUE 04 / BREACH"
           running={`DOSSIER / ${contractId.slice(0, 13).toUpperCase()}`}
           href={`/contract/${contractId}`}
         />
 
-        <header className="mt-10 md:mt-14">
+        <header className="breach-masthead mt-10 md:mt-14">
           <SectionLabel>VERIFICATION REPORT</SectionLabel>
           {/* Headline severity is gated (#7): only material|critical breaches
               earn the giant red MATERIAL BREACH spread; minor/informational
@@ -268,6 +274,33 @@ export default function BreachPage() {
           </div>
         </header>
 
+        <div className="breach-summary-grid" aria-label="Verification summary">
+          <div className="breach-summary-card">
+            <span className="breach-summary-label">Verification state</span>
+            <strong className={cn("breach-summary-value", anyBreach ? "text-signal" : "text-success")}>
+              {anyBreach ? "Mismatch found" : "Promises held"}
+            </strong>
+            <span className="breach-summary-detail">{detail ? statusLabel(detail.contract.status) : "Loading server truth"}</span>
+          </div>
+          <div className="breach-summary-card">
+            <span className="breach-summary-label">Affected scope</span>
+            <strong className="breach-summary-value">
+              {affectedLineIds.size > 0 ? `${affectedLineIds.size} ${affectedLineIds.size === 1 ? "line" : "lines"}` : "Watching"}
+            </strong>
+            <span className="breach-summary-detail">of {lineCount} frozen {lineCount === 1 ? "line" : "lines"}</span>
+          </div>
+          <div className="breach-summary-card">
+            <span className="breach-summary-label">Recorded breaches</span>
+            <strong className="breach-summary-value">{breaches?.length ?? "—"}</strong>
+            <span className="breach-summary-detail">material promise comparisons</span>
+          </div>
+          <div className="breach-summary-card">
+            <span className="breach-summary-label">Evidence trail</span>
+            <strong className="breach-summary-value">{evidence.length || "—"}</strong>
+            <span className="breach-summary-detail">hashed artifacts loaded</span>
+          </div>
+        </div>
+
         {error && (
           <p role="alert" className="mt-8 border-l-2 border-danger pl-3 font-mono text-xs text-danger">
             {error} — is the API on :8000?
@@ -283,7 +316,7 @@ export default function BreachPage() {
         {detail && (
           <>
             {/* PROMISED vs OBSERVED spread */}
-            <section aria-label="Promised versus observed" className="mt-12">
+            <section aria-label="Promised versus observed" className="breach-comparison-section mt-12">
               <div className="grid grid-cols-2 border-b border-ink pb-2">
                 <h2 className="font-mono text-xs font-medium uppercase tracking-[0.18em] text-ink">
                   Promised
@@ -369,7 +402,7 @@ export default function BreachPage() {
             </section>
 
             {/* Materiality verdict */}
-            <section className="mt-12 border-y border-ink py-6">
+            <section className="breach-verdict-section mt-12 border-y border-ink py-6">
               <p className="font-display text-2xl leading-snug md:text-3xl">
                 MATERIAL TO ORIGINAL INTENT:{" "}
                 <span className={anyBreach ? "text-signal" : "text-success"}>
@@ -401,7 +434,7 @@ export default function BreachPage() {
             </section>
 
             {/* Evidence */}
-            <section className="mt-12" aria-label="Evidence artifacts">
+            <section className="breach-evidence-section mt-12" aria-label="Evidence artifacts">
               <SectionLabel>SOURCE EVIDENCE · HASHED</SectionLabel>
               {evidence.length === 0 ? (
                 <p className="mt-4 font-mono text-xs uppercase tracking-[0.14em] text-ink-soft">
@@ -428,7 +461,7 @@ export default function BreachPage() {
 
             {/* Where next */}
             {anyBreach && (
-              <nav aria-label="Rights and remedies" className="mt-14 flex flex-wrap gap-4">
+              <nav aria-label="Rights and remedies" className="breach-next-actions mt-14 flex flex-wrap gap-4">
                 <Link
                   href={`/contract/${contractId}/rights`}
                   className="border border-ink px-6 py-3 font-mono text-xs uppercase tracking-[0.16em] text-ink transition-colors hover:bg-ink hover:text-paper-bright"
@@ -454,6 +487,10 @@ export default function BreachPage() {
 
 function humanKey(key: string): string {
   return key.replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function statusLabel(status: string): string {
+  return status.replaceAll("_", " ");
 }
 
 function short(h: string): string {
