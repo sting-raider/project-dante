@@ -818,7 +818,10 @@
   box-shadow: 0 4px 16px rgb(16 24 40 / 3%);
 }
 
-.contract-primary-grid > div > section,
+/* Stretch only the single offer panel in the left column. The right column
+   intentionally stacks hashes and authorization; applying height:100% to
+   every section there makes the second panel overflow into the ledger. */
+.contract-primary-grid > div:first-child > section,
 .contract-payment-section .md\:col-span-7 > section,
 .contract-payment-section .md\:col-span-5 > section {
   height: 100%;

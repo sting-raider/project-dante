@@ -388,4 +388,55 @@ test.describe("razorpay checkout options", () => {
     await expect(page.getByText("HTTP 503: API temporarily unavailable")).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   });
+
+  test("authorized dossier keeps stacked side panels above the promise ledger", async ({
+    page,
+    api,
+  }) => {
+    await requireServers(api, test.skip);
+
+    await page.route("**/api/intents/**", (route) =>
+      route.fulfill({ status: 404, body: "{}" }),
+    );
+    await page.route(`**/api/contracts/${MOCK_CONTRACT_ID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          contractPayload("PAYMENT_ORDER_CREATED", {
+            authorized: true,
+            razorpay_order_id: MOCK_ORDER_ID,
+          }),
+        ),
+      }),
+    );
+
+    await page.goto(`/contract/${MOCK_CONTRACT_ID}`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Material promises" })).toBeVisible();
+    await expect(page.getByText("Authorization envelope")).toBeVisible();
+
+    const bounds = await page.evaluate(() => {
+      const grid = document.querySelector(".contract-primary-grid");
+      const sidePanels = [
+        ...document.querySelectorAll(".contract-primary-grid > div:last-child > section"),
+      ];
+      const authorization = sidePanels.find((panel) =>
+        panel.textContent?.includes("Authorization envelope"),
+      );
+      const ledger = document.querySelector(".contract-ledger-section");
+      if (!grid || !authorization || !ledger) return null;
+      const gridRect = grid.getBoundingClientRect();
+      const authorizationRect = authorization.getBoundingClientRect();
+      const ledgerRect = ledger.getBoundingClientRect();
+      return {
+        gridBottom: gridRect.bottom,
+        authorizationBottom: authorizationRect.bottom,
+        ledgerTop: ledgerRect.top,
+      };
+    });
+
+    expect(bounds).not.toBeNull();
+    expect(bounds!.authorizationBottom).toBeLessThanOrEqual(bounds!.ledgerTop + 1);
+    expect(bounds!.authorizationBottom).toBeLessThanOrEqual(bounds!.gridBottom + 1);
+  });
 });
