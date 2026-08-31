@@ -535,7 +535,10 @@ def run_flow(
         cid = contract["id"]
         n_promises = len(body.get("promises", []))
         expect(n_promises >= 5, f"frozen promises too few: {n_promises}")
-        expect(len(contract.get("line_items") or []) == 2, "frozen contract is not a two-line basket")
+        expect(
+            len(contract.get("line_items") or []) == 2,
+            "frozen contract is not a two-line basket",
+        )
         expect(contract.get("promise_set_hash"), "promise_set_hash missing")
         log(
             f"freeze: contract={cid} lines={len(contract.get('line_items') or [])} "
@@ -682,7 +685,10 @@ def run_flow(
         f"/api/demo/contracts/{cid}/replacement-unavailable",
         json={"line_item_id": affected_line_id},
     )
-    expect(r.status_code == 200, f"scoped replacement-unavailable failed: {r.status_code} {r.text[:200]}")
+    expect(
+        r.status_code == 200,
+        f"scoped replacement-unavailable failed: {r.status_code} {r.text[:200]}",
+    )
     r = c.post(
         f"/api/demo/contracts/{cid}/deliver",
         json={"scenario": "wrong_variant", "line_item_id": affected_line_id},
@@ -722,7 +728,10 @@ def run_flow(
     EV.criterion("rights", True, f"rights graph nodes={len(graph['nodes'])} "
                                  f"edges={len(graph.get('edges', []))} eligible={len(eligible)} "
                                  f"blocked={len(blocked)} affected_line={affected_line_id}")
-    log(f"RIGHTS: nodes={len(graph['nodes'])} eligible={len(eligible)} blocked={len(blocked)} line={affected_line_id}")
+    log(
+        f"RIGHTS: nodes={len(graph['nodes'])} eligible={len(eligible)} "
+        f"blocked={len(blocked)} line={affected_line_id}"
+    )
 
     # ---- 11. remedy plan + policy --------------------------------------------------
     r = c.get(f"/api/contracts/{cid}/remedies")
@@ -745,7 +754,8 @@ def run_flow(
     expect(affected_amount > 0, "affected line has no frozen amount")
     expect(
         chosen.get("amount_paise") == affected_amount,
-        f"chosen remedy is not capped to affected line: {chosen.get('amount_paise')} vs {affected_amount}",
+        "chosen remedy is not capped to affected line: "
+        f"{chosen.get('amount_paise')} vs {affected_amount}",
     )
     rid = chosen["id"]
     r = c.post(f"/api/remedies/{rid}/policy")
@@ -766,7 +776,10 @@ def run_flow(
     refund_ref = ma.get("result_ref")
     expect(ma.get("line_item_id") == affected_line_id, "money action lost affected line scope")
     expect(ma.get("amount_paise") == affected_amount, "money action amount escaped line ceiling")
-    expect((ex.get("refund") or {}).get("line_item_id") == affected_line_id, "refund lost line scope")
+    expect(
+        (ex.get("refund") or {}).get("line_item_id") == affected_line_id,
+        "refund lost line scope",
+    )
     # This verifier has already proved live-test-mode above.  Accepting the
     # sandbox adapter's ``rf_`` shape here would let a miswired live run be
     # reported as real evidence, so the real-gateway ledger requires the
@@ -815,7 +828,10 @@ def run_flow(
         == {str(line.get("id")) for line in line_items},
         "unaffected basket line disappeared during scoped remediation",
     )
-    expect(final_contract.get("amount_paise") == amount_paise, "basket total drifted after line refund")
+    expect(
+        final_contract.get("amount_paise") == amount_paise,
+        "basket total drifted after line refund",
+    )
 
     # Re-fetch the timeline AFTER the refund so the audit check sees the full arc.
     r = c.get(f"/api/contracts/{cid}/timeline")
