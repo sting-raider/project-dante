@@ -51,7 +51,8 @@ async function request<T>(
   path: string,
   method: "GET" | "POST",
   body?: unknown,
-  options?: RequestOptions
+  options?: RequestOptions,
+  baseUrl: string = API,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -63,7 +64,8 @@ async function request<T>(
     once: true,
   });
 
-  const url = `${API}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = baseUrl ? `${baseUrl}${normalizedPath}` : normalizedPath;
   try {
     const res = await fetch(url, {
       method,
@@ -118,6 +120,19 @@ export async function apiPost<T>(
   options?: RequestOptions
 ): Promise<T> {
   return request<T>(path, "POST", body, options);
+}
+
+/**
+ * POST to a Next.js route on the current web origin. This is used for the
+ * development-only operator bridge: browser code never receives the demo
+ * operator secret, while the FastAPI endpoint remains token-gated.
+ */
+export async function appPost<T>(
+  path: string,
+  body?: unknown,
+  options?: RequestOptions,
+): Promise<T> {
+  return request<T>(path, "POST", body, options, "");
 }
 
 /**
