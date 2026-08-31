@@ -36,6 +36,17 @@ export type IntentItem = {
   quantity: number;
 };
 
+export type CompilationProvenance = {
+  engine: "rules" | "llm";
+  provider: string | null;
+  model: string | null;
+  compiler_version: string;
+  validation_retries: number;
+  trace_id: string | null;
+  item_count: number;
+  fallback_reason: "not_configured" | "provider_error" | "output_rejected" | null;
+};
+
 export type BuyerIntent = {
   id: string;
   raw_text: string;
@@ -47,6 +58,7 @@ export type BuyerIntent = {
   substitutions_allowed: boolean;
   created_at: string | null;
   compiler_version: string;
+  compilation_provenance?: CompilationProvenance;
 };
 
 export type MerchantOffer = {
@@ -537,13 +549,20 @@ export function useContractFlow() {
       let stage: FlowPhase = "compiling";
       try {
         setPhase(stage);
-        const compiled = await apiPost<{ intent: BuyerIntent; engine: string }>(
+        const compiled = await apiPost<{
+          intent: BuyerIntent;
+          engine: "rules" | "llm";
+          compilation_provenance?: CompilationProvenance;
+        }>(
           "/api/intents/compile",
           { raw_text: rawText },
         );
         if (!mountedRef.current) return;
         setIntent(compiled.intent);
-        setEngine(compiled.engine);
+        // Only persisted intent provenance can label the compiler.  The
+        // legacy top-level field remains readable for old API responses but
+        // is intentionally not used as evidence by the buyer surface.
+        setEngine(compiled.intent.compilation_provenance?.engine ?? null);
 
         stage = "searching";
         setPhase(stage);

@@ -364,13 +364,15 @@ async def compile_intent(body: CompileBody) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="raw_text must be non-empty")
     compiler = get_compiler()
     intent = await compiler.compile(body.raw_text)
-    return {"intent": intent.model_dump(mode="json"), "engine": _engine_of(compiler.name)}
-
-
-def _engine_of(agent_name: str) -> str:
-    # The agent logs its own engine to STORE; read the latest run for it.
-    runs = [r for r in STORE.list("agent_run") if r.get("agent_name") == agent_name]
-    return runs[-1].get("engine", "rules") if runs else "rules"
+    # The compiled intent is the authoritative server record.  Do not infer
+    # the engine from a "latest run" query: concurrent buyers could otherwise
+    # make this response label the wrong intent as LLM-compiled.
+    provenance = intent.compilation_provenance.model_dump(mode="json")
+    return {
+        "intent": intent.model_dump(mode="json"),
+        "engine": intent.compilation_provenance.engine,
+        "compilation_provenance": provenance,
+    }
 
 
 @router.post("/{intent_id}/search")

@@ -87,7 +87,7 @@ function ItemCard({ item }: { item: IntentItem }) {
   );
 }
 
-export function BuyingBrief({ intent, engine }: { intent: BuyerIntent | null; engine: string | null }) {
+export function BuyingBrief({ intent }: { intent: BuyerIntent | null }) {
   if (!intent) {
     return (
       <Panel tone="bright">
@@ -109,6 +109,14 @@ export function BuyingBrief({ intent, engine }: { intent: BuyerIntent | null; en
   const isBundle = items.length > 0;
   const hard = intent.hard_constraints.filter((constraint) => constraint.critical);
   const soft = intent.soft_preferences;
+  const provenance = intent.compilation_provenance;
+  const compilerLabel =
+    provenance?.engine === "llm"
+      ? "LLM compiled"
+      : provenance
+        ? "Deterministic fallback"
+        : "Compiler evidence unavailable";
+  const compilerTone = provenance?.engine === "llm" ? "success" : "neutral";
 
   return (
     <Panel tone="bright">
@@ -116,9 +124,17 @@ export function BuyingBrief({ intent, engine }: { intent: BuyerIntent | null; en
         <SectionLabel index="§">Buying brief</SectionLabel>
         <div className="flex items-center gap-2">
           {isBundle && <Badge tone="signal">{`${items.length} lines`}</Badge>}
-          {engine && <Badge>compiler · {engine}</Badge>}
+          <Badge tone={compilerTone}>{compilerLabel}</Badge>
         </div>
       </div>
+
+      {provenance && (
+        <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-soft">
+          {provenance.engine === "llm"
+            ? `${provenance.provider ?? "provider"} · ${provenance.model ?? "model"} · ${provenance.item_count} ${provenance.item_count === 1 ? "line" : "lines"} verified`
+            : `rules path · ${provenance.fallback_reason === "not_configured" ? "no provider configured" : "LLM output rejected safely"}`}
+        </p>
+      )}
 
       {isBundle ? (
         <div className="mt-5 space-y-3">
