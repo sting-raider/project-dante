@@ -122,14 +122,17 @@ export default function ContractPage() {
         amount: cfg.amount_paise, // integer paise — matches the server order
         currency: cfg.currency || "INR",
         name: "ASTER ELECTRONICS",
-        description: offerMemo?.offer.title ?? "Dante contract purchase",
+        description:
+          offerMemo?.items?.map((item) => `${item.quantity}× ${item.offer.title}`).join(", ") ??
+          offerMemo?.offer.title ??
+          "Dante contract purchase",
         order_id: cfg.order_id,
         prefill: { name: "Demo Buyer" },
         notes: {
           dante_contract_id: contractId,
           dante_order_id: String(cfg.order_id),
         },
-        theme: { color: "#F04A2D" },
+        theme: { color: "#2F6FED" },
         handler: () => {
           // The callback is advisory only. The signed Razorpay webhook is the
           // sole authority that can move the contract to PAID.
@@ -224,10 +227,10 @@ export default function ContractPage() {
   // transient poll failures degrade to the inline retrying notice (#2).
   if (flow.phase === "error_contract_load" || flow.phase === "error_poll") {
     return (
-      <main className="mx-auto min-h-screen max-w-6xl px-5 pb-24 pt-10 md:px-10">
+      <main className="dante-container min-h-screen pb-24 pt-8 md:pt-10">
         <Folio>Issue 01 / Buy</Folio>
         <Rule className="mt-4" />
-        <Panel tone="signal" className="mt-10">
+        <Panel tone="signal" className="mt-8">
           <h1 className="font-display text-3xl text-danger">Contract unavailable</h1>
           <p className="mt-3 font-body text-sm text-ink-soft">{flow.error}</p>
           <div className="mt-5 flex gap-3">
@@ -267,7 +270,7 @@ export default function ContractPage() {
   const authorized = contract.buyer_authority != null;
 
   return (
-    <main className="mx-auto min-h-screen max-w-6xl px-5 pb-40 pt-10 md:px-10">
+      <main className="dante-container min-h-screen pb-40 pt-8 md:pt-10">
       {/* Razorpay checkout.js — lazyOnload; opened on demand from the
           Stage 2 Pay click (never auto-opened without a user gesture) */}
       {!contract.sandbox_mode && !rzpScriptReady && (
@@ -280,10 +283,8 @@ export default function ContractPage() {
       )}
 
       {/* masthead */}
-      <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="font-mono text-[10px] uppercase tracking-[0.3em] text-ink-soft">
-          Dossier / {contract.display_code ?? contract.id}
-        </h1>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="folio-label text-action-deep">Purchase dossier</p><h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] text-ink md:text-4xl">{contract.display_code ?? contract.id}</h1></div>
         <Dateline>
           Frozen {contract.frozen_at ? new Date(contract.frozen_at).toLocaleString("en-IN") : "—"}
           {contract.sandbox_mode && (
@@ -296,7 +297,7 @@ export default function ContractPage() {
 
       {/* PAID banner */}
       {paid && (
-        <div className="mt-6 rounded-[2px] border border-success/50 bg-paper-bright px-5 py-4">
+        <div className="mt-6 rounded-lg border border-success/30 bg-paper-bright px-5 py-4 shadow-[0_1px_2px_rgba(16,24,40,0.03)]">
           <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-success">
             Paid — verified by webhook truth
           </span>{" "}
@@ -315,7 +316,7 @@ export default function ContractPage() {
       {(contract.status === "BREACH_DETECTED" ||
         contract.status === "REMEDIATED") && (
         <div
-          className={`mt-6 rounded-[2px] border px-5 py-4 ${
+          className={`mt-6 rounded-lg border px-5 py-4 ${
             contract.status === "BREACH_DETECTED"
               ? "border-signal/60 bg-paper-bright"
               : "border-success/50 bg-paper-bright"
@@ -383,7 +384,7 @@ export default function ContractPage() {
       {/* §1 intent recap */}
       <section className="mt-10">
         <SectionLabel index="§1">The original intent</SectionLabel>
-        <blockquote className="mt-4 border-l-2 border-signal pl-5 font-display text-[clamp(1.3rem,2.4vw,1.9rem)] leading-snug text-ink">
+          <blockquote className="mt-4 rounded-r-lg border-l-4 border-signal bg-signal/[0.04] px-5 py-4 text-[clamp(1.1rem,2vw,1.7rem)] font-medium leading-snug tracking-[-0.025em] text-ink">
           {brief ?? (
             <>
               Buyer brief archived under intent{" "}
@@ -398,6 +399,8 @@ export default function ContractPage() {
         <div className="md:col-span-7">
           <SelectedOfferPanel
             offer={offerMemo?.offer ?? null}
+            items={offerMemo?.items}
+            lineItems={contract.line_items}
             explanation={offerMemo?.explanation}
             softScores={offerMemo?.softScores}
           />
@@ -550,7 +553,11 @@ export default function ContractPage() {
             <AuthorizationCard
               contract={contract}
               promises={flow.promises}
-              offerTitle={offerMemo?.offer.title ?? null}
+              offerTitle={
+                offerMemo?.items
+                  ? `${offerMemo.items.length} frozen line items`
+                  : offerMemo?.offer.title ?? null
+              }
               onAuthorize={handleAuthorize}
               authorizing={authorizing || flow.phase === "opening_checkout"}
             />
@@ -613,7 +620,7 @@ export default function ContractPage() {
           </div>
         )}
 
-      {flow.phase === "error_authorize" && (
+      {(flow.phase === "error_authorize" || flow.phase === "error_order") && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-danger bg-paper-bright">
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-10">
             <p className="font-body text-[13px] text-danger">{flow.error}</p>

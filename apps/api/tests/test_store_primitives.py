@@ -29,3 +29,38 @@ def test_update_if_is_compare_and_swap(tmp_path):
         "con_cas", {"status": "PAYMENT_PENDING"}, status="FAILED"
     ) is False
     assert store.get("con_cas")["status"] == "PAID"  # type: ignore[index]
+
+
+def test_separate_store_instances_do_not_clobber_newer_snapshot(tmp_path):
+    """A stale API process must merge, never replace, another process's write."""
+    path = str(tmp_path / "shared-store.json")
+    contract_writer = Store(path)
+    webhook_writer = Store(path)
+
+    contract = {"_type": "contract", "id": "con_shared", "status": "PAYMENT_PENDING"}
+    webhook = {
+        "_type": "webhook_event",
+        "id": "evt_shared",
+        "event_type": "payment.captured",
+    }
+
+    contract_writer.put(contract)
+    webhook_writer.put(webhook)
+
+    restarted = Store(path)
+    assert restarted.get("con_shared") == contract
+    assert restarted.get("evt_shared") == webhook
+
+
+def test_store_reader_refreshes_after_external_writer(tmp_path):
+    path = str(tmp_path / "shared-store.json")
+    reader = Store(path)
+    writer = Store(path)
+
+    writer.put({"_type": "contract", "id": "con_visible", "status": "PAID"})
+
+    assert reader.get("con_visible") == {
+        "_type": "contract",
+        "id": "con_visible",
+        "status": "PAID",
+    }

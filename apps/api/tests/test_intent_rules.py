@@ -29,6 +29,16 @@ HERO = (
     "warranty, they must arrive by Thursday, and do not spend over ₹12,000."
 )
 
+MULTI_ITEM_BRIEF = (
+    "Buy me a 27-inch QHD monitor under ₹25,000 and a mechanical keyboard under "
+    "₹8,000. The monitor must have an IPS panel, at least a 144 Hz refresh rate, "
+    "DisplayPort, and an Indian manufacturer warranty. The keyboard should be 75% "
+    "or TKL, hot-swappable, wireless, and also have an Indian manufacturer warranty. "
+    "I prefer tactile switches, but linear switches are acceptable. Both items must "
+    "arrive within 5 days. Do not show me any monitor over ₹25,000 or any keyboard "
+    "over ₹8,000. Keep the total order under ₹33,000."
+)
+
 
 def _next_thursday():
     days_ahead = (3 - TODAY.weekday()) % 7
@@ -63,6 +73,63 @@ def test_hero_query_delivery_in_outcome():
 def test_hero_query_substitutions_default_allowed():
     intent = rule_compile(HERO)
     assert intent.substitutions_allowed is True
+
+
+def test_multi_item_brief_keeps_item_caps_and_shared_total_separate():
+    intent = rule_compile(MULTI_ITEM_BRIEF)
+
+    assert len(intent.items) == 2
+    monitor = next(item for item in intent.items if item.id == "monitor-1")
+    keyboard = next(item for item in intent.items if item.id == "keyboard-1")
+
+    assert monitor.max_price_paise == 2_500_000
+    assert keyboard.max_price_paise == 800_000
+    assert intent.max_total_amount_paise == 3_300_000
+    assert _val(monitor, "category") == "monitor"
+    assert _val(monitor, "attributes.screen_size_inches") == 27
+    assert _val(monitor, "attributes.resolution") == "qhd"
+    assert _val(monitor, "attributes.panel") == "ips"
+    assert _val(monitor, "attributes.refresh_rate_hz") == 144
+    assert next(
+        c for c in monitor.hard_constraints if c.key == "attributes.refresh_rate_hz"
+    ).op == "gte"
+    assert _val(monitor, "attributes.connectivity") == "displayport"
+    assert _val(keyboard, "category") == "keyboard"
+    assert _val(keyboard, "attributes.form_factor") == ["75-percent", "tkl"]
+    assert _val(keyboard, "attributes.hot_swappable") is True
+    assert _val(keyboard, "attributes.connectivity") == "wireless"
+    assert _val(monitor, "warranty.type") == "manufacturer"
+    assert _val(keyboard, "warranty.region") == "IN"
+    assert _val(monitor, "delivery_deadline") == (
+        datetime.now(UTC) + timedelta(days=5)
+    ).date().isoformat()
+    assert _val(keyboard, "delivery_deadline") == _val(monitor, "delivery_deadline")
+    assert any(
+        p.key == "attributes.switch_type" and p.value == "tactile"
+        for p in keyboard.soft_preferences
+    )
+
+
+def test_multi_item_brief_keeps_quantities_local_to_each_line():
+    intent = rule_compile(
+        "Buy two desks under ₹40,000 each and four ergonomic chairs under ₹15,000 "
+        "each. Keep the total order under ₹1,40,000."
+    )
+
+    assert [(item.id, item.quantity) for item in intent.items] == [
+        ("desk-1", 2),
+        ("chair-1", 4),
+    ]
+    assert intent.max_total_amount_paise == 14_000_000
+    assert next(item for item in intent.items if item.id == "desk-1").max_price_paise == 4_000_000
+    assert next(item for item in intent.items if item.id == "chair-1").max_price_paise == 1_500_000
+
+
+def test_multi_item_brief_accepts_a_parent_budget_without_line_caps():
+    intent = rule_compile("Buy a desk and a chair for my office. My budget is ₹50,000.")
+
+    assert intent.max_total_amount_paise == 5_000_000
+    assert all(item.max_price_paise is None for item in intent.items)
 
 
 # ---------------------------------------------------------------- price caps

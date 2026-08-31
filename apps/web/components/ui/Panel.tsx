@@ -18,7 +18,7 @@ export default function Panel({ children, label, aside, tone = "paper", classNam
   return (
     <section
       className={cn(
-        "rounded-lg border border-rule",
+        "rounded-lg border border-rule shadow-[0_1px_2px_rgba(16,24,40,0.03)]",
         tone === "bright" ? "bg-paper-bright" : "bg-paper",
         className
       )}

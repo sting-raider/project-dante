@@ -30,6 +30,14 @@ export interface BuyerIntent {
   raw_text: string;
   hard_constraints: { key: string; op: string; value: unknown; critical: boolean }[];
   soft_preferences?: { key: string; weight?: number; value?: unknown }[];
+  items?: {
+    id: string;
+    label: string;
+    hard_constraints: { key: string; op: string; value: unknown; critical: boolean }[];
+    soft_preferences?: { key: string; weight?: number; value?: unknown }[];
+    max_price_paise?: number | null;
+    quantity?: number;
+  }[];
   max_total_amount_paise?: number | null;
   autonomous_spend_limit_paise?: number | null;
   substitutions_allowed?: boolean;
@@ -62,6 +70,7 @@ export interface MerchantOffer {
     condition?: string;
     region?: string | null;
   };
+  attributes?: Record<string, unknown>;
 }
 
 export interface Promise_ {
@@ -82,6 +91,18 @@ export interface DanteContract {
   display_code?: string | null;
   intent_id: string;
   offer_id: string;
+  line_items?: {
+    id: string;
+    intent_item_id?: string | null;
+    offer_id: string;
+    sku: string;
+    title: string;
+    quantity: number;
+    unit_amount_paise: number;
+    amount_paise: number;
+    offer_hash?: string | null;
+    promise_ids?: string[];
+  }[];
   status: ContractStatus;
   amount_paise?: number | null;
   contract_hash?: string | null;

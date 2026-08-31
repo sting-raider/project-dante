@@ -27,7 +27,13 @@ from pydantic import BaseModel, Field, field_validator
 from project_dante.agents.provider import ModelProvider, _log_agent_run, get_provider
 from project_dante.db.store import STORE
 from project_dante.domain.events import append_event, new_id, now_iso
-from project_dante.domain.types import BuyerIntent, Constraint, OutcomeSpec, Preference
+from project_dante.domain.types import (
+    BuyerIntent,
+    Constraint,
+    IntentItem,
+    OutcomeSpec,
+    Preference,
+)
 from project_dante.settings import get_settings
 
 COMPILER_VERSION = "rules-v1"
@@ -189,9 +195,12 @@ stated, omit the field entirely; never write "unknown".
 - All money is integer paise (1 rupee = 100 paise); convert stated rupee caps.
 - Hard constraints are absolute; never relax or drop them.
 - Use only these exact evaluator keys: category, brand, sku, max_price_paise, \
-min_price_paise, attributes.form_factor, attributes.anc, warranty.type, \
-warranty.region, warranty.duration_months, variant.color, variant.storage, \
-condition, region, terms.region, and delivery_deadline. Do not invent aliases \
+min_price_paise, attributes.form_factor, attributes.anc, \
+attributes.screen_size_inches, attributes.resolution, attributes.panel, \
+attributes.refresh_rate_hz, attributes.connectivity, attributes.hot_swappable, \
+attributes.switch_type, warranty.type, warranty.region, \
+warranty.duration_months, variant.color, variant.storage, condition, region, \
+terms.region, and delivery_deadline. Do not invent aliases \
 such as "price", "delivery_time", "warranty", or "headphone_type".
 - A delivery window is represented by delivery_deadline as an ISO-8601 date; \
 warranty.type and warranty.region are separate constraints.
@@ -223,6 +232,14 @@ _CANONICAL_INTENT_KEYS = frozenset(
         "min_price_paise",
         "attributes.form_factor",
         "attributes.anc",
+        "attributes.screen_size_inches",
+        "attributes.resolution",
+        "attributes.panel",
+        "attributes.refresh_rate_hz",
+        "attributes.connectivity",
+        "attributes.hot_swappable",
+        "attributes.mechanical",
+        "attributes.switch_type",
         "warranty.type",
         "warranty.region",
         "warranty.duration_months",
@@ -321,6 +338,17 @@ _CATEGORIES = [
     ("mouse", "mice"),  # catalog category value is the plural 'mice'
     ("monitor", "monitor"),
     ("phone", "phone"),
+    # Common workspace categories are part of the generic item vocabulary even
+    # when the current Aster fixture does not carry those SKUs yet.  Keeping
+    # them typed means a merchant can add the category without changing the
+    # buyer contract shape; an empty catalog result still fails closed.
+    ("desk", "desk"),
+    ("chair", "chair"),
+    ("table", "table"),
+    ("cabinet", "cabinet"),
+    ("shelf", "shelf"),
+    ("lamp", "lamp"),
+    ("sofa", "sofa"),
 ]
 
 _RUPEE_AMOUNT = r"(?:₹|rs\.?|inr)\s*([0-9][0-9,]*(?:\.[0-9]+)?)"
@@ -577,6 +605,305 @@ def extract_attributes(text_l: str) -> list[Constraint]:
     if m:
         out.append(Constraint(key="variant.storage", op="eq", value=m.group(0).strip()))
     return out
+
+
+def _item_category_mentions(text_l: str) -> list[tuple[int, str, str]]:
+    """Return the first occurrence of each distinct catalog category.
+
+    Buyer briefs often repeat an item name in a later sentence (for example,
+    ``do not show me any monitor over ...``).  The first mention is the item
+    anchor; repeated mentions are kept inside the item's prose only when they
+    occur before the next distinct item.
+    """
+    found: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    for token, category in _CATEGORIES:
+        for match in re.finditer(rf"\b{re.escape(token)}s?\b", text_l):
+            if category in seen:
+                break
+            found.append((match.start(), token, category))
+            seen.add(category)
+            break
+    return sorted(found)
+
+
+def _total_cap_from_text(text: str) -> int | None:
+    """Extract a cap explicitly attached to the combined purchase total."""
+    total_markers = re.finditer(
+        r"\b(?:total(?:\s+order)?|overall|combined)\b[^.;\n]{0,100}|"
+        r"\b(?:total|overall|combined)\s+budget\b[^.;\n]{0,100}|"
+        r"\b(?:my|the|our)\s+budget\b[^.;\n]{0,100}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    caps: list[int] = []
+    for marker in total_markers:
+        cap, _constraints = extract_price_caps(marker.group(0))
+        if cap is not None:
+            caps.append(cap)
+    return min(caps) if caps else None
+
+
+def _item_specific_attributes(text_l: str, category: str) -> list[Constraint]:
+    """Parse structured feature requirements that belong to one item."""
+    out = extract_attributes(text_l)
+
+    if category == "monitor":
+        size = re.search(r"\b(\d+(?:\.\d+)?)\s*[- ]?inch(?:es)?\b", text_l)
+        if size:
+            raw_size = float(size.group(1))
+            size_value: int | float = (
+                int(raw_size) if raw_size.is_integer() else raw_size
+            )
+            out.append(
+                Constraint(
+                    key="attributes.screen_size_inches", op="eq", value=size_value
+                )
+            )
+
+        resolution = re.search(r"\b(qhd|quad\s+hd|4k|uhd|fhd|full\s+hd)\b", text_l)
+        if resolution:
+            value = resolution.group(1).replace(" ", "")
+            out.append(Constraint(key="attributes.resolution", op="eq", value=value))
+
+        panel = re.search(r"\b(ips|fast[- ]?ips|va|oled|tn)\s+panel\b", text_l)
+        if panel:
+            out.append(
+                Constraint(
+                    key="attributes.panel",
+                    op="eq",
+                    value=panel.group(1).replace("-", "-"),
+                )
+            )
+
+        # Keep the comparator in the match itself.  Looking back a fixed
+        # number of characters is brittle for natural phrasing such as
+        # ``at least a 144 Hz`` and previously downgraded that requirement to
+        # equality, rejecting valid 165 Hz offers.
+        refresh = re.search(
+            r"\b(?:at\s+least|minimum(?:\s+of)?|no\s+less\s+than|>=|≥)\s*"
+            r"(?:a\s+)?(\d+)\s*hz\b",
+            text_l,
+        )
+        refresh_op = "gte"
+        if refresh is None:
+            refresh = re.search(r"\b(\d+)\s*hz\b", text_l)
+            refresh_op = "eq"
+        if refresh:
+            out.append(
+                Constraint(
+                    key="attributes.refresh_rate_hz",
+                    op=refresh_op,
+                    value=int(refresh.group(1)),
+                )
+            )
+
+        if re.search(r"\bdisplay\s*port\b", text_l):
+            out.append(
+                Constraint(
+                    key="attributes.connectivity", op="contains", value="displayport"
+                )
+            )
+
+    if category == "keyboard":
+        form_factors: list[str] = []
+        if re.search(r"\b75\s*%|\b75[- ]percent", text_l):
+            form_factors.append("75-percent")
+        if re.search(r"\btkl\b", text_l):
+            form_factors.append("tkl")
+        if form_factors:
+            out.append(
+                Constraint(
+                    key="attributes.form_factor",
+                    op="in" if len(form_factors) > 1 else "eq",
+                    value=form_factors if len(form_factors) > 1 else form_factors[0],
+                )
+            )
+        if re.search(r"\bhot[- ]?(?:swappable|swap)\b", text_l):
+            out.append(
+                Constraint(key="attributes.hot_swappable", op="eq", value=True)
+            )
+        if re.search(r"\bwireless\b", text_l):
+            out.append(
+                Constraint(
+                    key="attributes.connectivity", op="contains", value="wireless"
+                )
+            )
+        if re.search(r"\bmechanical\b", text_l):
+            out.append(Constraint(key="attributes.mechanical", op="eq", value=True))
+
+    return out
+
+
+def _item_specific_preferences(text_l: str, category: str) -> list[Preference]:
+    out: list[Preference] = []
+    if category == "keyboard":
+        preferred = re.search(r"\bprefer(?:s|red)?\s+([a-z]+)\s+switch", text_l)
+        if preferred:
+            out.append(
+                Preference(
+                    key="attributes.switch_type", weight=0.8, value=preferred.group(1)
+                )
+            )
+    return out
+
+
+_QUANTITY_WORDS = {
+    "one": 1,
+    "a": 1,
+    "an": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+
+
+def _item_quantity(text_l: str, token: str) -> int:
+    """Read a quantity immediately attached to an item noun.
+
+    Quantity is deliberately local.  A number elsewhere in a brief (for
+    example, ``within 5 days``) must never become an order quantity.
+    """
+    noun_pattern = rf"\b{re.escape(token)}s?\b"
+    quantity_pattern = (
+        rf"\b(\d+|{'|'.join(_QUANTITY_WORDS)})\s+(?:of\s+)?"
+        r"(?:(?!(?:days?|weeks?|months?)\b)[a-z0-9%-]+\s+){0,2}$"
+    )
+    for noun in re.finditer(noun_pattern, text_l):
+        # Read backwards from the noun so a nearby delivery number ("within
+        # 5 days") cannot become a product quantity. A couple of optional
+        # descriptor words cover natural phrases such as "four ergonomic
+        # chairs" while the day/week/month guard keeps this local and safe.
+        match = re.search(quantity_pattern, text_l[: noun.start()])
+        if not match:
+            continue
+        raw = match.group(1).lower()
+        quantity = int(raw) if raw.isdigit() else _QUANTITY_WORDS.get(raw, 1)
+        return max(1, min(quantity, 100))
+    return 1
+
+
+def _extract_multi_item_requirements(
+    raw_text: str, now: datetime
+) -> tuple[list[IntentItem], list[Constraint], int | None, list[Preference]]:
+    """Decompose a brief with two or more distinct catalog categories.
+
+    This is deliberately deterministic and additive.  It gives each item its
+    own price/features while shared delivery language is copied to every item;
+    a total-order cap remains on the parent intent.
+    """
+    text_l = raw_text.lower()
+    mentions = _item_category_mentions(text_l)
+    if len(mentions) < 2:
+        return [], [], None, []
+
+    shared_delivery = extract_delivery(text_l, now)
+    items: list[IntentItem] = []
+    local_caps: list[int] = []
+    for index, (start, _token, category) in enumerate(mentions, start=1):
+        end = mentions[index][0] if index < len(mentions) else len(raw_text)
+        if index == len(mentions):
+            for marker in (
+                r"\b(?:both|all)\s+(?:items|products)\b",
+                r"\bdo\s+not\s+show\s+me\b",
+                r"\bkeep\s+the\s+total\b",
+                r"\b(?:my|the|our)\s+budget\b",
+                r"\b(?:total|overall|combined)\s+budget\b",
+            ):
+                match = re.search(marker, text_l[start:], flags=re.IGNORECASE)
+                if match:
+                    end = min(end, start + match.start())
+        segment = raw_text[0:end] if index == 1 else raw_text[start:end]
+        segment_l = segment.lower()
+        attribute_segment_l = (
+            f"{raw_text[max(0, start - 32):start]} {segment_l}"
+            if category == "keyboard"
+            else segment_l
+        )
+        item_text = segment
+        # Requirements are frequently stated in a later sentence — after all
+        # requested products have been named.  Pull in only sentences that
+        # explicitly name this item, plus switch preferences for keyboards;
+        # global caps/restatements stay out of the item text.
+        for sentence in re.split(r"(?<=[.;!?])\s+|\n+", raw_text):
+            sentence_l = sentence.lower().strip()
+            if not sentence_l or re.search(
+                r"\b(?:do\s+not\s+show|both\s+items|keep\s+the\s+total)\b",
+                sentence_l,
+            ):
+                continue
+            named = re.search(rf"\b{re.escape(_token)}s?\b", sentence_l)
+            switch_preference = category == "keyboard" and "switch" in sentence_l
+            if (named or switch_preference) and sentence.strip() not in item_text:
+                item_text += f" {sentence.strip()}"
+        item_text_l = item_text.lower()
+        # Prefer the local span around the item's first mention.  It prevents
+        # a sentence such as ``monitor under ₹25,000 and keyboard under
+        # ₹8,000`` from leaking the keyboard cap into the monitor line.  If a
+        # brief introduces caps in later sentences, use only a sentence that
+        # explicitly names this item as the fallback.
+        local_cap, _price_constraints = extract_price_caps(segment)
+        if local_cap is None:
+            later_caps: list[int] = []
+            for sentence in re.split(r"(?<=[.;!?])\s+|\n+", raw_text):
+                sentence_l = sentence.lower().strip()
+                if re.search(rf"\b{re.escape(_token)}s?\b", sentence_l):
+                    cap, _ = extract_price_caps(sentence)
+                    if cap is not None:
+                        later_caps.append(cap)
+            local_cap = min(later_caps) if later_caps else None
+        quantity = _item_quantity(
+            f"{raw_text[max(0, start - 48):start]} {item_text_l}", _token
+        )
+        local_constraints: list[Constraint] = [
+            Constraint(key="category", op="eq", value=category)
+        ]
+        if local_cap is not None:
+            local_constraints.append(
+                Constraint(key="max_price_paise", op="lte", value=local_cap)
+            )
+            local_caps.append(local_cap)
+        local_constraints.extend(
+            _item_specific_attributes(
+                f"{attribute_segment_l} {item_text_l}", category
+            )
+        )
+        local_constraints.extend(extract_warranty(item_text_l))
+        local_constraints.extend(shared_delivery)
+        local_constraints.extend(extract_condition(item_text_l))
+        local_constraints.extend(extract_sku(item_text))
+        brand_hard, brand_soft = extract_brands(item_text_l)
+        local_constraints.extend(brand_hard)
+        items.append(
+            IntentItem(
+                id=f"{category}-1",
+                label=category.replace("-", " ").title(),
+                hard_constraints=local_constraints,
+                soft_preferences=[
+                    *brand_soft,
+                    *_item_specific_preferences(
+                        f"{attribute_segment_l} {item_text_l}", category
+                    ),
+                ],
+                max_price_paise=local_cap,
+                quantity=quantity,
+            )
+        )
+
+    total_cap = _total_cap_from_text(raw_text)
+    if total_cap is None and local_caps:
+        total_cap = sum(
+            item.max_price_paise * item.quantity
+            for item in items
+            if item.max_price_paise is not None
+        )
+    return items, shared_delivery, total_cap, []
 
 
 def extract_sku(raw_text: str) -> list[Constraint]:
@@ -854,6 +1181,55 @@ def rule_compile(raw_text: str) -> BuyerIntent:
     now = datetime.now(UTC)
     text_l = raw_text.lower()
 
+    items, shared_constraints, multi_total, shared_preferences = (
+        _extract_multi_item_requirements(raw_text, now)
+    )
+    if items:
+        substitutions_allowed = not re.search(
+            r"\bno\s+substitutes?\b|\bno\s+alternatives?\b|"
+            r"\bno\s+replacements?\b|\bno\s+similar\b|"
+            r"\bdo\s+not\s+substitut\w*\b|\bdon'?t\s+substitut\w*\b|"
+            r"\bnot?\s+to\s+be\s+substituted\b|"
+            r"\bsubstitutions?\s+(?:of\s+any\s+kind|are\s+not\s+(?:allowed|accepted))\b|"
+            r"\bexact\s+model(?:\s+only)?\b|\bexactly\b",
+            text_l,
+        )
+        outcome_keys: list[str] = []
+        for item in items:
+            for constraint in item.hard_constraints:
+                key = {
+                    "category": "product.category",
+                    "attributes.form_factor": "product.form_factor",
+                    "attributes.anc": "product.anc",
+                    "warranty.type": "terms.warranty_type",
+                    "warranty.region": "terms.warranty_region",
+                    "delivery_deadline": "delivery.delivered_by_date",
+                }.get(constraint.key)
+                if key and key not in outcome_keys:
+                    outcome_keys.append(key)
+        labels = " and ".join(item.label.lower() for item in items)
+        delivery = next(
+            (c.value for c in shared_constraints if c.key == "delivery_deadline"),
+            None,
+        )
+        description = f"Buyer receives {labels}"
+        if delivery:
+            description += f", each arriving by {delivery}"
+        description += "."
+        return BuyerIntent(
+            id=new_id("int_"),
+            raw_text=raw_text,
+            hard_constraints=shared_constraints,
+            soft_preferences=shared_preferences,
+            items=items,
+            max_total_amount_paise=multi_total,
+            autonomous_spend_limit_paise=multi_total,
+            substitutions_allowed=substitutions_allowed,
+            desired_outcome=OutcomeSpec(description=description, keys=outcome_keys),
+            created_at=now_iso(),
+            compiler_version=COMPILER_VERSION,
+        )
+
     hard: list[Constraint] = []
     max_total, price_cs = extract_price_caps(raw_text)
 
@@ -996,6 +1372,11 @@ class IntentCompilerAgent:
             payload={
                 "engine": engine,
                 "hard_constraint_keys": [c["key"] for c in record["hard_constraints"]],
+                "item_ids": [item["id"] for item in record.get("items") or []],
+                "item_quantities": {
+                    item["id"]: item.get("quantity", 1)
+                    for item in record.get("items") or []
+                },
             },
             correlation_id=intent.id,
             trace_id=trace_id,
@@ -1089,6 +1470,11 @@ class IntentCompilerAgent:
 
 def intent_summary(intent: BuyerIntent) -> str:
     parts = [f"{c.key}{c.op}{c.value!r}" for c in intent.hard_constraints]
+    parts.extend(
+        f"{item.id}[quantity={item.quantity}]="
+        f"{','.join(c.key for c in item.hard_constraints)}"
+        for item in intent.items
+    )
     if intent.max_total_amount_paise is not None:
         parts.append(f"cap={intent.max_total_amount_paise}")
     return "; ".join(parts)

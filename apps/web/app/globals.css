@@ -1,33 +1,37 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   PROJECT DANTE — editorial magazine visual system (plan §27)
+   PROJECT DANTE — buyer-owned commerce console
 
-   Light "print" palette ONLY for P0. Tokens are the single source of truth;
-   components must consume them via Tailwind utilities (bg-paper, text-ink,
-   border-rule, ...) rather than raw hex values.
+   The surface follows a modern payments dashboard language: cool canvas,
+   quiet borders, clear sans-serif hierarchy and one strong action blue. The
+   Dante signature remains the orange promise rail used for frozen contract
+   state and human authorization.
 --------------------------------------------------------------------------- */
 
 @theme {
   /* Palette */
-  --color-paper: #f2f0ea;
-  --color-paper-bright: #faf9f5;
-  --color-ink: #0c0c0c;
-  --color-ink-soft: #3e3d39;
-  --color-rule: #c9c5bc;
-  --color-signal: #f04a2d;
-  --color-signal-deep: #c93817;
-  --color-success: #235d3a;
-  --color-warning: #a05a00;
-  --color-danger: #b42318;
+  --color-paper: #f6f8fb;
+  --color-paper-bright: #ffffff;
+  --color-ink: #101828;
+  --color-ink-soft: #667085;
+  --color-rule: #e4e7ec;
+  --color-signal: #ff5630;
+  --color-signal-deep: #e04422;
+  --color-success: #039855;
+  --color-warning: #b54708;
+  --color-danger: #d92d20;
+  --color-action: #2f6fed;
+  --color-action-deep: #155eef;
+  --color-action-soft: #eef4ff;
 
-  /* Geometry: almost-square corners, capped at 6px (plan §27.4) */
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
-  --radius-xl: 6px;
-  --radius-2xl: 6px;
-  --radius-3xl: 6px;
+  /* Product surfaces use restrained 8–14px geometry. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
 }
 
 /*
@@ -37,7 +41,9 @@
   variables directly.
 */
 @theme inline {
-  --font-display: var(--font-instrument-serif), "Instrument Serif", ui-serif,
+  --font-display: var(--font-inter), "Inter", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --font-editorial: var(--font-instrument-serif), "Instrument Serif", ui-serif,
     Georgia, "Times New Roman", serif;
   --font-body: var(--font-inter), "Inter", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", sans-serif;
@@ -144,3 +150,296 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Console shell
+--------------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  min-height: 100dvh;
+  background: var(--color-paper);
+}
+
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  width: 248px;
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
+  align-self: flex-start;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-rule);
+  background: var(--color-paper-bright);
+  padding: 1.5rem 1rem 1.25rem;
+  overflow-y: auto;
+}
+
+.app-brand,
+.app-mobile-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.app-brand-mark {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--color-ink);
+  color: white;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.app-brand-name,
+.app-brand-subtitle,
+.app-merchant-name,
+.app-merchant-caption {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-brand-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.app-brand-subtitle,
+.app-merchant-caption {
+  margin-top: 0.15rem;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.app-sidebar-section-label {
+  margin: 2.45rem 0 0.65rem 0.75rem;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-nav {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.app-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2.55rem;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  color: var(--color-ink-soft);
+  font-size: 0.83rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.app-nav-link:hover {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+.app-nav-link.is-active {
+  background: var(--color-action-soft);
+  color: var(--color-action-deep);
+  font-weight: 650;
+}
+
+.app-nav-icon {
+  display: inline-flex;
+  width: 1.1rem;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.app-sidebar-spacer {
+  flex: 1;
+}
+
+.app-merchant-card {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  border-top: 1px solid var(--color-rule);
+  padding: 1rem 0.35rem 0.8rem;
+}
+
+.app-merchant-avatar {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: #fff0ec;
+  color: var(--color-signal-deep);
+  font-weight: 700;
+}
+
+.app-merchant-name {
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.app-online-dot,
+.app-rail-dot {
+  height: 0.4rem;
+  width: 0.4rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-success);
+}
+
+.app-rail-status {
+  padding: 0 0.35rem;
+}
+
+.app-rail-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.07em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.app-frame {
+  min-width: 0;
+  flex: 1;
+}
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: flex;
+  min-height: 4.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--color-rule);
+  background: color-mix(in srgb, var(--color-paper-bright) 92%, transparent);
+  padding: 0.75rem clamp(1rem, 3vw, 3rem);
+  backdrop-filter: blur(12px);
+}
+
+.app-mobile-brand {
+  display: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.app-mobile-brand .app-brand-mark {
+  height: 1.75rem;
+  width: 1.75rem;
+  font-size: 0.8rem;
+}
+
+.app-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--color-ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.app-breadcrumb-root {
+  color: var(--color-ink-soft);
+  font-weight: 450;
+}
+
+.app-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.app-topbar-note {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.app-topbar-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 7px;
+  background: var(--color-action);
+  padding: 0.55rem 0.75rem;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: background-color 150ms ease;
+}
+
+.app-topbar-cta:hover {
+  background: var(--color-action-deep);
+}
+
+.app-content {
+  min-height: calc(100dvh - 4.25rem);
+}
+
+@media (max-width: 767px) {
+  .app-sidebar {
+    display: none;
+  }
+
+  .app-mobile-brand {
+    display: inline-flex;
+  }
+
+  .app-topbar {
+    min-height: 3.75rem;
+    padding-inline: 1rem;
+  }
+
+  .app-breadcrumb-root,
+  .app-topbar-note {
+    display: none;
+  }
+
+  .app-breadcrumb {
+    margin-left: auto;
+    font-size: 0.72rem;
+  }
+
+  .app-topbar-cta {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.68rem;
+  }
+}

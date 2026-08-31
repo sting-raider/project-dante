@@ -15,6 +15,8 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -30,6 +32,9 @@ def _configured_string(env_name: str, settings_name: str, default: str) -> str:
 
 
 _STORE_PATH = _configured_string("DANTE_STORE_PATH", "dante_store_path", ".dante-store.json")
+
+_FILE_LOCK_TIMEOUT_SECONDS = 30.0
+_FILE_LOCK_RETRY_SECONDS = 0.01
 
 TYPE_PREFIXES = {
     "intent": "int_",
@@ -60,37 +65,130 @@ class Store:
         self._path = path or _STORE_PATH
         self._records: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
+        self._snapshot_signature: tuple[int, int, int] | None = None
         self._load()
 
     # ------------------------------------------------------------ internals
 
     def _load(self) -> None:
         if not os.path.exists(self._path):
+            self._records = {}
+            self._snapshot_signature = None
             return
         try:
             with open(self._path, encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                self._records = data
-        except (json.JSONDecodeError, OSError):
-            # Corrupt/locked snapshot: start clean rather than crash.
-            self._records = {}
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Dante store snapshot is not an object: {self._path}")
+            self._records = data
+            self._snapshot_signature = self._stat_signature()
+        except (json.JSONDecodeError, OSError) as exc:
+            # Starting from an empty store after a read failure can orphan
+            # captured payments. Fail closed and preserve the snapshot.
+            raise RuntimeError(f"Unable to load Dante store snapshot: {self._path}") from exc
+
+    def _stat_signature(self) -> tuple[int, int, int] | None:
+        try:
+            stat = os.stat(self._path)
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+    def _refresh_if_changed(self) -> None:
+        """Refresh process memory when another process replaced the snapshot."""
+        if self._stat_signature() != self._snapshot_signature:
+            self._load()
+
+    @contextmanager
+    def _snapshot_lock(self) -> Iterator[None]:
+        """Serialize snapshot mutations across API processes.
+
+        The lock is held by the OS, so it is automatically released if a
+        process crashes. Each writer refreshes from disk after acquiring it;
+        a stale process therefore merges its mutation instead of replacing
+        newer contracts or webhook events with an old in-memory snapshot.
+        """
+        lock_path = os.path.abspath(self._path) + ".lock"
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        handle = open(lock_path, "a+b")  # noqa: SIM115 - held through context
+        deadline = time.monotonic() + _FILE_LOCK_TIMEOUT_SECONDS
+        locked = False
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                while not locked:
+                    handle.seek(0)
+                    try:
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        locked = True
+                    except OSError as exc:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(
+                                f"Timed out acquiring Dante store lock: {lock_path}"
+                            ) from exc
+                        time.sleep(_FILE_LOCK_RETRY_SECONDS)
+            else:
+                import fcntl
+
+                while not locked:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        locked = True
+                    except BlockingIOError as exc:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(
+                                f"Timed out acquiring Dante store lock: {lock_path}"
+                            ) from exc
+                        time.sleep(_FILE_LOCK_RETRY_SECONDS)
+            yield
+        finally:
+            if locked:
+                if os.name == "nt":
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+    @contextmanager
+    def _mutation(self) -> Iterator[None]:
+        with self._lock, self._snapshot_lock():
+            self._refresh_if_changed()
+            yield
 
     def _persist(self) -> None:
+        tmp = f"{self._path}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
-            tmp = self._path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self._records, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self._path)
-        except OSError:
-            # Persistence best-effort in P0; memory remains source of truth.
-            pass
+            self._snapshot_signature = self._stat_signature()
+        except OSError as exc:
+            # Money state must never succeed only in process memory.
+            raise RuntimeError(f"Unable to persist Dante store snapshot: {self._path}") from exc
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------ public
 
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
         rid = record["id"]
-        with self._lock:
+        with self._mutation():
             self._records[rid] = dict(record)
             self._persist()
             return dict(record)
@@ -104,7 +202,7 @@ class Store:
         without a racy get-then-put sequence.
         """
         rid = record["id"]
-        with self._lock:
+        with self._mutation():
             if rid in self._records:
                 return False
             self._records[rid] = dict(record)
@@ -113,11 +211,12 @@ class Store:
 
     def get(self, record_id: str) -> dict[str, Any] | None:
         with self._lock:
+            self._refresh_if_changed()
             rec = self._records.get(record_id)
             return dict(rec) if rec else None
 
     def delete(self, record_id: str) -> bool:
-        with self._lock:
+        with self._mutation():
             existed = record_id in self._records
             self._records.pop(record_id, None)
             if existed:
@@ -125,7 +224,7 @@ class Store:
             return existed
 
     def update(self, record_id: str, **fields: Any) -> dict[str, Any] | None:
-        with self._lock:
+        with self._mutation():
             rec = self._records.get(record_id)
             if rec is None:
                 return None
@@ -148,7 +247,7 @@ class Store:
         The Postgres backend implements the same primitive with a row lock, so
         callers do not need backend-specific fallbacks.
         """
-        with self._lock:
+        with self._mutation():
             rec = self._records.get(record_id)
             if rec is None or not all(rec.get(k) == v for k, v in match_fields.items()):
                 return False
@@ -159,6 +258,7 @@ class Store:
 
     def list(self, record_type: str | None = None) -> builtins.list[dict[str, Any]]:
         with self._lock:
+            self._refresh_if_changed()
             recs = list(self._records.values())
         if record_type is not None:
             recs = [r for r in recs if r.get("_type") == record_type]
@@ -181,14 +281,17 @@ class Store:
 
     def reset(self) -> int:
         """Wipe all records (demo reset). Returns count removed."""
-        with self._lock:
+        with self._mutation():
             n = len(self._records)
             self._records.clear()
             try:
                 if os.path.exists(self._path):
                     os.remove(self._path)
-            except OSError:
-                pass
+                self._snapshot_signature = None
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Unable to reset Dante store snapshot: {self._path}"
+                ) from exc
             return n
 
 

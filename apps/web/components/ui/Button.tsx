@@ -12,8 +12,8 @@ const base =
   "disabled:pointer-events-none disabled:opacity-50";
 
 const variants: Record<Variant, string> = {
-  // Ink-on-signal: the house CTA (signal orange ground, paper text).
-  primary: "bg-signal text-paper-bright hover:bg-signal-deep",
+  // Blue is the action rail; orange remains reserved for promise/attention.
+  primary: "bg-action text-white hover:bg-action-deep",
   secondary: "border border-ink bg-transparent text-ink hover:bg-ink hover:text-paper",
   ghost: "bg-transparent text-ink-soft underline-offset-4 hover:text-signal hover:underline",
 };

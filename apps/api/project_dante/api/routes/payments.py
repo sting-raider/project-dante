@@ -68,13 +68,46 @@ def _order_matches_contract(
     )
 
 
+def _current_merchant_offer(offer_id: str) -> dict[str, Any] | None:
+    """Read current merchant truth before falling back to the local seed.
+
+    The committed catalog derives ``promised_by_date`` at load time.  A JSON
+    STORE seeded on an earlier day can therefore be older than the exact
+    merchant response frozen into a newly-created contract.  Re-validating
+    against that stale seed produces a false contract-drift failure.  The
+    merchant surface is authoritative for the executor re-check; STORE remains
+    the fallback for synthetic/test offers that do not exist in the catalog.
+    """
+    try:
+        from project_dante.integrations.merchant.service import search_catalog
+
+        for candidate in search_catalog(query=None, limit=500):
+            candidate_id = candidate.get("id") or f"off_{candidate.get('sku')}"
+            if candidate_id == offer_id or f"off_{candidate.get('sku')}" == offer_id:
+                return candidate
+    except Exception:  # noqa: BLE001 - merchant outage falls back to local truth
+        pass
+    offer = STORE.get(offer_id)
+    return offer if isinstance(offer, dict) else None
+
+
 def _recompute_contract_hash(contract: dict) -> str | None:
     """Recompute sha256 over the FROZEN offer + promise set exactly as the
     contract pipeline froze it. Returns None when inputs are missing (nothing
     to drift-check — e.g. fixtures created outside Agent D's pipeline)."""
-    offer = STORE.get(contract.get("offer_id") or "")
-    if offer is None:
-        return None
+    line_items = contract.get("line_items") or []
+    if line_items:
+        offers = [
+            _current_merchant_offer(str(item.get("offer_id") or ""))
+            for item in line_items
+        ]
+        if any(offer is None for offer in offers):
+            return None
+    else:
+        offer = _current_merchant_offer(str(contract.get("offer_id") or ""))
+        if offer is None:
+            return None
+        offers = [offer]
     # Canonical formulas come from the promise pipeline so this check compares
     # like-for-like with what select-offer froze (volatile keys stripped from
     # the offer view; set hash over sorted normalized key/value pairs).
@@ -85,7 +118,6 @@ def _recompute_contract_hash(contract: dict) -> str | None:
             compute_contract_hash,
         )
 
-        stable = {k: v for k, v in offer.items() if k not in VOLATILE_OFFER_KEYS and k != "_type"}
         promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract["id"]]
         if not promises:
             return None
@@ -99,12 +131,27 @@ def _recompute_contract_hash(contract: dict) -> str | None:
         # contract hash keyed by "offer". Accepted alongside the canonical
         # pipeline formulation so externally-seeded contracts still validate.
         legacy_psh = sha256_hex(promises)
-        offer_view = {k: v for k, v in offer.items() if k != "_type"}
-        candidates = {
-            compute_contract_hash(sha256_hex(stable), promise_set_hash),
-            sha256_hex({"offer": offer_view, "promise_set_hash": legacy_psh}),
-            sha256_hex({"offer": offer_view, "promise_set_hash": promise_set_hash}),
-        }
+        stable_offers = [
+            {
+                key: value
+                for key, value in offer.items()
+                if key not in VOLATILE_OFFER_KEYS and key != "_type"
+            }
+            for offer in offers
+        ]
+        if len(stable_offers) == 1:
+            offer_hash = sha256_hex(stable_offers[0])
+        else:
+            offer_hash = sha256_hex([sha256_hex(offer) for offer in stable_offers])
+        candidates = {compute_contract_hash(offer_hash, promise_set_hash)}
+        if len(stable_offers) == 1:
+            offer_view = {k: v for k, v in offers[0].items() if k != "_type"}
+            candidates.update(
+                {
+                    sha256_hex({"offer": offer_view, "promise_set_hash": legacy_psh}),
+                    sha256_hex({"offer": offer_view, "promise_set_hash": promise_set_hash}),
+                }
+            )
         stored = contract.get("contract_hash")
         if stored in candidates:
             return stored

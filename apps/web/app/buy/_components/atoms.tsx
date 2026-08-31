@@ -82,12 +82,12 @@ export function Panel({
   className?: string;
 }) {
   const tones = {
-    default: "bg-paper border-rule",
-    bright: "bg-paper-bright border-rule",
-    signal: "bg-paper-bright border-signal",
+    default: "bg-paper-bright border-rule shadow-[0_1px_2px_rgba(16,24,40,0.03)]",
+    bright: "bg-paper-bright border-rule shadow-[0_1px_2px_rgba(16,24,40,0.03)]",
+    signal: "bg-paper-bright border-signal shadow-[0_6px_20px_rgba(255,86,48,0.10)]",
   } as const;
   return (
-    <section className={`rounded-[2px] border ${tones[tone]} p-5 md:p-6 ${className}`}>
+    <section className={`rounded-lg border ${tones[tone]} p-5 md:p-6 ${className}`}>
       {children}
     </section>
   );
@@ -113,9 +113,9 @@ export function Button({
   title?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-2 rounded-[2px] px-5 py-3 font-mono text-[12px] uppercase tracking-[0.18em] transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal disabled:cursor-not-allowed disabled:opacity-40";
+    "inline-flex items-center justify-center gap-2 rounded-md px-5 py-3 font-mono text-[12px] uppercase tracking-[0.18em] transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal disabled:cursor-not-allowed disabled:opacity-40";
   const variants = {
-    primary: "bg-ink text-paper hover:bg-ink-soft",
+    primary: "bg-action text-white hover:bg-action-deep",
     secondary:
       "border border-rule bg-transparent text-ink hover:border-ink hover:bg-paper-bright",
     ghost: "bg-transparent text-ink-soft underline-offset-4 hover:text-ink hover:underline",
@@ -153,7 +153,7 @@ export function Badge({
   } as const;
   return (
     <span
-      className={`inline-block rounded-[2px] border px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.14em] ${tones[tone]} ${className}`}
+      className={`inline-block rounded-sm border px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.14em] ${tones[tone]} ${className}`}
     >
       {children}
     </span>
@@ -185,7 +185,7 @@ export function ConstraintMark({
 
 export function SandboxBadge() {
   return (
-    <span className="inline-block rounded-[2px] border border-dashed border-warning/60 px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.18em] text-warning">
+    <span className="inline-block rounded-sm border border-dashed border-warning/60 px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.18em] text-warning">
       Sandbox
     </span>
   );
@@ -193,7 +193,7 @@ export function SandboxBadge() {
 
 export function SyntheticBadge() {
   return (
-    <span className="inline-block rounded-[2px] border border-dashed border-rule px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.18em] text-ink-soft">
+    <span className="inline-block rounded-sm border border-dashed border-rule px-2 py-[3px] font-mono text-[10px] uppercase tracking-[0.18em] text-ink-soft">
       Synthetic
     </span>
   );

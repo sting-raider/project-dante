@@ -27,11 +27,21 @@ export type Constraint = {
 
 export type Preference = { key: string; weight: number; value: unknown };
 
+export type IntentItem = {
+  id: string;
+  label: string;
+  hard_constraints: Constraint[];
+  soft_preferences: Preference[];
+  max_price_paise: number | null;
+  quantity: number;
+};
+
 export type BuyerIntent = {
   id: string;
   raw_text: string;
   hard_constraints: Constraint[];
   soft_preferences: Preference[];
+  items: IntentItem[];
   max_total_amount_paise: number | null;
   autonomous_spend_limit_paise: number | null;
   substitutions_allowed: boolean;
@@ -67,6 +77,7 @@ export type MerchantOffer = {
   expires_at?: string | null;
   category?: string | null;
   brand?: string | null;
+  attributes?: Record<string, unknown>;
 };
 
 export type HardFailure = { key: string; op: string; expected: unknown; actual: unknown };
@@ -80,10 +91,34 @@ export type OfferEvaluation = {
   explanation: string;
 };
 
-export type SearchResult = { offer: MerchantOffer; evaluation: OfferEvaluation };
+export type SearchResult = {
+  item_id?: string;
+  offer: MerchantOffer;
+  evaluation: OfferEvaluation;
+};
+
+export type SearchItemGroup = {
+  item_id: string;
+  label: string;
+  max_price_paise: number | null;
+  quantity: number;
+  results: SearchResult[];
+  feasible_count: number;
+  recommended_offer_id?: string | null;
+};
+
+export type BundleRecommendation = {
+  available: boolean;
+  engine: string;
+  offer_ids: Record<string, string>;
+  total_amount_paise: number | null;
+  score: number | null;
+  reason: string;
+};
 
 export type Promise_ = {
   id: string;
+  line_item_id?: string | null;
   key: string;
   value: unknown;
   normalized_value?: unknown;
@@ -97,6 +132,7 @@ export type Promise_ = {
 
 export type EvidenceArtifact = {
   id: string;
+  line_item_id?: string | null;
   source_type: string;
   raw_payload_ref: string;
   sha256: string;
@@ -141,6 +177,18 @@ export type DanteContract = {
   display_code?: string | null;
   intent_id: string;
   offer_id: string;
+  line_items?: {
+    id: string;
+    intent_item_id?: string | null;
+    offer_id: string;
+    sku: string;
+    title: string;
+    quantity: number;
+    unit_amount_paise: number;
+    amount_paise: number;
+    offer_hash?: string | null;
+    promise_ids?: string[];
+  }[];
   buyer_authority?: AuthorityEnvelope | null;
   offer_hash?: string | null;
   promise_set_hash?: string | null;
@@ -275,8 +323,8 @@ export type FlowPhase =
 export const PHASE_TICKER: Partial<Record<FlowPhase, string>> = {
   compiling: "Compiling intent…",
   searching: "Searching merchant…",
-  shortlist: "Offers evaluated — choose one to freeze its promises.",
-  awaiting_selection: "Offer chosen — freeze it into a contract.",
+  shortlist: "Offers evaluated — choose each line to freeze the bundle.",
+  awaiting_selection: "Selection ready — freeze the bundle into a contract.",
   freezing: "Freezing promises…",
   awaiting_authorization: "Contract frozen. Awaiting your authorization.",
   opening_checkout: "Opening checkout…",
@@ -296,7 +344,11 @@ export function useContractFlow() {
   const [intent, setIntent] = useState<BuyerIntent | null>(null);
   const [engine, setEngine] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchItems, setSearchItems] = useState<SearchItemGroup[]>([]);
+  const [bundleRecommendation, setBundleRecommendation] =
+    useState<BundleRecommendation | null>(null);
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+  const [selectedOfferIds, setSelectedOfferIds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   // ---- contract state
@@ -478,7 +530,10 @@ export function useContractFlow() {
     async (rawText: string) => {
       setError(null);
       setResults([]);
+      setSearchItems([]);
+      setBundleRecommendation(null);
       setSelectedOfferId(null);
+      setSelectedOfferIds({});
       let stage: FlowPhase = "compiling";
       try {
         setPhase(stage);
@@ -495,11 +550,15 @@ export function useContractFlow() {
         const searched = await apiPost<{
           intent: BuyerIntent;
           results: SearchResult[];
+          items?: SearchItemGroup[];
+          bundle_recommendation?: BundleRecommendation | null;
           engine: string;
         }>(`/api/intents/${compiled.intent.id}/search`);
         if (!mountedRef.current) return;
         setIntent(searched.intent);
         setResults(searched.results ?? []);
+        setSearchItems(searched.items ?? []);
+        setBundleRecommendation(searched.bundle_recommendation ?? null);
         setPhase("shortlist");
       } catch (e) {
         fail(stage === "searching" ? "error_search" : "error_compile", e);
@@ -514,6 +573,67 @@ export function useContractFlow() {
     setSelectedOfferId(offerId);
     setPhase("awaiting_selection");
   }, []);
+
+  const chooseItemOffer = useCallback((itemId: string, offerId: string) => {
+    setError(null);
+    setSelectedOfferIds((previous) => ({ ...previous, [itemId]: offerId }));
+    setPhase("awaiting_selection");
+  }, []);
+
+  const selectionComplete =
+    searchItems.length > 0 &&
+    searchItems.every((item) => {
+      const selected = selectedOfferIds[item.item_id];
+      return item.results.some(
+        (result) => result.offer.id === selected && result.evaluation.feasible,
+      );
+    });
+
+  const selectionTotalPaise = searchItems.reduce((total, item) => {
+    const selected = selectedOfferIds[item.item_id];
+    const result = item.results.find((candidate) => candidate.offer.id === selected);
+    return total + (result?.offer.unit_amount_paise ?? 0) * Math.max(1, item.quantity);
+  }, 0);
+  const selectionWithinBudget =
+    intent?.max_total_amount_paise == null ||
+    selectionTotalPaise <= intent.max_total_amount_paise;
+
+  const chooseRecommendedBundle = useCallback(() => {
+    if (!bundleRecommendation?.available) return;
+    setError(null);
+    setSelectedOfferIds(bundleRecommendation.offer_ids);
+    setPhase("awaiting_selection");
+  }, [bundleRecommendation]);
+
+  const selectOffers = useCallback(async (): Promise<string | null> => {
+    if (!intent || !selectionComplete || !selectionWithinBudget) return null;
+    setError(null);
+    setPhase("freezing");
+    try {
+      const r = await apiPost<{
+        contract: DanteContract;
+        promises: Promise_[];
+        evidence: EvidenceArtifact[];
+      }>(`/api/intents/${intent.id}/select-offer`, {
+        items: searchItems.map((item) => ({
+          item_id: item.item_id,
+          offer_id: selectedOfferIds[item.item_id],
+        })),
+      });
+      if (!mountedRef.current) return null;
+      return r.contract.id;
+    } catch (e) {
+      fail("error_select", e);
+      return null;
+    }
+  }, [
+    fail,
+    intent,
+    searchItems,
+    selectedOfferIds,
+    selectionComplete,
+    selectionWithinBudget,
+  ]);
 
   const selectOffer = useCallback(
     async (offerId: string): Promise<string | null> => {
@@ -760,7 +880,13 @@ export function useContractFlow() {
     intent,
     engine,
     results,
+    searchItems,
+    bundleRecommendation,
     selectedOfferId,
+    selectedOfferIds,
+    selectionComplete,
+    selectionTotalPaise,
+    selectionWithinBudget,
     error,
     contractId,
     setContractId,
@@ -777,7 +903,10 @@ export function useContractFlow() {
     // /buy
     compileAndSearch,
     chooseOffer,
+    chooseItemOffer,
+    chooseRecommendedBundle,
     selectOffer,
+    selectOffers,
     resetError,
     // contract
     loadContract,
@@ -885,8 +1014,18 @@ function deriveOrderFromContract(c: DanteContract): PaymentOrderResponse | null 
   };
 }
 
+export type OfferMemoItem = {
+  item_id: string;
+  label: string;
+  quantity: number;
+  offer: MerchantOffer;
+  explanation?: string;
+  softScores?: SoftScore[];
+};
+
 export type OfferMemo = {
   offer: MerchantOffer;
+  items?: OfferMemoItem[];
   explanation?: string;
   softScores?: SoftScore[];
 };

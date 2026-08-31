@@ -39,6 +39,14 @@ CONSTRAINT_TO_PROMISE = {
     "attributes.form_factor": "attributes.form_factor",
     "anc": "attributes.anc",
     "attributes.anc": "attributes.anc",
+    "attributes.screen_size_inches": "attributes.screen_size_inches",
+    "attributes.resolution": "attributes.resolution",
+    "attributes.panel": "attributes.panel",
+    "attributes.refresh_rate_hz": "attributes.refresh_rate_hz",
+    "attributes.connectivity": "attributes.connectivity",
+    "attributes.hot_swappable": "attributes.hot_swappable",
+    "attributes.mechanical": "attributes.mechanical",
+    "attributes.switch_type": "attributes.switch_type",
     "warranty.type": "warranty.type",
     "warranty.region": "warranty.region",
     "delivery_deadline": "delivery.promised_by_date",
@@ -121,6 +129,14 @@ def normalize_value(key: str, value: Any) -> Any:
     if key == "delivery.promised_by_date":
         dt = parse_dt(value)
         return dt.date().isoformat() if dt else value
+    if key == "attributes.refresh_rate_hz":
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*hz?\s*", value, re.I)
+            if match:
+                number = float(match.group(1))
+                return int(number) if number.is_integer() else number
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -143,6 +159,7 @@ def build_evidence(
     synthetic: bool = False,
     scenario_id: str | None = None,
     contract_id: str | None = None,
+    line_item_id: str | None = None,
     excerpt: str | None = None,
 ) -> dict[str, Any]:
     """Hash + persist one evidence artifact; append EVIDENCE_SNAPSHOT_CREATED.
@@ -155,6 +172,7 @@ def build_evidence(
     artifact = EvidenceArtifact(
         id=eid,
         contract_id=contract_id,
+        line_item_id=line_item_id,
         source_type=source_type,  # type: ignore[arg-type]
         raw_payload_ref=f"store://{eid}",
         sha256=sha256_hex(payload),
@@ -217,6 +235,17 @@ def _structured_pairs(offer: dict[str, Any]) -> list[tuple[str, Any]]:
         ("category", offer.get("category")),
         ("attributes.form_factor", attributes.get("form_factor")),
         ("attributes.anc", attributes.get("anc")),
+        ("attributes.screen_size_inches", attributes.get("screen_size_inches")),
+        ("attributes.resolution", attributes.get("resolution")),
+        ("attributes.panel", attributes.get("panel")),
+        (
+            "attributes.refresh_rate_hz",
+            attributes.get("refresh_rate_hz") or attributes.get("refresh_rate"),
+        ),
+        ("attributes.connectivity", attributes.get("connectivity")),
+        ("attributes.hot_swappable", attributes.get("hot_swappable")),
+        ("attributes.mechanical", attributes.get("mechanical")),
+        ("attributes.switch_type", attributes.get("switch_type")),
     ]
     return [(k, v) for k, v in pairs if _wants(k, v)]
 
@@ -511,7 +540,11 @@ def compute_contract_hash(offer_hash: str, promise_set_hash: str) -> str:
     return sha256_hex({"offer_hash": offer_hash, "promise_set_hash": promise_set_hash})
 
 
-def freeze_promise_set(offer_dict: Any, intent_dict: Any) -> dict[str, Any]:
+def freeze_promise_set(
+    offer_dict: Any,
+    intent_dict: Any,
+    line_item_id: str | None = None,
+) -> dict[str, Any]:
     """Orchestrate evidence -> promises -> materiality -> persisted frozen set."""
     offer, ev_payload, rendered, trusted_hint = unwrap_offer(offer_dict)
     intent = _as_dict(intent_dict or {})
@@ -537,6 +570,7 @@ def freeze_promise_set(offer_dict: Any, intent_dict: Any) -> dict[str, Any]:
         source_type="checkout_offer",
         payload=ev_payload,
         trusted_level=str(trusted),
+        line_item_id=line_item_id,
         excerpt=excerpt_src[:280] or None,
     )
     evidence["offer_id"] = str(offer.get("id") or offer.get("sku") or "")
@@ -546,6 +580,8 @@ def freeze_promise_set(offer_dict: Any, intent_dict: Any) -> dict[str, Any]:
     promises = link_materiality(promises, intent)
 
     for p in promises:
+        if line_item_id:
+            p["line_item_id"] = line_item_id
         STORE.put({**p, "_type": "promise"})
 
     # Deterministic set hash over sorted (key, canonical-normalized-value).

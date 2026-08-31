@@ -54,14 +54,20 @@ can mark an offer feasible while violating a hard constraint.
 - **Routes** (`api/routes/intents.py`) exactly per contract:
   - `POST /api/intents/compile {raw_text} → {intent, engine}`
   - `POST /api/intents/{id}/search → {intent, results:[{offer, evaluation}],
-    engine}` — merchant service search first, STORE offers as fallback;
-    persists `_type=evaluation` summaries; appends CATALOG_SEARCHED.
-  - `POST /api/intents/{id}/select-offer {offer_id} → {contract, promises,
-    evidence, _freeze_via}` — rejects infeasible/un-evaluated offers with 409
-    (a hard-constraint violation can NEVER be selected), creates the contract
-    through the state machine (INTENT_READY→OFFER_SELECTED→CONTRACT_FROZEN),
-    `display_code = COV-<4 digits>`, hashes offer via `sha256_hex`, freezes
-    promises through Agent D's `freeze_promise_set` (verified working), and
+    items:[{item_id, label, quantity, results, feasible_count,
+    recommended_offer_id}], bundle_recommendation, engine}` — merchant
+    service search first, STORE offers as fallback; multi-item lines are
+    evaluated independently and the deterministic recommendation considers
+    quantity-adjusted line amounts under the parent cap. Persists
+    `_type=evaluation` summaries; appends CATALOG_SEARCHED.
+  - `POST /api/intents/{id}/select-offer {offer_id}` for one item or
+    `{items:[{item_id, offer_id}]}` for a bundle → `{contract, promises,
+    evidence, _freeze_via}` — requires every line exactly once, rechecks
+    feasibility, quantity inventory and the parent cap, then rejects
+    infeasible/un-evaluated offers with 409. A hard-constraint violation can
+    NEVER be selected. Creates one aggregate contract with frozen
+    `line_items[]` through the state machine
+    (INTENT_READY→OFFER_SELECTED→CONTRACT_FROZEN), hashes the aggregate and
     appends OFFER_SELECTED + CONTRACT_CREATED.
 
 ## Files

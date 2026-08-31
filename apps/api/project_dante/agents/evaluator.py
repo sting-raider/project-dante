@@ -139,6 +139,13 @@ _CATEGORY_EQUIV = {
     "keyboard": {"keyboards"},
     "monitor": {"monitors"},
     "phone": {"phones"},
+    "desk": {"desks"},
+    "chair": {"chairs"},
+    "table": {"tables"},
+    "cabinet": {"cabinets"},
+    "shelf": {"shelves"},
+    "lamp": {"lamps"},
+    "sofa": {"sofas"},
 }
 
 
@@ -180,6 +187,8 @@ def _check_scalar(
             return True, actual
         if _category_equivalent(al, el):
             return True, actual
+        if key == "attributes.panel" and el == "ips" and al and al.endswith("-ips"):
+            return True, actual
         # Narrow documented containment case: title standing in for a missing
         # category field. Whole-word containment of the expected category token
         # or its singular form ('headphones'/'headphone'). Boundaries exclude
@@ -218,6 +227,18 @@ def _resolve_path(offer: dict[str, Any], key: str) -> Any:
     return cur
 
 
+def _refresh_rate_hz(value: Any) -> Any:
+    """Normalize catalog values such as ``165hz`` for numeric constraints."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*hz?\s*", value, re.IGNORECASE)
+        if match:
+            number = float(match.group(1))
+            return int(number) if number.is_integer() else number
+    return value
+
+
 def _actual_for_key(offer: dict[str, Any], key: str) -> tuple[Any, bool]:
     """Resolve a constraint key onto the offer.
 
@@ -247,6 +268,15 @@ def _actual_for_key(offer: dict[str, Any], key: str) -> tuple[Any, bool]:
         "brand": offer.get("brand"),
         "attributes.form_factor": attrs.get("form_factor"),
         "attributes.anc": attrs.get("anc"),
+        "attributes.screen_size_inches": attrs.get("screen_size_inches"),
+        "attributes.resolution": attrs.get("resolution"),
+        "attributes.panel": attrs.get("panel"),
+        "attributes.refresh_rate_hz": _refresh_rate_hz(
+            attrs.get("refresh_rate_hz") or attrs.get("refresh_rate")
+        ),
+        "attributes.connectivity": attrs.get("connectivity"),
+        "attributes.hot_swappable": attrs.get("hot_swappable"),
+        "attributes.mechanical": attrs.get("mechanical"),
         "warranty.type": terms.get("warranty_type"),
         "warranty.region": terms.get("warranty_region"),
         "warranty.duration_months": terms.get("warranty_duration_months"),
@@ -455,6 +485,37 @@ class OfferEvaluatorAgent:
                         "actual": inventory,
                     }
                 )
+            # A bundle line can request more than one unit.  "Some stock
+            # exists" is not enough: the exact requested quantity must be
+            # available or the line is not a feasible, purchasable offer.
+            requested_quantity = intent_dict.get("quantity", 1)
+            if requested_quantity != 1:
+                if (
+                    isinstance(requested_quantity, bool)
+                    or not isinstance(requested_quantity, int)
+                    or requested_quantity <= 0
+                ):
+                    failures.append(
+                        {
+                            "key": "quantity",
+                            "op": "valid",
+                            "expected": "positive integer",
+                            "actual": requested_quantity,
+                        }
+                    )
+                elif (
+                    isinstance(inventory, bool)
+                    or not isinstance(inventory, (int, float))
+                    or inventory < requested_quantity
+                ):
+                    failures.append(
+                        {
+                            "key": "inventory",
+                            "op": "gte",
+                            "expected": requested_quantity,
+                            "actual": inventory,
+                        }
+                    )
 
             feasible = len(failures) == 0
             scores = soft_scores_for_offer(intent_dict, offer, offers, now)
