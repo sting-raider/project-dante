@@ -18,8 +18,13 @@ from typing import Any
 
 from project_dante.db.store import STORE
 from project_dante.domain.events import append_event, new_id
+from project_dante.domain.line_items import (
+    line_item_amount_paise,
+    records_for_scope,
+)
 from project_dante.domain.rights.engine import (
     MATERIAL_REASONS,
+    SLA_REASONS,
     evaluate_eligibility,
     get_breaches,
     resolve_ctx,
@@ -51,6 +56,12 @@ def _speed_score(hours: float | None) -> float:
     """1 / (1 + hours/24) per plan §14.2."""
     h = max(float(hours if hours is not None else 72), 0.0)
     return 1.0 / (1.0 + h / 24.0)
+
+
+def _bounded_amount(raw: Any, fallback: int, ceiling: int) -> int:
+    """Normalize a persisted remedy value without weakening type guarantees."""
+    value = raw if isinstance(raw, int) and not isinstance(raw, bool) else fallback
+    return min(value, ceiling)
 
 
 def score_remedy(
@@ -114,15 +125,41 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
     promises = STORE.find("promise", contract_id=contract_id)
     facts = STORE.find("fact", contract_id=contract_id)
     breaches = get_breaches(contract_id)
-    ctx = resolve_ctx(contract_id, promises, facts, breaches)
-
-    breach = _material_breach(breaches)
-    captured = int(contract.get("amount_paise") or 0)
-    evidence_ids = [e["id"] for e in STORE.find("evidence", contract_id=contract_id)]
+    evidence = STORE.find("evidence", contract_id=contract_id)
 
     candidates: list[dict[str, Any]] = []
 
     for ent in entitlements:
+        line_item_id = ent.get("line_item_id")
+        scoped_promises = records_for_scope(promises, line_item_id)
+        scoped_facts = records_for_scope(facts, line_item_id)
+        scoped_breaches = records_for_scope(breaches, line_item_id)
+        ctx = resolve_ctx(
+            contract_id,
+            scoped_promises,
+            scoped_facts,
+            scoped_breaches,
+            line_item_id=line_item_id,
+        )
+        breach = _material_breach(scoped_breaches)
+        line_ceiling = line_item_amount_paise(contract, line_item_id)
+        if line_item_id is not None:
+            if line_ceiling is None:
+                # A scoped money action cannot safely fall back to the basket
+                # total when its frozen line amount is absent.
+                continue
+            captured = line_ceiling
+        else:
+            captured = int(contract.get("amount_paise") or 0)
+        if captured <= 0:
+            # A scoped money action cannot safely fall back to the basket
+            # total when its frozen line amount is absent.
+            continue
+        evidence_ids = [
+            e["id"]
+            for e in records_for_scope(evidence, line_item_id, allow_unscoped=True)
+            if e.get("id")
+        ]
         slug = ent.get("slug")
         status = ent.get("status")
         etype = ent.get("type")
@@ -156,7 +193,7 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
         elif etype == "refund" or slug == "merchant_full_refund":
             rtype = "refund_full"
             hours = ent.get("estimated_resolution_hours") or 24.0
-            value = ent.get("remedy_value_paise") or captured
+            value = _bounded_amount(ent.get("remedy_value_paise"), captured, captured)
             avail = ctx.get("replacement.available")
             attempted = ctx.get("replacement.attempted")
             why = (
@@ -172,7 +209,7 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
         elif slug == "merchant_partial_refund_delivery":
             rtype = "refund_partial"
             hours = ent.get("estimated_resolution_hours") or 6.0
-            value = int(ent.get("remedy_value_paise") or 30000)
+            value = _bounded_amount(ent.get("remedy_value_paise"), 30000, captured)
             expl = (
                 f"Partial compensation of {_fmt_inr(value)} for the delivery-SLA miss "
                 f"(plan §8.3 merchant policy)."
@@ -180,6 +217,19 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
         else:
             continue
 
+        relevant_breaches = [
+            candidate_breach
+            for candidate_breach in scoped_breaches
+            if (
+                candidate_breach.get("reason_code") in SLA_REASONS
+                if rtype == "refund_partial"
+                else (
+                    candidate_breach.get("reason_code") in MATERIAL_REASONS
+                    or candidate_breach.get("severity") in {"material", "critical"}
+                )
+            )
+        ]
+        primary_breach = _material_breach(relevant_breaches) or breach
         sc = score_remedy(rtype, value, captured, hours)
         candidates.append(
             {
@@ -188,38 +238,50 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
                 "value": value,
                 "hours": hours,
                 "explanation": expl,
+                "line_item_id": line_item_id,
+                "breach": primary_breach,
+                "evidence_ids": evidence_ids,
+                "replacement_available": ctx.get("replacement.available"),
+                "affected_breach_ids": [
+                    b["id"] for b in relevant_breaches if b.get("id")
+                ],
                 **sc,
             }
         )
 
-    # ---- REPLACEMENT UNAVAILABLE RULE ------------------------------------
-    # Candidates already carry rejected_reason when inventory is explicitly
-    # False; belt-and-braces in case an eligible one slipped through.
-    repl_available = ctx.get("replacement.available")
-    ranked: list[dict[str, Any]] = []
-    for c in candidates:
-        if c["remedy_type"] == "replacement" and repl_available is False:
-            c["rejected_reason"] = "replacement_inventory_unavailable"
-        else:
-            ranked.append(c)
+    # ---- REPLACEMENT UNAVAILABLE + PER-LINE RANKING ----------------------
+    # Ranking is independent for every line. A replacement for line A can be
+    # rank 1 while a refund for line B is also rank 1; they are not siblings.
+    groups: dict[str | None, list[dict[str, Any]]] = {}
+    for candidate in candidates:
+        groups.setdefault(candidate["line_item_id"], []).append(candidate)
 
-    ranked.sort(key=lambda c: (-c["score"], c["remedy_type"]))
-
-    # Rank positions come from the RANKED order; hard-rejected candidates
-    # (replacement_inventory_unavailable) sit outside it with rank None.
-    rank_by_id = {id(c): i + 1 for i, c in enumerate(ranked)}
+    rank_by_id: dict[int, int] = {}
+    rejected_by_id: dict[int, str] = {}
+    for _line_item_id, group in groups.items():
+        repl_available = group[0].get("replacement_available")
+        ranked = []
+        for candidate in group:
+            if candidate["remedy_type"] == "replacement" and repl_available is False:
+                rejected_by_id[id(candidate)] = "replacement_inventory_unavailable"
+            else:
+                ranked.append(candidate)
+        ranked.sort(key=lambda c: (-c["score"], c["remedy_type"]))
+        rank_by_id.update({id(candidate): i + 1 for i, candidate in enumerate(ranked)})
 
     proposals: list[dict[str, Any]] = []
     for c in candidates:
         ent = c["entitlement"]
-        rejected = c.get("rejected_reason")
+        rejected = rejected_by_id.get(id(c))
         if rejected is None:
             pos = rank_by_id.get(id(c))
             rejected = "ranked_lower" if (pos is not None and pos > 1) else None
         rec = {
             "_type": "remedy",
             "id": new_id("rem"),
-            "breach_id": (breach or {}).get("id"),
+            "breach_id": (c["breach"] or {}).get("id"),
+            "line_item_id": c["line_item_id"],
+            "affected_breach_ids": c["affected_breach_ids"],
             "entitlement_id": ent["id"],
             "contract_id": contract_id,
             "remedy_type": c["remedy_type"],
@@ -228,11 +290,13 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
             "estimated_time_hours": float(c["hours"]),
             "inconvenience_score": float(c["inconvenience"]),
             "confidence": round(min(1.0, max(0.0, c["score"] / 1.2)), 4),
-            "evidence_ids": evidence_ids,
+            "evidence_ids": c["evidence_ids"],
             "explanation": c["explanation"],
             "rejected_reason": rejected,
             "rank": (
-                rank_by_id.get(id(c)) if rejected != "replacement_inventory_unavailable" else None
+                rank_by_id.get(id(c))
+                if rejected != "replacement_inventory_unavailable"
+                else None
             ),
             "score_breakdown": {
                 k: c[k]
@@ -260,6 +324,8 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
             "proposals": [
                 {
                     "id": p["id"],
+                    "line_item_id": p.get("line_item_id"),
+                    "affected_breach_ids": p.get("affected_breach_ids") or [],
                     "remedy_type": p["remedy_type"],
                     "rank": p.get("rank"),
                     "rejected_reason": p.get("rejected_reason"),
@@ -269,10 +335,19 @@ def plan_remedies(contract_id: str) -> dict[str, Any]:
             ],
             "reason_codes": sorted({b.get("reason_code", "") for b in breaches}),
         },
-        causation_id=(breach or {}).get("id"),
+        causation_id=(proposals[0].get("breach_id") if proposals else None),
     )
 
-    return {"proposals": proposals, "chosen": top}
+    chosen_by_line = {
+        str(p.get("line_item_id") or "__legacy__"): p
+        for p in proposals
+        if p.get("rejected_reason") is None and p.get("rank") == 1
+    }
+    return {
+        "proposals": proposals,
+        "chosen": top,
+        "chosen_by_line": chosen_by_line,
+    }
 
 
 def get_proposals(contract_id: str) -> list[dict[str, Any]]:
