@@ -479,6 +479,11 @@ def apply_fulfillment_event(
             {"query": "replacement.inventory", "available": available, "synthetic": True},
             line_item_id=line_item_id,
         )
+        # Replacement availability is a line-level fact.  When the operator
+        # checks the whole basket, emit one fact per frozen line so the
+        # rights engine can unlock only the affected line's fallback without
+        # leaking the result across the basket.  Legacy single-item
+        # contracts still use the unscoped None target.
         replacement_facts = [
             _fact(
                 contract_id,
@@ -486,8 +491,9 @@ def apply_fulfillment_event(
                 available,
                 artifact_id,
                 scenario_id,
-                line_item_id,
+                target_id,
             )
+            for target_id in target_line_ids
         ]
         return {
             "kind": "replacement_check",

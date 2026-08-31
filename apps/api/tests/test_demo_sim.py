@@ -167,6 +167,33 @@ def test_replacement_unavailable_fact(isolated_env):
     assert fact["synthetic"] is True
 
 
+def test_replacement_unavailable_scopes_each_basket_line(isolated_env):
+    store = isolated_env["store"]
+    store.put(
+        {
+            "_type": "contract",
+            "id": "con_lines",
+            "status": "PAID",
+            "amount_paise": 300000,
+            "line_items": [
+                {"id": "li_monitor", "amount_paise": 200000},
+                {"id": "li_keyboard", "amount_paise": 100000},
+            ],
+        }
+    )
+
+    result = service.apply_fulfillment_event(
+        "con_lines", "replacement_check", scenario="unavailable"
+    )
+
+    facts = result["facts"]
+    assert {fact["line_item_id"] for fact in facts} == {
+        "li_monitor",
+        "li_keyboard",
+    }
+    assert all(fact["value"] is False for fact in facts)
+
+
 # ------------------------------------------------------------------ demo routes
 
 
