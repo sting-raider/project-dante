@@ -619,6 +619,13 @@ def _item_category_mentions(text_l: str) -> list[tuple[int, str, str]]:
     seen: set[str] = set()
     for token, category in _CATEGORIES:
         for match in re.finditer(rf"\b{re.escape(token)}s?\b", text_l):
+            # In "phone charger" the first noun is a product modifier, not a
+            # second requested basket line.  Keep conjunctions such as
+            # "phone and charger" as two independent item mentions.
+            if token == "phone" and re.match(
+                r"\s+(?:charger|cable|case)\b", text_l[match.end() :]
+            ):
+                continue
             if category in seen:
                 break
             found.append((match.start(), token, category))
@@ -638,6 +645,18 @@ def _total_cap_from_text(text: str) -> int | None:
     )
     caps: list[int] = []
     for marker in total_markers:
+        cap, _constraints = extract_price_caps(marker.group(0))
+        if cap is not None:
+            caps.append(cap)
+    # Natural language often puts "total" after the amount: "combo under
+    # 2500 total".  That is one parent basket ceiling, never two per-line
+    # ceilings.
+    for marker in re.finditer(
+        _UNDER_WORDS + r"\s*" + _AMOUNT_UNIT + r"\s*"
+        r"(?:total|overall|combined)(?:\s+(?:order|purchase|budget))?\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
         cap, _constraints = extract_price_caps(marker.group(0))
         if cap is not None:
             caps.append(cap)
@@ -804,6 +823,12 @@ def _extract_multi_item_requirements(
         return [], [], None, []
 
     shared_delivery = extract_delivery(text_l, now)
+    total_cap = _total_cap_from_text(raw_text)
+    shared_constraints = [*shared_delivery]
+    if total_cap is not None:
+        shared_constraints.append(
+            Constraint(key="max_price_paise", op="lte", value=total_cap)
+        )
     items: list[IntentItem] = []
     local_caps: list[int] = []
     for index, (start, _token, category) in enumerate(mentions, start=1):
@@ -849,13 +874,19 @@ def _extract_multi_item_requirements(
         # brief introduces caps in later sentences, use only a sentence that
         # explicitly names this item as the fallback.
         local_cap, _price_constraints = extract_price_caps(segment)
+        if local_cap is not None and re.search(
+            r"\b(?:total|overall|combined)\b", segment_l
+        ):
+            local_cap = None
         if local_cap is None:
             later_caps: list[int] = []
             for sentence in re.split(r"(?<=[.;!?])\s+|\n+", raw_text):
                 sentence_l = sentence.lower().strip()
                 if re.search(rf"\b{re.escape(_token)}s?\b", sentence_l):
                     cap, _ = extract_price_caps(sentence)
-                    if cap is not None:
+                    if cap is not None and not re.search(
+                        r"\b(?:total|overall|combined)\b", sentence_l
+                    ):
                         later_caps.append(cap)
             local_cap = min(later_caps) if later_caps else None
         quantity = _item_quantity(
@@ -896,14 +927,13 @@ def _extract_multi_item_requirements(
             )
         )
 
-    total_cap = _total_cap_from_text(raw_text)
     if total_cap is None and local_caps:
         total_cap = sum(
             item.max_price_paise * item.quantity
             for item in items
             if item.max_price_paise is not None
         )
-    return items, shared_delivery, total_cap, []
+    return items, shared_constraints, total_cap, []
 
 
 def extract_sku(raw_text: str) -> list[Constraint]:

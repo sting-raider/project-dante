@@ -132,6 +132,28 @@ def test_multi_item_brief_accepts_a_parent_budget_without_line_caps():
     assert all(item.max_price_paise is None for item in intent.items)
 
 
+def test_phone_charger_is_one_charger_request():
+    intent = rule_compile(
+        "Get me a phone charger, spend limit is 1,500 rupees, nothing more expensive."
+    )
+
+    assert intent.items == []
+    assert _val(intent, "category") == "charger"
+    assert _val(intent, "max_price_paise") == 150_000
+    assert intent.max_total_amount_paise == 150_000
+
+
+def test_keyboard_mouse_combo_keeps_one_shared_total_cap():
+    intent = rule_compile("wireless keyboard and mouse combo under 2500 total")
+
+    assert [(item.id, item.max_price_paise) for item in intent.items] == [
+        ("keyboard-1", None),
+        ("mice-1", None),
+    ]
+    assert _val(intent, "max_price_paise") == 250_000
+    assert intent.max_total_amount_paise == 250_000
+
+
 # ---------------------------------------------------------------- price caps
 
 
