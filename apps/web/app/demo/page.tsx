@@ -24,7 +24,7 @@ import { motion, useReducedMotion } from "motion/react";
 import Folio from "@/components/editorial/Folio";
 import SectionLabel from "@/components/editorial/SectionLabel";
 import SyntheticBadge from "@/components/commerce/SyntheticBadge";
-import { apiPost, ApiError } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import Panel from "@/components/ui/Panel";
 import { cn } from "@/lib/cn";
@@ -133,9 +133,7 @@ export default function DemoPage() {
   async function manual(path: string, body?: unknown, tag?: string) {
     setManualFlash(null);
     try {
-      const res = await apiPost<Record<string, unknown>>(path, body, {
-        headers: orch.opHeaders(),
-      });
+      const res = await orch.operatorPost<Record<string, unknown>>(path, body);
       setManualFlash({
         tone: "ok",
         text: `${tag ?? path} → ${JSON.stringify(res).slice(0, 220)}`,
@@ -238,7 +236,7 @@ export default function DemoPage() {
                 <label htmlFor="demo-operator-token" className="folio-label block">
                   OPERATOR TOKEN{" "}
                   <span className="normal-case tracking-normal">
-                    {orch.tokenRequired ? "(required)" : "(optional)"} — never stored server-side by this page
+                    {orch.tokenRequired ? "(automatic locally)" : "(optional)"} — never exposed by the local bridge
                   </span>
                 </label>
                 <input
@@ -248,14 +246,14 @@ export default function DemoPage() {
                   value={orch.operatorToken}
                   onChange={(e) => orch.setOperatorToken(e.target.value)}
                   placeholder={
-                    orch.tokenRequired ? "X-Demo-Operator-Token value…" : "only needed when test keys are live"
+                    orch.tokenRequired ? "optional manual override…" : "only needed when test keys are live"
                   }
                   className="mt-1 w-full rounded-md border border-rule bg-paper-bright px-3 py-2 font-mono text-xs text-ink outline-none focus:border-ink"
                 />
                 <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-                  Sent as <code className="font-mono">X-Demo-Operator-Token</code> on every
-                  state-changing demo call while real test keys are configured. Kept in this
-                  tab&apos;s session storage only.
+                  Local development authorizes through a same-origin server bridge. A manual
+                  override is sent as <code className="font-mono">X-Demo-Operator-Token</code>
+                  and kept in this tab&apos;s session storage only.
                 </p>
               </div>
             </div>

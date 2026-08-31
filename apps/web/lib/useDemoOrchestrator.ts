@@ -22,13 +22,14 @@
  * Operator gating (apps/api/project_dante/api/routes/demo.py): with real
  * rzp_test_* keys configured, state-changing /api/demo/* endpoints demand a
  * matching X-Demo-Operator-Token header (settings.demo_operator_token; an
- * empty configured token keeps them LOCKED). The token is NEVER hardcoded —
- * the page collects it in an input field; this hook attaches it to
- * demo-scope POSTs and remembers it in sessionStorage for the tab.
+ * empty configured token keeps them LOCKED). In local development, a narrow
+ * same-origin Next.js bridge reads the existing server-side token and adds it
+ * only to allowlisted operator calls. A manually entered override is attached
+ * directly and remembered in sessionStorage for the tab.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, apiGet, apiPost, apiTry } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiTry, appPost } from "@/lib/api";
 import { formatINR } from "@/lib/format";
 import type {
   ApproveResponse,
@@ -265,16 +266,26 @@ export function useDemoOrchestrator() {
     return t ? { "x-demo-operator-token": t } : {};
   }, []);
 
-  /** demo-scope POST with the operator header attached. */
-  const demoPost = useCallback(
-    <T,>(path: string, body?: unknown): Promise<T> =>
-      apiPost<T>(path, body, { headers: opHeaders() }),
+  /**
+   * Operator-scoped POST. An explicitly entered token goes straight to the
+   * API; otherwise local development uses the same-origin server bridge so
+   * the secret never enters browser JavaScript.
+   */
+  const operatorPost = useCallback(
+    <T,>(path: string, body?: unknown): Promise<T> => {
+      const headers = opHeaders();
+      if (headers["x-demo-operator-token"]) {
+        return apiPost<T>(path, body, { headers });
+      }
+      const operatorPath = path.replace(/^\/api\//, "");
+      return appPost<T>(`/api/operator/${operatorPath}`, body);
+    },
     [opHeaders],
   );
 
   /* ------------------------------------------------------- step definitions */
 
-  const stepDefs = useMemo(() => buildStepDefs(demoPost), [demoPost]);
+  const stepDefs = useMemo(() => buildStepDefs(operatorPost), [operatorPost]);
 
   const makeRows = useCallback((): DemoStepRow[] => {
     return stepDefs.map((d) => ({
@@ -315,7 +326,7 @@ export function useDemoOrchestrator() {
     try {
       // Sandbox rail: mint the capture Razorpay's own gateway would have sent
       // — a REAL signed webhook through the same verification pipeline.
-      await demoPost("/api/demo/razorpay/simulate-event", {
+      await operatorPost("/api/demo/razorpay/simulate-event", {
         event_type: "payment.captured",
         order_id: orderId,
         payment_id: `pay_sbx_${Date.now().toString(36)}`,
@@ -330,7 +341,7 @@ export function useDemoOrchestrator() {
         w.detail = `${w.detail ?? ""} · auto-simulate refused (${errMsg(e)}) — complete payment on the contract page`;
       });
     }
-  }, [demoPost, update]);
+  }, [operatorPost, update]);
 
   const completeWait = useCallback(
     (waitIdx: number, contract: ContractResponse["contract"]) => {
@@ -737,6 +748,7 @@ export function useDemoOrchestrator() {
     operatorToken,
     setOperatorToken,
     opHeaders,
+    operatorPost,
     // derived views
     waiting,
     failedIndex: failedIndex >= 0 ? failedIndex : null,
@@ -756,7 +768,7 @@ export function useDemoOrchestrator() {
  * those rows).
  */
 function buildStepDefs(
-  demoPost: <T>(path: string, body?: unknown) => Promise<T>,
+  operatorPost: <T>(path: string, body?: unknown) => Promise<T>,
 ): StepDef[] {
   return [
     {
@@ -872,7 +884,7 @@ function buildStepDefs(
           kind: "action",
           async run(c: DemoCtx) {
     if (!c.contractId) throw new Error("no contract");
-    await demoPost(`/api/demo/contracts/${c.contractId}/ship`);
+    await operatorPost(`/api/demo/contracts/${c.contractId}/ship`);
     return "FULFILLMENT_SHIPPED recorded · SYNTHETIC fact";
           },
         },
@@ -883,7 +895,7 @@ function buildStepDefs(
           kind: "action",
           async run(c: DemoCtx) {
     if (!c.contractId) throw new Error("no contract");
-    const r = await demoPost<DeliverResponse>(
+    const r = await operatorPost<DeliverResponse>(
       `/api/demo/contracts/${c.contractId}/deliver`,
       { scenario: "wrong_variant" },
     );
@@ -935,7 +947,7 @@ function buildStepDefs(
           kind: "action",
           async run(c: DemoCtx) {
     if (!c.contractId) throw new Error("no contract");
-    await demoPost(`/api/demo/contracts/${c.contractId}/replacement-unavailable`);
+    await operatorPost(`/api/demo/contracts/${c.contractId}/replacement-unavailable`);
     let tail = "";
     try {
       const r = await apiGet<RightsResponse>(`/api/contracts/${c.contractId}/rights`);
@@ -992,7 +1004,7 @@ function buildStepDefs(
       );
     }
     if (d.decision === "REQUIRE_APPROVAL") {
-      const ap = await apiPost<ApproveResponse>(
+      const ap = await operatorPost<ApproveResponse>(
         `/api/remedies/${c.proposalId}/approve`,
         {},
       );

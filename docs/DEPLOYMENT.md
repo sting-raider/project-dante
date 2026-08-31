@@ -127,6 +127,13 @@ Note: the intake also tolerates `refund.completed` aliases and dedupes by
 | Variable | Secret? | Value / notes |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | no | `https://<your-api>.up.railway.app`. Inlined into the client bundle at BUILD time — changing it requires a rebuild/redeploy. |
+
+Local `next dev` also exposes a development-only, same-origin operator bridge
+for the `/demo` control room. It reads only `DEMO_OPERATOR_TOKEN` from the
+repository-root `.env` and injects it into an allowlisted set of synthetic
+fulfillment and approval calls, so the token never enters browser JavaScript.
+The bridge returns 404 in production; deployed operators must enter the token
+explicitly or use an authenticated server-side control surface.
 | `PUBLIC_APP_URL` | no | Same Vercel URL (informational parity with the API env). |
 
 5. **Deploy**. Note the assigned domain (e.g. `https://dante-web.vercel.app`)
