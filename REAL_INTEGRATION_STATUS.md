@@ -30,17 +30,17 @@ as a two-line basket. A prior one-line run cannot satisfy that amended proof.
 
 | # | Criterion | Status | Evidence required | Observed |
 | --- | --- | --- | --- | --- |
-| 1 | **Real order created** — Razorpay Test Mode returns a real `order_...` id for the frozen contract amount | `PROVEN` | `order_` id printed by the script from `/api/contracts/{id}/payment-order` (`checkout_config.order_id`) with checkout key `rzp_test_*` | real Razorpay order id order_TW01twaOofBkn0 (amount 649900 paise, checkout key rzp_test_<redacted>) |
-| 2 | **Real payment captured** — the human completes Standard Checkout in a browser and Razorpay binds a real `pay_...` id to the contract | `PROVEN` | `pay_` id on the contract record after PAID | real Razorpay payment id pay_TW0A9HkQKEVrZn captured on order order_TW01twaOofBkn0 |
+| 1 | **Real order created** — Razorpay Test Mode returns a real `order_...` id for the frozen contract amount | `PROVEN` | `order_` id printed by the script from `/api/contracts/{id}/payment-order` (`checkout_config.order_id`) with checkout key `rzp_test_*` | real Razorpay order id order_TWYPDfDz7L28vm (amount 1419800 paise; checkout key was observed in the original run) |
+| 2 | **Real payment captured** — the human completes Standard Checkout in a browser and Razorpay binds a real `pay_...` id to the contract | `PROVEN` | `pay_` id on the contract record after PAID | real Razorpay payment id pay_TWYbESVpjF9Ok0 captured on order order_TWYPDfDz7L28vm |
 | 3 | **Webhook received + verified** — Razorpay's server-to-server webhook crossed the intake gate (raw bytes → HMAC-SHA256 verify → freshness check → only then domain dispatch) | `PROVEN` | verified capture processed through `POST /api/webhooks/razorpay`; provider event id where surfaced | verified webhook processed: 1 capture event(s) on timeline; provider event id not surfaced on contract timeline; verification is structural: this script never called /verify-client or /simulate-event, and routes/webhooks.py is the ONLY code path that grants PAID, behind raw-body HMAC verification |
 | 4 | **PAID granted by the webhook path only** — no client-verify shortcut moved the contract to PAID | `PROVEN` | contract reached PAID with zero `CHECKOUT_COMPLETED_CLIENT` / `PAYMENT_VERIFIED_SERVER` events in its timeline | contract reached PAID exclusively via signature-verified webhook intake (no CHECKOUT_COMPLETED_CLIENT/PAYMENT_VERIFIED_SERVER events exist) |
-| 5 | **Synthetic wrong-variant delivery applied** — operator-token-gated demo endpoint delivers the wrong variant as an observed fact | `PROVEN` | `deliver(scenario="wrong_variant")` via `X-Demo-Operator-Token`, response `synthetic=true` | synthetic wrong_variant delivery applied via /demo/deliver with X-Demo-Operator-Token (response synthetic=true) |
-| 6 | **Breach detected** — promise verifier derives a real breach from the wrong-variant fact | `PROVEN` | `PROMISE_BREACH_DETECTED` with reason codes | PROMISE_BREACH_DETECTED reasons=['MATERIAL_VARIANT_MISMATCH', 'MATERIAL_VARIANT_MISMATCH'] |
-| 7 | **Rights computed** — rights graph built with eligible entitlements for the breached contract | `PROVEN` | non-empty graph + eligible entitlement list | rights graph nodes=22 edges=84 eligible=1 blocked=1 |
-| 8 | **Remedy planned + policy ALLOW** — planner proposes remedies, `refund_full` chosen, policy decision `ALLOW` | `PROVEN` | proposal id + `ALLOW` with policy ids | proposal rem_cd15f4cc32ae refund_full chosen; policy ALLOW policies=['P-REFUND-01', 'P-REFUND-02', 'P-REFUND-03'] |
-| 9 | **Real refund executed** — Razorpay Test Mode returns a real `rfnd_...` refund id | `PROVEN` | provider `rfnd_` id as `money_action.result_ref` from `/api/remedies/{id}/execute` | real Razorpay refund id rfnd_TW0AZfX02UIWfi (money_action=ma_cc4170ac59d7) |
-| 10 | **Repeat execute ⇒ no second refund** — replaying execute returns the identical refund id (one money effect) | `PROVEN` | second execute returns the same provider `rfnd_` id and same money-action id | repeat execute returned the SAME refund id rfnd_TW0AZfX02UIWfi (same money_action ma_cc4170ac59d7; single money effect) |
-| 11 | **Real LLM basket proof** — the exact monitor + keyboard brief is compiled by the configured LLM and frozen as two lines | `NOT_YET_PROVEN` | persisted `INTENT_COMPILED` provenance with `engine=llm`, `item_count=2`, and the frozen monitor + keyboard line ids | pending finalization run |
+| 5 | **Synthetic wrong-variant delivery applied** — operator-token-gated demo endpoint delivers the wrong variant as an observed fact | `PROVEN` | `deliver(scenario="wrong_variant")` via `X-Demo-Operator-Token`, response `synthetic=true` | synthetic wrong_variant delivery applied to line li_con_453513543017_monitor-1 via /demo/deliver with X-Demo-Operator-Token (response synthetic=true) |
+| 6 | **Breach detected** — promise verifier derives a real breach from the wrong-variant fact | `PROVEN` | `PROMISE_BREACH_DETECTED` with reason codes | PROMISE_BREACH_DETECTED line=li_con_453513543017_monitor-1 reasons=['MATERIAL_VARIANT_MISMATCH', 'MATERIAL_VARIANT_MISMATCH'] |
+| 7 | **Rights computed** — rights graph built with eligible entitlements for the breached contract | `PROVEN` | non-empty graph + eligible entitlement list | rights graph nodes=37 edges=170 eligible=1 blocked=1 affected_line=li_con_453513543017_monitor-1 |
+| 8 | **Remedy planned + policy ALLOW** — planner proposes remedies, `refund_full` chosen, policy decision `ALLOW` | `PROVEN` | proposal id + `ALLOW` with policy ids | proposal rem_71de13e004ec refund_full chosen; policy ALLOW policies=['P-REFUND-01', 'P-REFUND-02', 'P-REFUND-03'] |
+| 9 | **Real refund executed** — Razorpay Test Mode returns a real `rfnd_...` refund id | `PROVEN` | provider `rfnd_` id as `money_action.result_ref` from `/api/remedies/{id}/execute` | real Razorpay refund id rfnd_TWYcNx96sGKAwX line=li_con_453513543017_monitor-1 amount_paise=1249900 (money_action=ma_2cc006165a00) |
+| 10 | **Repeat execute ⇒ no second refund** — replaying execute returns the identical refund id (one money effect) | `PROVEN` | second execute returns the same provider `rfnd_` id and same money-action id | repeat execute returned the SAME refund id rfnd_TWYcNx96sGKAwX (same money_action ma_2cc006165a00; single money effect) |
+| 11 | **Real LLM basket proof** — the exact monitor + keyboard brief is compiled by the configured LLM and frozen as two lines | `PROVEN` | persisted `INTENT_COMPILED` provenance with `engine=llm`, `item_count=2`, and the frozen monitor + keyboard line ids | engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1 |
 
 ---
 
@@ -474,3 +474,84 @@ successful complete runs.)*
 - RUN RESULT: PASSED - ALL REQUIREMENT-5 CRITERIA PROVEN AGAINST REAL RAZORPAY TEST MODE
 - RUN ENDED: 2026-08-30T19:13:14+05:30
 <!-- END-RUN 2026-08-30T19-04-55+05-30 -->
+
+<!-- BEGIN-RUN 2026-09-01T04-42-29+05-30 -->
+- RUN STARTED: 2026-09-01T04:42:29+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-09-01T04:42:31+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-09-01T04:42:31+05:30 reset: products=112 (clean store for unambiguous evidence)
+  - 2026-09-01T04:42:37+05:30 compile: intent=int__bacd69d31959 engine=llm hard_constraints=2 (LLM never executes money)
+  - 2026-09-01T04:42:39+05:30 search: candidates=16 lines=2 recommended=[('monitor-1', 'AST-MN-004'), ('keyboard-1', 'AST-KB-008')] amount_paise=1419800
+  - 2026-09-01T04:42:40+05:30 freeze: contract=con_453513543017 lines=2 promises=34 psh=d7423c862dee
+  - 2026-09-01T04:42:40+05:30 authorize: hash=58fe4eb8b98b scope=two-line-basket
+  - 2026-09-01T04:42:40+05:30 [criterion:llm_basket] PROVEN -- real LLM compiled the exact two-line monitor + keyboard basket :: engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1
+  - 2026-09-01T04:42:40+05:30 LLM-BASKET: exact two-line monitor+keyboard provenance proven; engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1
+  - 2026-09-01T04:42:40+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TWYPDfDz7L28vm (amount 1419800 paise, checkout key rzp_test_<redacted>)
+  - 2026-09-01T04:42:40+05:30 ORDER (REAL): order_TWYPDfDz7L28vm
+  - 2026-09-01T04:42:40+05:30 checkout: browser open disabled; manual URL is http://localhost:3000/contract/con_453513543017
+  - 2026-09-01T04:52:41+05:30 FAIL: timed out after 600s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TWYPDfDz7L28vm (amount 1419800 paise, checkout key rzp_test_<redacted>) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | NOT_RUN | - |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | NOT_RUN | - |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | NOT_RUN | - |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | NOT_RUN | - |
+  | breach (promise breach detected from the wrong-variant fact) | NOT_RUN | - |
+  | rights (rights graph built with eligible entitlements) | NOT_RUN | - |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | NOT_RUN | - |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | NOT_RUN | - |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | NOT_RUN | - |
+  | llm_basket (real LLM compiled the exact two-line monitor + keyboard basket) | PROVEN | engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1 |
+- RUN RESULT: FAILED - timed out after 600s waiting for PAID (last=PAYMENT_ORDER_CREATED). Check: was the Checkout payment completed? Is the Razorpay dashboard webhook pointed at <public-api>/api/webhooks/razorpay with the SAME secret (localhost needs a tunnel)?
+- RUN ENDED: 2026-09-01T04:52:41+05:30
+<!-- END-RUN 2026-09-01T04-42-29+05-30 -->
+
+<!-- BEGIN-RUN 2026-09-01T04-55-04+05-30 -->
+- RUN STARTED: 2026-09-01T04:55:04+05:30 (script: scripts/verify_real_integration.py)
+  - 2026-09-01T04:55:06+05:30 health: api=project-dante-api razorpay=live-test-mode llm_engine=openai-compatible
+  - 2026-09-01T04:55:06+05:30 resume: contract=con_453513543017 status=PAID existing_order=order_TWYPDfDz7L28vm
+  - 2026-09-01T04:55:06+05:30 [criterion:llm_basket] PROVEN -- real LLM compiled the exact two-line monitor + keyboard basket :: engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1
+  - 2026-09-01T04:55:06+05:30 LLM-BASKET: exact two-line monitor+keyboard provenance proven; engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1
+  - 2026-09-01T04:55:06+05:30 [criterion:order] PROVEN -- real order created: Razorpay order_... id minted in live-test-mode :: real Razorpay order id order_TWYPDfDz7L28vm (amount 1419800 paise; checkout key was observed in the original run)
+  - 2026-09-01T04:55:06+05:30 ORDER (REAL): order_TWYPDfDz7L28vm
+  - 2026-09-01T04:55:06+05:30 resume: contract already PAID; skipping checkout prompt and validating downstream evidence
+  - 2026-09-01T04:55:06+05:30 [criterion:paid] PROVEN -- real payment captured: Razorpay pay_... id bound to the contract :: real Razorpay payment id pay_TWYbESVpjF9Ok0 captured on order order_TWYPDfDz7L28vm
+  - 2026-09-01T04:55:06+05:30 PAYMENT (REAL): pay_TWYbESVpjF9Ok0
+  - 2026-09-01T04:55:06+05:30 [criterion:webhook] PROVEN -- webhook received + signature-verified (raw-body HMAC BEFORE parse) :: verified webhook processed: 1 capture event(s) on timeline; provider event id not surfaced on contract timeline; verification is structural: this script never called /verify-client or /simulate-event, and routes/webhooks.py is the ONLY code path that grants PAID, behind raw-body HMAC verification
+  - 2026-09-01T04:55:06+05:30 WEBHOOK: verified capture processed; evidence=provider event id not surfaced on contract timeline; verification is structural: this script never called /verify-client or /simulate-event, and routes/webhooks.py is the ONLY code path that grants PAID, behind raw-body HMAC verification
+  - 2026-09-01T04:55:06+05:30 [criterion:paid_from_webhook] PROVEN -- PAID granted by the webhook path only (no client-verify shortcut) :: contract reached PAID exclusively via signature-verified webhook intake (no CHECKOUT_COMPLETED_CLIENT/PAYMENT_VERIFIED_SERVER events exist)
+  - 2026-09-01T04:55:06+05:30 PAID-FROM-WEBHOOK: proven structurally (client-verify paths unused)
+  - 2026-09-01T04:55:06+05:30 [criterion:wrong_variant] PROVEN -- synthetic wrong-variant delivery applied with operator token :: synthetic wrong_variant delivery applied to line li_con_453513543017_monitor-1 via /demo/deliver with X-Demo-Operator-Token (response synthetic=true)
+  - 2026-09-01T04:55:06+05:30 DELIVERY: wrong_variant line=li_con_453513543017_monitor-1 (synthetic, operator-token gated)
+  - 2026-09-01T04:55:06+05:30 [criterion:breach] PROVEN -- promise breach detected from the wrong-variant fact :: PROMISE_BREACH_DETECTED line=li_con_453513543017_monitor-1 reasons=['MATERIAL_VARIANT_MISMATCH', 'MATERIAL_VARIANT_MISMATCH']
+  - 2026-09-01T04:55:06+05:30 BREACH: line=li_con_453513543017_monitor-1 reasons=['MATERIAL_VARIANT_MISMATCH', 'MATERIAL_VARIANT_MISMATCH']
+  - 2026-09-01T04:55:07+05:30 [criterion:rights] PROVEN -- rights graph built with eligible entitlements :: rights graph nodes=37 edges=170 eligible=1 blocked=1 affected_line=li_con_453513543017_monitor-1
+  - 2026-09-01T04:55:07+05:30 RIGHTS: nodes=37 eligible=1 blocked=1 line=li_con_453513543017_monitor-1
+  - 2026-09-01T04:55:07+05:30 [criterion:remedy] PROVEN -- remedy planned: refund_full chosen, policy decision ALLOW :: proposal rem_71de13e004ec refund_full chosen; policy ALLOW policies=['P-REFUND-01', 'P-REFUND-02', 'P-REFUND-03']
+  - 2026-09-01T04:55:07+05:30 REMEDY: refund_full proposal=rem_71de13e004ec; POLICY: ALLOW
+  - 2026-09-01T04:55:09+05:30 [criterion:refund] PROVEN -- real refund executed: Razorpay rfnd_... id returned :: real Razorpay refund id rfnd_TWYcNx96sGKAwX line=li_con_453513543017_monitor-1 amount_paise=1249900 (money_action=ma_2cc006165a00)
+  - 2026-09-01T04:55:09+05:30 REFUND (REAL): rfnd_TWYcNx96sGKAwX line=li_con_453513543017_monitor-1 amount_paise=1249900
+  - 2026-09-01T04:55:09+05:30 [criterion:idempotent] PROVEN -- repeat execute returns the SAME refund id - no second refund :: repeat execute returned the SAME refund id rfnd_TWYcNx96sGKAwX (same money_action ma_2cc006165a00; single money effect)
+  - 2026-09-01T04:55:09+05:30 IDEMPOTENCY: repeat execute -> same refund rfnd_TWYcNx96sGKAwX
+  - 2026-09-01T04:55:09+05:30 AUDIT: 39 timeline events, 13 synthetic-labeled, scoped_refund_line=li_con_453513543017_monitor-1, unaffected_line_preserved=true, terminal=REMEDIATED
+  - 2026-09-01T04:55:09+05:30 checklist: all eleven real-integration rows promoted to PROVEN
+
+  Criteria summary for this run:
+  | Criterion | Result | Evidence |
+  | --- | --- | --- |
+  | order (real order created: Razorpay order_... id minted in live-test-mode) | PROVEN | real Razorpay order id order_TWYPDfDz7L28vm (amount 1419800 paise; checkout key was observed in the original run) |
+  | paid (real payment captured: Razorpay pay_... id bound to the contract) | PROVEN | real Razorpay payment id pay_TWYbESVpjF9Ok0 captured on order order_TWYPDfDz7L28vm |
+  | webhook (webhook received + signature-verified (raw-body HMAC BEFORE parse)) | PROVEN | verified webhook processed: 1 capture event(s) on timeline; provider event id not surfaced on contract timeline; verification is structural: this script never called /verify-client or /simulate-event, and routes/webhooks.py is the ONLY code path that grants PAID, behind raw-body HMAC verification |
+  | paid_from_webhook (PAID granted by the webhook path only (no client-verify shortcut)) | PROVEN | contract reached PAID exclusively via signature-verified webhook intake (no CHECKOUT_COMPLETED_CLIENT/PAYMENT_VERIFIED_SERVER events exist) |
+  | wrong_variant (synthetic wrong-variant delivery applied with operator token) | PROVEN | synthetic wrong_variant delivery applied to line li_con_453513543017_monitor-1 via /demo/deliver with X-Demo-Operator-Token (response synthetic=true) |
+  | breach (promise breach detected from the wrong-variant fact) | PROVEN | PROMISE_BREACH_DETECTED line=li_con_453513543017_monitor-1 reasons=['MATERIAL_VARIANT_MISMATCH', 'MATERIAL_VARIANT_MISMATCH'] |
+  | rights (rights graph built with eligible entitlements) | PROVEN | rights graph nodes=37 edges=170 eligible=1 blocked=1 affected_line=li_con_453513543017_monitor-1 |
+  | remedy (remedy planned: refund_full chosen, policy decision ALLOW) | PROVEN | proposal rem_71de13e004ec refund_full chosen; policy ALLOW policies=['P-REFUND-01', 'P-REFUND-02', 'P-REFUND-03'] |
+  | refund (real refund executed: Razorpay rfnd_... id returned) | PROVEN | real Razorpay refund id rfnd_TWYcNx96sGKAwX line=li_con_453513543017_monitor-1 amount_paise=1249900 (money_action=ma_2cc006165a00) |
+  | idempotent (repeat execute returns the SAME refund id - no second refund) | PROVEN | repeat execute returned the SAME refund id rfnd_TWYcNx96sGKAwX (same money_action ma_2cc006165a00; single money effect) |
+  | llm_basket (real LLM compiled the exact two-line monitor + keyboard basket) | PROVEN | engine=llm provider=groq model=qwen/qwen3.8-27b item_count=2 fallback=none compiler_version=llm-v1 retries=1 |
+- RUN RESULT: PASSED - ALL REQUIREMENT-5 CRITERIA PROVEN AGAINST REAL RAZORPAY TEST MODE
+- RUN ENDED: 2026-09-01T04:55:09+05:30
+<!-- END-RUN 2026-09-01T04-55-04+05-30 -->
