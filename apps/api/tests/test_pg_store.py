@@ -1,6 +1,8 @@
 """Postgres store backend tests (persistence specialist, plan §11).
 
-Skips honestly when no Postgres is reachable:
+Skips honestly when no Postgres is reachable during local development. CI sets
+``DANTE_REQUIRE_POSTGRES=1`` so the same condition fails the job instead of
+silently producing a green run with no database coverage:
 
 - ``DATABASE_URL`` (or ``DANTE_TEST_DATABASE_URL``) set -> connect to it;
 - otherwise, if the Docker CLI works, try to start the repo's
@@ -28,6 +30,21 @@ from project_dante.db.pg_store import PostgresStore, PostgresStoreError  # noqa:
 
 COMPOSE_DEFAULT_DSN = "postgresql://dante:dante@localhost:5433/dante"
 CONTAINER_UP_TIMEOUT_S = 90
+
+
+def _postgres_required() -> bool:
+    return os.environ.get("DANTE_REQUIRE_POSTGRES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _skip_or_fail_postgres(message: str) -> None:
+    if _postgres_required():
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 def _try_connect(dsn: str) -> bool:
@@ -102,17 +119,17 @@ def pg_dsn() -> str:
         dsn = _start_compose_postgres()
         source = "docker-compose"
     if not dsn:
-        pytest.skip(
+        _skip_or_fail_postgres(
             "Postgres backend not exercised: no DATABASE_URL / "
             "DANTE_TEST_DATABASE_URL set and docker compose postgres "
             f"({COMPOSE_DEFAULT_DSN}) unavailable"
         )
     if not _try_connect(dsn):
         if source == "docker-compose":
-            pytest.skip(
+            _skip_or_fail_postgres(
                 f"docker compose postgres started but not reachable at {dsn}"
             )
-        pytest.skip(f"DATABASE_URL set but Postgres unreachable at {dsn}")
+        _skip_or_fail_postgres(f"DATABASE_URL set but Postgres unreachable at {dsn}")
     return dsn
 
 

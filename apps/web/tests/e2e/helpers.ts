@@ -1,14 +1,14 @@
 /**
  * Shared E2E helpers — server readiness probes + demo-operator driving.
  *
- * The suite attaches to externally-started servers (see playwright.config.ts).
- * Every spec first calls `requireServers`, which SKIPs (not fails) the run
- * with an actionable message when either process is down.
+ * The suite probes the services started or reused by playwright.config.ts.
+ * Every spec first calls `requireServers`; local runs skip with an actionable
+ * message when either process is down, while CI fails the gate.
  */
 
 import { request as pwRequest, test as base, expect } from "@playwright/test";
 
-export const WEB_URL = "http://localhost:3000";
+export const WEB_URL = process.env.DANTE_WEB_URL ?? "http://localhost:3000";
 export const API_URL = process.env.DANTE_API_URL ?? "http://localhost:8000";
 
 /** The hybrid-demo operator token the API expects in live-test-mode. */
@@ -61,7 +61,11 @@ export async function requireServers(
     ]
       .filter(Boolean)
       .join(" and ");
-    skip(`server(s) not running: ${missing}`);
+    const reason = `server(s) not running: ${missing}`;
+    if (process.env.CI) {
+      throw new Error(reason);
+    }
+    skip(reason);
   }
 }
 
