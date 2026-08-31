@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ButtonLink } from "@/components/ui/Button";
 import Badge from "@/components/commerce/Badge";
 import Rule from "@/components/editorial/Rule";
+import Folio from "@/components/editorial/Folio";
 import SectionLabel from "@/components/editorial/SectionLabel";
 import StatStrip from "@/components/commerce/StatStrip";
 import RailStatus from "@/components/commerce/RailStatus";
@@ -17,8 +18,10 @@ const lifecycle = [
 
 export default function LandingPage() {
   return (
-    <main className="dante-container py-8 md:py-10">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <main className="landing-page dante-container py-8 md:py-10">
+      <Folio issue="PROJECT DANTE / OVERVIEW" running="BUYER-OWNED COMMERCE" />
+
+      <div className="landing-context-row mt-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="folio-label text-action-deep">Workspace overview</p>
           <p className="mt-1 text-sm text-ink-soft">Aster Electronics · buyer-owned commerce runtime</p>
@@ -26,10 +29,10 @@ export default function LandingPage() {
         <Badge tone="success">Runtime online</Badge>
       </div>
 
-      <section className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
-        <div className="rounded-xl border border-rule bg-paper-bright p-7 shadow-[0_8px_28px_rgba(16,24,40,0.04)] md:p-10">
-          <SectionLabel>Buyer-owned commerce</SectionLabel>
-          <h1 className="mt-5 max-w-3xl text-[clamp(2.4rem,5.5vw,5.2rem)] font-semibold leading-[0.98] tracking-[-0.055em] text-ink">
+      <section className="landing-hero-grid mt-8 grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+        <div className="landing-hero-card rounded-xl border border-rule bg-paper-bright p-7 shadow-[0_8px_28px_rgba(16,24,40,0.04)] md:p-10">
+          <SectionLabel>Buyer-owned commerce · issue 00</SectionLabel>
+          <h1 className="landing-hero-title mt-5 max-w-3xl text-[clamp(2.4rem,5.5vw,5.2rem)] font-semibold leading-[0.98] tracking-[-0.055em] text-ink">
             Commerce that remembers the promise.
           </h1>
           <p className="mt-6 max-w-2xl text-base leading-relaxed text-ink-soft md:text-lg">
@@ -41,13 +44,18 @@ export default function LandingPage() {
             <ButtonLink href="/buy" size="lg">
               Start a buying brief <span aria-hidden="true">→</span>
             </ButtonLink>
-            <Link href="/merchant" className="rounded-md px-3 py-3 text-sm font-medium text-ink-soft hover:bg-paper hover:text-ink">
-              View merchant profile
-            </Link>
+            <ButtonLink href="/demo" variant="secondary" size="lg">
+              Open demo room <span aria-hidden="true">↗</span>
+            </ButtonLink>
+          </div>
+          <div className="landing-proof-note mt-8 flex flex-wrap gap-x-5 gap-y-2 border-t border-rule pt-4">
+            <span>typed intent</span>
+            <span>frozen promise</span>
+            <span>verified remedy</span>
           </div>
         </div>
 
-        <aside className="relative overflow-hidden rounded-xl border border-rule bg-[#101828] p-6 text-white shadow-[0_8px_28px_rgba(16,24,40,0.10)] md:p-7">
+        <aside className="landing-control-card relative overflow-hidden rounded-xl border border-rule bg-[#101828] p-6 text-white shadow-[0_8px_28px_rgba(16,24,40,0.10)] md:p-7">
           <div className="absolute right-[-2rem] top-[-2rem] h-32 w-32 rounded-full bg-action/30 blur-2xl" aria-hidden="true" />
           <div className="relative flex items-center justify-between gap-3">
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">Dante control plane</span>
@@ -74,7 +82,7 @@ export default function LandingPage() {
         <StatStrip />
       </section>
 
-      <section className="mt-12 rounded-xl border border-rule bg-paper-bright p-6 md:p-8">
+      <section className="landing-lifecycle mt-12 rounded-xl border border-rule bg-paper-bright p-6 md:p-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <SectionLabel>One purchase, six controlled states</SectionLabel>
@@ -93,10 +101,10 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="mt-6 grid gap-6 md:grid-cols-3">
+      <section className="landing-surface-grid mt-6 grid gap-6 md:grid-cols-3" aria-label="Dante surfaces">
         {[
           ["Promise Ledger", "The exact offer facts and hard constraints frozen before money moves.", "/buy", "Build a contract"],
-          ["Rights Graph", "Entitlements derived from the contract, evidence and verified breach state.", "/merchant", "Inspect capability"],
+          ["Purchase Rights Graph", "Entitlements derived from the contract, evidence and verified breach state.", "/demo", "Run the proof"],
           ["Append-only audit", "Every agent decision and money effect attached to a traceable event.", "/demo", "Open demo room"],
         ].map(([title, body, href, cta]) => (
           <Link key={title} href={href} className="group rounded-xl border border-rule bg-paper-bright p-6 transition-shadow hover:shadow-[0_8px_24px_rgba(16,24,40,0.06)]">
@@ -110,7 +118,7 @@ export default function LandingPage() {
 
       <Rule className="mt-10" />
       <footer className="flex flex-col gap-3 py-6 md:flex-row md:items-center md:justify-between">
-        <span className="folio-label">Project Dante · Razorpay AI Buildathon</span>
+        <span className="folio-label">Project Dante · agentic commerce runtime</span>
         <RailStatus />
       </footer>
     </main>

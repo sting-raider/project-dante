@@ -1575,6 +1575,102 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Overview — point the whole runtime toward the guided proof
+--------------------------------------------------------------------------- */
+
+.landing-page {
+  background:
+    radial-gradient(circle at 82% 8%, rgb(47 111 237 / 8%), transparent 18rem),
+    var(--color-paper);
+}
+
+.landing-context-row {
+  border-left: 2px solid var(--color-action);
+  padding-left: 0.9rem;
+}
+
+.landing-hero-grid {
+  position: relative;
+}
+
+.landing-hero-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.landing-hero-card::after {
+  position: absolute;
+  right: -4rem;
+  bottom: -7rem;
+  z-index: -1;
+  height: 18rem;
+  width: 18rem;
+  border-radius: 999px;
+  background: rgb(47 111 237 / 7%);
+  content: "";
+  filter: blur(1px);
+}
+
+.landing-hero-title {
+  max-width: 11ch;
+}
+
+.landing-proof-note {
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.landing-proof-note span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.landing-proof-note span::before {
+  height: 0.45rem;
+  width: 0.45rem;
+  border-radius: 999px;
+  background: var(--color-success);
+  content: "";
+}
+
+.landing-control-card {
+  min-height: 100%;
+}
+
+.landing-lifecycle,
+.landing-surface-grid > a {
+  box-shadow: 0 6px 22px rgb(16 24 40 / 3%);
+}
+
+.landing-surface-grid > a {
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.landing-surface-grid > a:hover {
+  border-color: rgb(47 111 237 / 45%);
+  box-shadow: 0 10px 28px rgb(16 24 40 / 7%);
+  transform: translateY(-2px);
+}
+
+@media (max-width: 767px) {
+  .landing-context-row {
+    border-left: 0;
+    border-top: 2px solid var(--color-action);
+    padding-top: 0.75rem;
+    padding-left: 0;
+  }
+
+  .landing-hero-title {
+    max-width: 13ch;
+  }
+}
+
 @media (max-width: 767px) {
   .demo-manual-summary {
     align-items: flex-start;
