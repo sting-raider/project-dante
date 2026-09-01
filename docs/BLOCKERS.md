@@ -46,6 +46,11 @@ LLM_PROVIDER=groq
 LLM_BASE_URL=https://api.groq.com/openai/v1
 LLM_MODEL=qwen/qwen3.8-27b
 LLM_API_KEY=<groq-api-key>
+# or NVIDIA NIM's OpenAI-compatible endpoint
+LLM_PROVIDER=nvidia
+LLM_BASE_URL=https://integrate.api.nvidia.com/v1
+LLM_MODEL=nvidia/nemotron-3-super-120b-a12b
+LLM_API_KEY=<nvidia-api-key>
 ```
 
 ## 3. Deployment authorization

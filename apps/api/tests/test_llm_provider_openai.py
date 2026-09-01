@@ -71,6 +71,7 @@ def _chat_response(content: str) -> httpx.Response:
         ("openai-compatible", "sk-test", "openai-compatible"),
         ("groq", "key-groq-fixture", "openai-compatible"),
         ("  GROQ  ", "key-groq-spacing-fixture", "openai-compatible"),
+        ("nvidia", "key-nvidia-fixture", "openai-compatible"),
         # configured but unusable -> '' -> rules engine
         ("anthropic", "", ""),
         ("openai-compatible", "", ""),
@@ -94,7 +95,7 @@ def test_engine_selection_matrix(provider, key, expected_engine):
 
 def test_get_provider_matches_llm_engine_for_every_combo():
     """get_provider must never disagree with settings.llm_engine."""
-    for provider in ("", "anthropic", "openai-compatible", "groq", "mistral"):
+    for provider in ("", "anthropic", "openai-compatible", "groq", "nvidia", "mistral"):
         for key in ("", "key-fixture-3"):
             s = _settings(llm_provider=provider, llm_api_key=key)
             p = get_provider(s)
@@ -156,6 +157,60 @@ async def test_default_base_url_is_openai_when_unset():
     await provider.structured(system="s", user="u", output_schema=TinyOut, trace_id="t")
     assert provider.base_url == OPENAI_DEFAULT_BASE_URL
     assert seen_url == f"{OPENAI_DEFAULT_BASE_URL}/chat/completions"
+
+
+async def test_nvidia_nim_uses_documented_sampling_and_no_reasoning_trace():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.read())
+        return _chat_response('{"answer": "nim", "confidence": 1.0}')
+
+    s = _settings(
+        llm_provider="nvidia",
+        llm_api_key="key-nvidia-fixture",
+        llm_model="nvidia/nemotron-3-super-120b-a12b",
+        llm_base_url="https://integrate.api.nvidia.com/v1",
+    )
+    provider = OpenAICompatibleProvider(s, transport=httpx.MockTransport(handler))
+    out = await provider.structured(
+        system="be terse", user="buyer text here",
+        output_schema=TinyOut, trace_id="trace_nvidia",
+    )
+
+    assert out.answer == "nim"
+    assert provider.provider_name == "nvidia"
+    payload = captured["payload"]
+    assert payload["temperature"] == 1.0
+    assert payload["top_p"] == 0.95
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["response_format"] == {"type": "json_object"}
+
+
+async def test_nvidia_nim_retries_transient_service_unavailable():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(503, json={"error": {"message": "busy"}})
+        return _chat_response('{"answer": "recovered", "confidence": 1.0}')
+
+    s = _settings(
+        llm_provider="nvidia",
+        llm_api_key="key-nvidia-fixture",
+        llm_model="nvidia/nemotron-3-super-120b-a12b",
+        llm_base_url="https://integrate.api.nvidia.com/v1",
+    )
+    provider = OpenAICompatibleProvider(s, transport=httpx.MockTransport(handler))
+    out = await provider.structured(
+        system="be terse", user="buyer text here",
+        output_schema=TinyOut, trace_id="trace_nvidia_retry",
+    )
+
+    assert out.answer == "recovered"
+    assert calls["n"] == 3
 
 
 async def test_malformed_json_retries_once_then_succeeds():

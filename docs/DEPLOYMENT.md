@@ -69,7 +69,7 @@ Buyer browser ──► Vercel (Next.js web) ──► Railway (FastAPI API)
 | `DEMO_OPERATOR_TOKEN` | **SECRET** | Required for `/api/demo/*` state changes and human remedy approvals (`/api/remedies/{proposal_id}/approve`) via `X-Demo-Operator-Token`. Empty ⇒ those writes are LOCKED. Generate with `openssl rand -hex 32`. |
 | `DANTE_STORE_BACKEND` | no | `postgres` for the release service. `json` is emergency recovery only. |
 | `DATABASE_URL` | **SECRET** | Railway reference variable `${{Postgres.DATABASE_URL}}`; keep the Postgres service private. |
-| `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible` \| `groq` (`groq` uses the OpenAI-compatible adapter). Empty ⇒ deterministic rules engine. |
+| `LLM_PROVIDER` | no | `` (empty) \| `anthropic` \| `openai-compatible` \| `groq` \| `nvidia` (`groq` and `nvidia` use the OpenAI-compatible adapter). Empty ⇒ deterministic rules engine. |
 | `LLM_MODEL` | no | Model name when a provider is configured. |
 | `LLM_API_KEY` | **SECRET** | Provider credential. Omit for rules engine. |
 | `PUBLIC_APP_URL` | no | Vercel web URL, e.g. `https://dante-web.vercel.app`. Used as the CORS allow-listed origin. |
