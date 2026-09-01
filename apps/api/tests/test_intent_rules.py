@@ -792,6 +792,72 @@ def test_multi_item_semantic_retry_can_earn_llm_provenance():
         STORE.delete(intent.id)
 
 
+def test_multi_item_llm_operator_aliases_are_normalized_before_validation():
+    """NVIDIA-style ``includes``/``one_of`` operators remain safe and usable."""
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+
+    rules = rule_compile(MULTI_ITEM_BRIEF)
+    items = []
+    for item in rules.items:
+        hard_constraints = []
+        for constraint in item.hard_constraints:
+            payload = constraint.model_dump(mode="json")
+            if payload["op"] == "contains":
+                payload["op"] = "includes"
+            elif payload["op"] == "in":
+                payload["op"] = "one_of"
+            hard_constraints.append(payload)
+        items.append(
+            {
+                "label": item.label,
+                "hard_constraints": hard_constraints,
+                "soft_preferences": [
+                    preference.model_dump(mode="json")
+                    for preference in item.soft_preferences
+                ],
+                "max_price_paise": item.max_price_paise,
+                "quantity": item.quantity,
+            }
+        )
+
+    class StubProvider:
+        provider_name = "nvidia"
+        model = "nvidia/nemotron-3-super-120b-a12b"
+        retries = 0
+
+        async def structured(self, **_kwargs):
+            return CompiledIntentSchema.model_validate(
+                {
+                    "hard_constraints": [
+                        constraint.model_dump(mode="json")
+                        for constraint in rules.hard_constraints
+                    ],
+                    "soft_preferences": [
+                        preference.model_dump(mode="json")
+                        for preference in rules.soft_preferences
+                    ],
+                    "max_total_amount_paise": rules.max_total_amount_paise,
+                    "substitutions_allowed": rules.substitutions_allowed,
+                    "items": items,
+                }
+            )
+
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=StubProvider()).compile(MULTI_ITEM_BRIEF)
+    )
+    try:
+        assert intent.compilation_provenance.engine == "llm"
+        assert intent.compilation_provenance.provider == "nvidia"
+        assert intent.compilation_provenance.item_count == 2
+        assert intent.compilation_provenance.fallback_reason is None
+        assert [item.id for item in intent.items] == ["monitor-1", "keyboard-1"]
+    finally:
+        STORE.delete(intent.id)
+
+
 def test_configured_llm_provider_error_is_persisted_as_deterministic_fallback():
     import asyncio
 

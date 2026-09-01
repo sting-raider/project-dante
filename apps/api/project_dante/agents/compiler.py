@@ -229,8 +229,10 @@ warranty.type and warranty.region are separate constraints.
   (such as a combined budget or delivery deadline) at the top level. The \
   item `quantity` is an integer and defaults to 1.
 - Normalize evaluator values exactly: for example, India becomes IN and \
-"manufacturer warranty" becomes manufacturer. Before returning JSON, check \
-that every explicit requirement is represented by the canonical key/value pair.
+  "manufacturer warranty" becomes manufacturer. Before returning JSON, check \
+  that every explicit requirement is represented by the canonical key/value pair.
+- Use only these exact operators: eq, lte, gte, lt, gt, in, contains. In \
+  particular, use contains instead of includes and in instead of one_of.
 - Example: "over-ear ANC headphones under ₹12,000 with an Indian manufacturer \
 warranty, arriving by Thursday" requires category, attributes.form_factor, \
 attributes.anc, max_price_paise, warranty.type, warranty.region, and \
@@ -323,6 +325,47 @@ _LLM_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "indian": "IN",
     },
 }
+
+
+_LLM_OPERATOR_ALIASES: dict[str, str] = {
+    "equals": "eq",
+    "equal": "eq",
+    "is": "eq",
+    "less_than_or_equal": "lte",
+    "less_than_equal": "lte",
+    "at_most": "lte",
+    "greater_than_or_equal": "gte",
+    "greater_than_equal": "gte",
+    "at_least": "gte",
+    "one_of": "in",
+    "oneof": "in",
+    "in_list": "in",
+    "includes": "contains",
+    "include": "contains",
+}
+
+
+def _normalize_llm_operator(value: Any) -> Any:
+    """Normalize harmless operator aliases before strict schema validation."""
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower()
+    return _LLM_OPERATOR_ALIASES.get(normalized, normalized)
+
+
+def _normalize_llm_constraint_payload(raw: Any) -> Any:
+    """Prepare an untrusted constraint dict for canonical validation.
+
+    Item constraints are intentionally kept structurally generic in the provider
+    schema for backwards compatibility, so their operator needs normalization
+    before the strict nested schema validates it. Unknown operators remain
+    unchanged and are still rejected.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    normalized = dict(raw)
+    normalized["op"] = _normalize_llm_operator(normalized.get("op", "eq"))
+    return normalized
 
 
 def _normalize_llm_value(key: str, value: Any) -> Any:
@@ -1638,7 +1681,7 @@ class IntentCompilerAgent:
         hard: list[Constraint] = []
         for c in d.get("hard_constraints", []):
             try:
-                parsed = Constraint(**c)
+                parsed = Constraint(**_normalize_llm_constraint_payload(c))
             except Exception as exc:  # noqa: BLE001 — fail safe to rules
                 raise ValueError("LLM hard constraint failed domain validation") from exc
             parsed = _normalize_llm_constraint(parsed)
@@ -1729,7 +1772,7 @@ class IntentCompilerAgent:
                     )
                 try:
                     validated = CompiledIntentSchema._Constraint.model_validate(
-                        raw_constraint
+                        _normalize_llm_constraint_payload(raw_constraint)
                     )
                     parsed_constraint = _normalize_llm_constraint(
                         Constraint(**validated.model_dump())
