@@ -47,6 +47,54 @@ def _to_model(model_cls: type[BaseModel], record: dict[str, Any]) -> dict[str, A
 async def get_contract(contract_id: str) -> dict[str, Any]:
     """Contract dossier: frozen promise set + any rights created against it."""
     contract = _get_contract_or_404(contract_id)
+
+    # Active reconciliation fallback for live-test-mode:
+    # If the contract is waiting for payment and bound to a live gateway order,
+    # but the server-to-server webhook was dropped or delayed by a tunnel/network glitch,
+    # check Razorpay for captured payment and deliver it through the signature-verified webhook handler.
+    status = contract.get("status")
+    order_id = contract.get("razorpay_order_id")
+    if (
+        status in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING")
+        and isinstance(order_id, str)
+        and order_id.startswith("order_")
+        and not contract.get("sandbox_mode")
+    ):
+        try:
+            from project_dante.integrations.razorpay import service
+
+            if service.mode() == "live-test-mode":
+                payments = service.fetch_order_payments(order_id)
+                captured = next(
+                    (
+                        p
+                        for p in payments
+                        if isinstance(p, dict)
+                        and (p.get("status") == "captured" or p.get("captured") is True)
+                    ),
+                    None,
+                )
+                if captured and captured.get("id"):
+                    import json
+                    import time
+                    from project_dante.api.routes.webhooks import handle_webhook_bytes
+
+                    payload = {
+                        "entity": "event",
+                        "account_id": service.key_id_public(),
+                        "event": "payment.captured",
+                        "contains": ["payment"],
+                        "payload": {"payment": {"entity": captured}},
+                        "created_at": int(time.time()),
+                    }
+                    raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                    sig = service.sign_webhook_payload(raw_body)
+                    event_id = f"evt_recon_{captured['id']}"
+                    await handle_webhook_bytes(raw_body, sig, event_id)
+                    contract = _get_contract_or_404(contract_id)
+        except Exception:
+            pass
+
     promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract_id]
     entitlements = [e for e in STORE.list("entitlement") if e.get("contract_id") == contract_id]
     return {
