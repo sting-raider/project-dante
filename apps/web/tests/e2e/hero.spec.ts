@@ -31,6 +31,11 @@ test.describe("sandbox hero arc", () => {
     // ---- reset the demo store so the arc starts from the seeded catalog ---
     const reset = await apiPost(api, "/api/demo/reset");
     if (reset.status === 403) {
+      if (process.env.CI) {
+        throw new Error(
+          "demo endpoints are locked in CI; the browser gate requires the sandbox rail or an operator token",
+        );
+      }
       test.skip(true, "demo endpoints locked (live-test-mode without operator token) — run with DANTE_DEMO_OPERATOR_TOKEN or unset RAZORPAY keys");
     }
     expect(reset.status, "POST /api/demo/reset").toBe(200);
@@ -160,7 +165,36 @@ test.describe("sandbox hero arc", () => {
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/MISMATCH/).first()).toBeVisible();
 
-    // ---- 10. gated remedy pipeline -> REMEDIATED ---------------------------
+    // ---- 10. rights graph remains readable and interactive -----------------
+    await page.goto(`/contract/${contractId}/rights`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", { name: "What this purchase entitles you to." }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Purchase rights", { exact: true })).toBeVisible();
+    await expect(page.getByText("Remedy planner →", { exact: true })).toBeVisible();
+    await expect(page.getByRole("group", { name: /Rights graph with/ })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // ---- 10b. human timeline + raw audit surfaces ------------------------
+    await page.goto(`/contract/${contractId}/timeline`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", { name: /Everything that happened/ }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("navigation", { name: "Event category filters" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Timeline summary" })).toBeVisible();
+
+    await page.goto(`/audit/${contractId}`, { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByText("CONTRACT RECORD · HASHES FULL-LENGTH", { exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("region", { name: "Audit summary" })).toBeVisible();
+
+    // ---- 11. gated remedy pipeline -> REMEDIATED ---------------------------
     await page.goto(`/contract/${contractId}/remedy`, {
       waitUntil: "domcontentloaded",
     });

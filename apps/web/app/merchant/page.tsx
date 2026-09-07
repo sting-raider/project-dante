@@ -85,14 +85,19 @@ export default function MerchantPage() {
 
   // The single most expensive blocker: highest count.
   const worstBlocker = blockers[0];
+  const catalogStats = profile?.catalog_stats;
+  const deliveryCoverage = profile
+    ? fmtPct(num(catalogStats?.delivery_promise_coverage))
+    : "probing";
+  const machineEndpointCount = Object.keys(profile?.machine_endpoints ?? {}).length;
 
   return (
-    <main className="min-h-screen bg-paper">
+    <main className="merchant-dossier-page min-h-screen bg-paper">
       <div className="dante-container py-8 md:py-12">
         <Folio issue="THE MERCHANT LEDGER" running="DAILY DOSSIER / OPERATIONS" />
 
         {/* Masthead */}
-        <header className="mt-10 border-b-2 border-ink pb-8 md:mt-14">
+        <header className="merchant-masthead mt-10 border-b-2 border-ink pb-8 md:mt-14">
           <SectionLabel>MACHINE-OPINION SECTION</SectionLabel>
           <h1 className="mt-4 font-display text-[clamp(2.5rem,7vw,5.5rem)] leading-[0.98] tracking-[-0.02em]">
             What your AI buyers couldn&apos;t verify.
@@ -183,6 +188,54 @@ export default function MerchantPage() {
                     </div>
                   ))}
                 </div>
+              )}
+            </section>
+
+            {/* Runtime profile — compact evidence for the merchant capabilities
+                the buyer-facing evaluator can actually query. */}
+            <section
+              className="merchant-profile-panel mt-10 rounded-xl border border-rule bg-paper-bright p-5 md:p-7"
+              aria-label="Merchant runtime profile"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule pb-4">
+                <div>
+                  <SectionLabel>RUNTIME PROFILE · MACHINE-READABLE</SectionLabel>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.035em] text-ink">
+                    The catalog behind the promise.
+                  </h2>
+                </div>
+                <span className="folio-label">{profile?.merchant_id ?? "PROFILE PROBING"}</span>
+              </div>
+              {!profile && !profileError ? (
+                <p className="mt-5 font-mono text-xs uppercase tracking-[0.14em] text-ink-soft">
+                  Measuring live catalog capabilities…
+                </p>
+              ) : profile ? (
+                <div className="merchant-profile-grid mt-5">
+                  <div className="merchant-profile-cell">
+                    <span className="merchant-profile-label">Merchant</span>
+                    <strong className="merchant-profile-value">{profile.name ?? profile.merchant_id ?? "—"}</strong>
+                  </div>
+                  <div className="merchant-profile-cell">
+                    <span className="merchant-profile-label">Catalog</span>
+                    <strong className="merchant-profile-value">{profile.catalog_version ?? "unversioned"}</strong>
+                    <span className="merchant-profile-detail">{catalogStats?.total_skus ?? totalProducts} SKUs · {profile.currency ?? "INR"}</span>
+                  </div>
+                  <div className="merchant-profile-cell">
+                    <span className="merchant-profile-label">Delivery evidence</span>
+                    <strong className="merchant-profile-value">{deliveryCoverage}</strong>
+                    <span className="merchant-profile-detail">structured promise coverage</span>
+                  </div>
+                  <div className="merchant-profile-cell">
+                    <span className="merchant-profile-label">Machine endpoints</span>
+                    <strong className="merchant-profile-value tabular">{machineEndpointCount}</strong>
+                    <span className="merchant-profile-detail">buyer-queryable surfaces · {profile.gateway?.mode ?? "rail probing"}</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-5 font-mono text-xs text-warning">
+                  Capability profile unavailable — {profileError}
+                </p>
               )}
             </section>
 

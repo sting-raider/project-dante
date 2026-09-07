@@ -135,19 +135,26 @@ export default function RightsPage() {
     return entitlements.find((e) => e.id === rawId || e.id === selected.id || e.slug === rawId);
   }, [selected, entitlements]);
 
+  const entitlementCount = entitlements.length;
+  const eligibleCount = entitlements.filter(
+    (entitlement) => entitlement.status === "eligible" || entitlement.status === "active",
+  ).length;
+  const lineScopedCount = entitlements.filter((entitlement) => entitlement.line_item_id).length;
+  const breachNodeCount = nodes.filter((node) => node.type === "breach").length;
+
   function entitlementTitle(e: Entitlement): string {
     return e.slug ?? `${e.type} · ${e.issuer_name}`;
   }
 
   return (
-    <main className="dante-container py-8 md:py-12">
+    <main className="rights-dossier-page dante-container py-8 md:py-12">
       <Folio
         issue="ISSUE 05 / RIGHTS"
         running={`DOSSIER / ${contractId.slice(0, 13).toUpperCase()}`}
         href={`/contract/${contractId}`}
       />
 
-      <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
+      <header className="rights-masthead mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
         <div className="md:col-span-8">
           <SectionLabel>THE PURCHASE RIGHTS GRAPH</SectionLabel>
           <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
@@ -180,6 +187,29 @@ export default function RightsPage() {
         </div>
       </header>
 
+      <div className="rights-summary-grid" aria-label="Rights graph summary">
+        <div className="rights-summary-card">
+          <span className="rights-summary-label">Graph state</span>
+          <strong className="rights-summary-value">{nodes.length || "—"}</strong>
+          <span className="rights-summary-detail">nodes · {edges.length || "—"} relationships</span>
+        </div>
+        <div className="rights-summary-card">
+          <span className="rights-summary-label">Purchase rights</span>
+          <strong className="rights-summary-value">{entitlementCount || "—"}</strong>
+          <span className="rights-summary-detail">{eligibleCount} eligible or active</span>
+        </div>
+        <div className="rights-summary-card">
+          <span className="rights-summary-label">Line scope</span>
+          <strong className="rights-summary-value">{lineScopedCount || "—"}</strong>
+          <span className="rights-summary-detail">entitlements bound to a basket line</span>
+        </div>
+        <div className="rights-summary-card">
+          <span className="rights-summary-label">Verification input</span>
+          <strong className="rights-summary-value">{breachNodeCount || "Watching"}</strong>
+          <span className="rights-summary-detail">{breachNodeCount === 1 ? "breach node" : "breach nodes"} activating rights</span>
+        </div>
+      </div>
+
       {error && (
         <p role="alert" className="mt-8 border-l-2 border-danger pl-3 font-mono text-xs text-danger">
           {error} — is the API on :8000?
@@ -195,7 +225,7 @@ export default function RightsPage() {
       {graph && (
         <div
           className={cn(
-            "relative mt-10 overflow-x-auto rounded-md border border-rule bg-paper-bright p-4",
+            "rights-graph-surface relative mt-10 overflow-x-auto rounded-md border border-rule bg-paper-bright p-4",
             selected && "lg:pr-[26rem]"
           )}
         >
@@ -216,7 +246,7 @@ export default function RightsPage() {
               role="dialog"
               aria-label={`Entitlement detail: ${selected.label}`}
               className={cn(
-                "mt-6 rounded-md border border-ink bg-paper p-5 lg:absolute lg:right-4 lg:top-4 lg:mt-0 lg:max-h-[calc(100%-2rem)] lg:w-96 lg:overflow-y-auto",
+                "rights-drawer mt-6 rounded-md border border-ink bg-paper p-5 lg:absolute lg:right-4 lg:top-4 lg:mt-0 lg:max-h-[calc(100%-2rem)] lg:w-96 lg:overflow-y-auto",
                 // Keep the drawer in view when keyboard focus moves into it.
                 "focus-within:outline focus-within:outline-2 focus-within:outline-signal"
               )}
@@ -246,6 +276,9 @@ export default function RightsPage() {
                         <span className="text-ink-soft">({selectedEntitlement.issuer_type})</span>
                       </Row>
                       <Row label="Type">{selectedEntitlement.type}</Row>
+                      <Row label="Line scope">
+                        {selectedEntitlement.line_item_id ?? "legacy contract scope"}
+                      </Row>
                       <Row label="Status">
                         <Badge
                           tone={
@@ -321,7 +354,7 @@ export default function RightsPage() {
       )}
 
       {/* Legend */}
-      <section className="mt-12 max-w-3xl" aria-label="Edge legend">
+      <section className="rights-legend mt-12 max-w-3xl" aria-label="Edge legend">
         <SectionLabel>EDGE LEGEND</SectionLabel>
         <ul className="mt-3 divide-y divide-rule border-y border-rule">
           {EDGE_LEGEND.map(({ type, note }) => (

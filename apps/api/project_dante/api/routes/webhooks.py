@@ -27,6 +27,10 @@ from fastapi.responses import JSONResponse
 
 from project_dante.db.store import STORE
 from project_dante.domain.events import append_event, now_iso
+from project_dante.domain.line_items import (
+    contract_line_ids,
+    record_line_id,
+)
 from project_dante.domain.state_machine import InvalidTransition, validate_transition
 from project_dante.integrations.razorpay import service
 
@@ -929,6 +933,50 @@ def _processed_refund_totals(payment_id: str) -> tuple[int, list[str]]:
     return total, refund_ids
 
 
+def _processed_refund_line_totals(
+    payment_id: str, contract: dict[str, Any] | None
+) -> dict[str, int]:
+    """Return only provider refunds explicitly tied to frozen contract lines."""
+    valid_lines = set(contract_line_ids(contract or {}))
+    if not valid_lines:
+        return {}
+    totals: dict[str, int] = {}
+    seen: set[str] = set()
+    for refund in STORE.find("razorpay_refund", payment_id=payment_id):
+        refund_id = str(refund.get("id") or "")
+        if refund_id and refund_id in seen:
+            continue
+        if refund_id:
+            seen.add(refund_id)
+        amount = _refund_amount_paise(refund)
+        if amount is None:
+            continue
+        line_item_id = record_line_id(refund)
+        if line_item_id is None:
+            notes = refund.get("notes")
+            if isinstance(notes, dict):
+                noted = notes.get("line_item_id")
+                line_item_id = noted if isinstance(noted, str) and noted else None
+        if line_item_id in valid_lines:
+            totals[line_item_id] = totals.get(line_item_id, 0) + amount
+    return totals
+
+
+def _validated_refund_line_id(
+    contract: dict[str, Any] | None,
+    notes: dict[str, Any],
+    refund_record: dict[str, Any] | None,
+) -> str | None:
+    """Trust a line scope only when it exists on the frozen contract."""
+    if contract is None:
+        return None
+    candidate = record_line_id(refund_record or {})
+    if candidate is None:
+        noted = notes.get("line_item_id")
+        candidate = noted if isinstance(noted, str) and noted else None
+    return candidate if candidate in set(contract_line_ids(contract)) else None
+
+
 def _refund_contract(
     payment_id: str,
     notes: dict[str, Any],
@@ -1109,6 +1157,16 @@ def _on_refund_processed(event_id: str, payload: dict[str, Any]) -> None:
         )
 
     contract = _refund_contract(payment_id, notes, existing, order_id=order_id)
+    line_item_id = _validated_refund_line_id(contract, notes, existing)
+    if existing is not None and refund_id:
+        # Promote only a contract-validated scope. Provider notes are useful
+        # provenance but are not allowed to invent a line on the ledger.
+        STORE.update(
+            refund_id,
+            **({"line_item_id": line_item_id} if line_item_id is not None else {}),
+            **({"contract_id": contract["id"]} if contract else {}),
+        )
+        existing = STORE.get(refund_id) or existing
     aggregate_id = contract["id"] if contract else (refund_id or event_id)
     aggregate_type = "contract" if contract else "razorpay"
 
@@ -1179,6 +1237,7 @@ def _on_refund_processed(event_id: str, payload: dict[str, Any]) -> None:
             and contract_amount > 0
             and total_refunded >= contract_amount
         )
+        line_refunds = _processed_refund_line_totals(payment_id, contract) if payment_id else {}
         STORE.update(
             contract["id"],
             refunded_amount_paise=total_refunded,
@@ -1186,35 +1245,34 @@ def _on_refund_processed(event_id: str, payload: dict[str, Any]) -> None:
             refund_reconciled=True,
             refund_reconciled_at=now_iso(),
             last_refund_id=refund_id or contract.get("last_refund_id"),
+            refunded_line_amounts_paise=line_refunds,
         )
         current_status = str(contract.get("status") or "")
-        if full and current_status in {
+        if current_status in {
             "BREACH_DETECTED",
             "REMEDY_PLANNING",
             "AWAITING_REMEDY_APPROVAL",
             "REMEDY_EXECUTING",
         }:
-            # A gateway-confirmed full refund is sufficient to close a breach
-            # even when the webhook races the local executor. The helper walks
-            # only the remedy subgraph and never teleports a merely PAID order.
             try:
-                latest = STORE.get(contract["id"]) or contract
-                if latest.get("status") != "REMEDIATED":
-                    from project_dante.domain.money.policy import _transition_contract
+                from project_dante.domain.money.policy import reconcile_contract_lifecycle
 
-                    _transition_contract(contract["id"], "REMEDIATED")
-                lifecycle_action = "breach_remediated_by_refund"
-                append_event(
-                    aggregate_type="contract",
-                    aggregate_id=contract["id"],
-                    event_type="CONTRACT_REMEDIATED",
-                    payload={
-                        "refund_id": refund_id,
-                        "amount_paise": total_refunded,
-                        "source": "refund_webhook",
-                        "out_of_band": money_action is None,
-                    },
-                )
+                if reconcile_contract_lifecycle(contract["id"]):
+                    lifecycle_action = "breach_remediated_by_refund"
+                    append_event(
+                        aggregate_type="contract",
+                        aggregate_id=contract["id"],
+                        event_type="CONTRACT_REMEDIATED",
+                        payload={
+                            "refund_id": refund_id,
+                            "amount_paise": stored_amount,
+                            "line_item_id": line_item_id,
+                            "source": "refund_webhook",
+                            "out_of_band": money_action is None,
+                        },
+                    )
+                elif line_item_id is not None:
+                    lifecycle_action = "line_financially_reconciled"
             except Exception as exc:  # noqa: BLE001 - retain financial marker
                 logger.warning(
                     "refund lifecycle transition deferred contract=%s: %s",
@@ -1244,6 +1302,12 @@ def _on_refund_processed(event_id: str, payload: dict[str, Any]) -> None:
             "payment_id": payment_id,
             "amount_paise": stored_amount if stored_amount is not None else amount,
             "total_refunded_paise": total_refunded,
+            "line_item_id": line_item_id,
+            "line_refunded_paise": (
+                _processed_refund_line_totals(payment_id, contract).get(line_item_id, 0)
+                if contract and payment_id and line_item_id is not None
+                else None
+            ),
             "money_action_id": money_action.get("id") if money_action else None,
             "out_of_band": money_action is None,
             "lifecycle_action": lifecycle_action,

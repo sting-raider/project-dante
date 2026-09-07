@@ -54,6 +54,7 @@ export default function RemedyPage() {
   const contractId = params.id;
 
   const [proposals, setProposals] = useState<RemedyProposal[] | null>(null);
+  const [contract, setContract] = useState<ContractResponse["contract"] | null>(null);
   const [sandbox, setSandbox] = useState<boolean | null>(null);
   const [contractStatus, setContractStatus] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -86,6 +87,7 @@ export default function RemedyPage() {
     apiGet<ContractResponse>(`/api/contracts/${contractId}`)
       .then((d) => {
         if (!alive) return;
+        setContract(d.contract);
         setSandbox(!!d.contract.sandbox_mode);
         setContractStatus(d.contract.status);
       })
@@ -209,16 +211,22 @@ export default function RemedyPage() {
   // The actionable candidate: the highest-ranked non-rejected proposal.
   // (Ranking authority is the server's; there is no manual chooser here.)
   const chosen = proposals?.find((p) => !p.rejected_reason);
+  const affectedLine = chosen?.line_item_id
+    ? contract?.line_items?.find((line) => line.id === chosen.line_item_id)
+    : undefined;
+  const affectedScope = affectedLine?.title ?? chosen?.line_item_id ?? "contract scope";
+  const remedyCeiling = chosen?.amount_paise ?? null;
+  const remedyLabel = chosen?.remedy_type === "refund_full" ? "Full refund for this item" : "Policy-gated remedy";
 
   return (
-    <main className="dante-container py-8 md:py-12">
+    <main className="remedy-dossier-page dante-container py-8 md:py-12">
       <Folio
         issue="ISSUE 06 / REMEDY"
         running={`DOSSIER / ${contractId.slice(0, 13).toUpperCase()}`}
         href={`/contract/${contractId}`}
       />
 
-      <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
+      <header className="remedy-masthead mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
         <div className="md:col-span-8">
           <SectionLabel>THE REMEDY PLANNER</SectionLabel>
           <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
@@ -228,7 +236,8 @@ export default function RemedyPage() {
           </h1>
           <p className="mt-4 max-w-prose text-sm leading-relaxed text-ink-soft">
             Candidates are ranked by a visible scoring function — buyer value
-            0.40, intent restoration 0.35, speed 0.15, inconvenience −0.10.
+            0.40, confidence as the intent-restoration proxy 0.35, speed 0.15,
+            inconvenience −0.10.
             Money moves only after the deterministic policy engine speaks.
           </p>
         </div>
@@ -237,6 +246,29 @@ export default function RemedyPage() {
           {sandbox !== null && <SandboxBadge sandbox={sandbox} />}
         </div>
       </header>
+
+      <div className="remedy-summary-grid" aria-label="Remedy summary">
+        <div className="remedy-summary-card">
+          <span className="remedy-summary-label">Planner state</span>
+          <strong className="remedy-summary-value">{proposals ? `${proposals.length} candidates` : "Loading"}</strong>
+          <span className="remedy-summary-detail">server-ranked alternatives</span>
+        </div>
+        <div className="remedy-summary-card">
+          <span className="remedy-summary-label">Affected item</span>
+          <strong className="remedy-summary-value remedy-summary-value-small">{affectedScope}</strong>
+          <span className="remedy-summary-detail">line-scoped entitlement chain</span>
+        </div>
+        <div className="remedy-summary-card">
+          <span className="remedy-summary-label">Deterministic ceiling</span>
+          <strong className="remedy-summary-value">{remedyCeiling != null ? <MoneyText paise={remedyCeiling} size="sm" /> : "Pending"}</strong>
+          <span className="remedy-summary-detail">never above the affected line</span>
+        </div>
+        <div className="remedy-summary-card">
+          <span className="remedy-summary-label">Money gate</span>
+          <strong className="remedy-summary-value remedy-summary-value-small">{phase === "done" ? "Executed" : "Policy first"}</strong>
+          <span className="remedy-summary-detail">{sandbox ? "sandbox refund rail" : "test-mode refund rail"}</span>
+        </div>
+      </div>
 
       {error && phase !== "error" && (
         <p role="alert" className="mt-8 border-l-2 border-danger pl-3 font-mono text-xs text-danger">
@@ -275,7 +307,7 @@ export default function RemedyPage() {
               <li key={p.id}>
                 <article
                   className={cn(
-                    "rounded-lg border bg-paper-bright",
+                    "remedy-candidate-card rounded-lg border bg-paper-bright",
                     isChosen && !p.rejected_reason
                       ? "border-success"
                       : p.rejected_reason
@@ -294,9 +326,20 @@ export default function RemedyPage() {
                       {isChosen && !p.rejected_reason && (
                         <Badge tone="success">SELECTED</Badge>
                       )}
+                      {p.rejected_reason && <Badge tone="danger">NOT EXECUTABLE</Badge>}
                     </div>
                     <MoneyText paise={p.amount_paise} size="lg" />
                   </header>
+
+                  <div className="remedy-scope-strip">
+                    <span>
+                      {p.line_item_id ? `Affected line · ${p.line_item_id}` : "Affected line · contract scope"}
+                    </span>
+                    {!p.rejected_reason && (
+                      <strong>{isChosen ? `${remedyLabel}.` : "Available after policy evaluation."}</strong>
+                    )}
+                    {p.rejected_reason && <span className="text-danger">This sibling cannot be executed.</span>}
+                  </div>
 
                   <div className="grid grid-cols-1 gap-6 px-5 py-5 md:grid-cols-2">
                       {/* score breakdown bars — labels name the planner fields

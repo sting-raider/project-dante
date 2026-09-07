@@ -118,15 +118,21 @@ export default function TimelinePage() {
     }, {});
   }, [events]);
 
+  const latestEvent = events?.[events.length - 1] ?? null;
+  const categoryCount = events
+    ? new Set(events.map((event) => event.category)).size
+    : null;
+  const traceState = status ?? (latestEvent ? latestEvent.event_type : "loading");
+
   return (
-    <main className="dante-container py-8 md:py-12">
+    <main className="timeline-dossier-page dante-container py-8 md:py-12">
       <Folio
         issue="ISSUE 03 / TIMELINE"
         running={`DOSSIER / ${contractId.slice(0, 13).toUpperCase()}`}
         href={`/contract/${contractId}`}
       />
 
-      <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
+      <header className="timeline-masthead mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
         <div className="md:col-span-8">
           <SectionLabel>EVENT TRACE · APPEND-ONLY</SectionLabel>
           <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
@@ -140,7 +146,7 @@ export default function TimelinePage() {
             evidence snapshots, oldest first.
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 md:col-span-4 md:items-end">
+        <div className="timeline-masthead-meta flex flex-col items-start gap-2 md:col-span-4 md:items-end">
           {status ? <Badge>{status}</Badge> : null}
           <span className="folio-label">
             {sandbox === null ? "PAYMENT RAIL · PROBING…" : sandbox ? "SANDBOX RAIL" : "LIVE TEST-MODE RAIL"}
@@ -154,8 +160,35 @@ export default function TimelinePage() {
         </div>
       </header>
 
+      <section className="timeline-summary-grid" aria-label="Timeline summary">
+        <div className="timeline-summary-card">
+          <span className="timeline-summary-label">Trace state</span>
+          <strong className="timeline-summary-value">{traceState}</strong>
+          <span className="timeline-summary-detail">
+            {latestEvent ? `latest ${latestEvent.event_type}` : "waiting for the first event"}
+          </span>
+        </div>
+        <div className="timeline-summary-card">
+          <span className="timeline-summary-label">Events recorded</span>
+          <strong className="timeline-summary-value tabular">{events?.length ?? "—"}</strong>
+          <span className="timeline-summary-detail">oldest first · append-only</span>
+        </div>
+        <div className="timeline-summary-card">
+          <span className="timeline-summary-label">Evidence lanes</span>
+          <strong className="timeline-summary-value tabular">{categoryCount ?? "—"}</strong>
+          <span className="timeline-summary-detail">agent, money, policy, fulfillment</span>
+        </div>
+        <div className="timeline-summary-card">
+          <span className="timeline-summary-label">Payment rail</span>
+          <strong className="timeline-summary-value">
+            {sandbox === null ? "probing" : sandbox ? "sandbox" : "test mode"}
+          </strong>
+          <span className="timeline-summary-detail">server-confirmed event source</span>
+        </div>
+      </section>
+
       {/* Filter chips */}
-      <nav aria-label="Event category filters" className="mt-10 flex flex-wrap items-center gap-2">
+      <nav aria-label="Event category filters" className="timeline-filter-bar mt-10 flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => (
           <button
             key={f}
@@ -195,7 +228,7 @@ export default function TimelinePage() {
 
       {/* The trace */}
       {rows && rows.length > 0 && (
-        <ol className="mt-2">
+        <ol className="timeline-trace-surface mt-2">
           {rows.map((e, i) => (
             <li key={e.id}>
               <div

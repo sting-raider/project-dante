@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     dante_store_backend: str = "json"
     dante_store_path: str = ""
 
-    llm_provider: str = ""  # "" | anthropic | openai-compatible | groq
+    llm_provider: str = ""  # "" | anthropic | openai-compatible | groq | nvidia
     llm_model: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""  # OpenAI-compatible base (…/v1); empty => api.openai.com/v1
@@ -125,7 +125,7 @@ class Settings(BaseSettings):
         provider = (self.llm_provider or "").strip().lower()
         if provider == "anthropic" and self.llm_api_key:
             return "anthropic"
-        if provider in ("openai-compatible", "groq") and self.llm_api_key:
+        if provider in ("openai-compatible", "groq", "nvidia") and self.llm_api_key:
             return "openai-compatible"
         return ""
 

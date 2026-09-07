@@ -4,7 +4,9 @@ Per master plan §44/§60. Nothing below is claimed by the P0 demo.
 
 ## Deferred during build (recorded at integration)
 
-- Postgres/Redis swap-in for the JSON store (interface already mirrors relational model).
+- Redis/ARQ infrastructure remains deferred. Managed PostgreSQL is now the
+  required final Railway store; the JSON snapshot is retained only as an
+  emergency single-replica recovery fallback.
 - ARQ worker queue for webhook processing (P0 processes inline, fast-ACK design kept).
 - OpenTelemetry traces + Sentry.
 - Merchant MCP server exposure (REST merchant interface ships first).
@@ -29,7 +31,6 @@ README or the pitch.
 |---|---|
 | Claiming real-gateway proof (order/pay/refund ids) | `scripts/verify_real_integration.py` passes and appends BEGIN-RUN evidence to `REAL_INTEGRATION_STATUS.md` — never hand-edit those rows to PROVEN |
 | Any live-mode (`rzp_live_*`) operation | Deliberate product decision + key custody story; startup hard-reject stays until then |
-| Postgres/Redis store as the default backend | DANTE_STORE_BACKEND swap-in is merged, full suite + E2E green against it, and deploy config points at it |
 | ARQ worker queue for webhooks | Inline fast-ACK path demonstrably drops a webhook under load testing |
 | Multi-merchant support | The single fictional Aster Electronics arc runs clean end-to-end in a recorded video |
 | Real logistics / courier integrations | Synthetic fulfillment remains labeled everywhere it renders; removing labels is forbidden outright |

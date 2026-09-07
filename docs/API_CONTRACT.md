@@ -14,7 +14,14 @@ not logged.
 
 ```
 POST /api/intents/compile            {raw_text: str}
-  → 200 {intent: BuyerIntent, engine: "rules"|"llm"}
+  → 200 {intent: BuyerIntent, engine: "rules"|"llm",
+         compilation_provenance: {engine, provider, model, compiler_version,
+                                   validation_retries, trace_id, item_count,
+                                   fallback_reason}}
+  `intent.compilation_provenance.engine` is the authoritative compiler label.
+  `llm` is returned only after the provider response passes the deterministic
+  semantic gate; a configured provider that fails or omits basket lines is
+  recorded as `rules` with a closed `fallback_reason`.
 
 POST /api/intents/{intent_id}/search
   → 200 {intent, results: [{offer: MerchantOffer,

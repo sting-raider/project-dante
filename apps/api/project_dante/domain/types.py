@@ -49,6 +49,13 @@ MoneyActionType = Literal["create_order", "refund_full", "refund_partial"]
 
 PolicyDecisionLiteral = Literal["ALLOW", "REQUIRE_APPROVAL", "DENY"]
 
+CompilationEngine = Literal["rules", "llm"]
+CompilationFallbackReason = Literal[
+    "not_configured",
+    "provider_error",
+    "output_rejected",
+]
+
 IssuerType = Literal["merchant", "manufacturer", "payment_provider", "promotion"]
 
 EntitlementType = Literal[
@@ -113,6 +120,25 @@ class OutcomeSpec(DanteModel):
     keys: list[str] = Field(default_factory=list)  # observed-fact keys that matter
 
 
+class CompilationProvenance(DanteModel):
+    """Durable evidence for how this intent was compiled.
+
+    ``engine`` is the only field clients may use to label the compilation.
+    Provider metadata is descriptive and never grants an LLM authority over
+    feasibility, pricing, contracts, or money actions.  The fallback reason is
+    deliberately a closed, non-secret category rather than a raw exception.
+    """
+
+    engine: CompilationEngine = "rules"
+    provider: str | None = None
+    model: str | None = None
+    compiler_version: str = "rules-v1"
+    validation_retries: int = Field(default=0, ge=0)
+    trace_id: str | None = None
+    item_count: int = Field(default=0, ge=0)
+    fallback_reason: CompilationFallbackReason | None = None
+
+
 class IntentItem(DanteModel):
     """One independently constrained line item inside a buyer brief.
 
@@ -142,6 +168,9 @@ class BuyerIntent(DanteModel):
     desired_outcome: OutcomeSpec | None = None
     created_at: str | None = None
     compiler_version: str = "v0"
+    compilation_provenance: CompilationProvenance = Field(
+        default_factory=CompilationProvenance
+    )
 
 
 # ---------------------------------------------------------------- offer
@@ -313,6 +342,8 @@ class Predicate(DanteModel):
 class Entitlement(DanteModel):
     id: str
     contract_id: str | None = None
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
 
     issuer_type: IssuerType = "merchant"
     issuer_name: str = "Aster Electronics"
@@ -343,6 +374,8 @@ class Entitlement(DanteModel):
 class RemedyProposal(DanteModel):
     id: str
     breach_id: str | None = None
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
     entitlement_id: str | None = None
     contract_id: str | None = None
 
@@ -370,6 +403,8 @@ class MoneyActionProposal(DanteModel):
     razorpay_order_id: str | None = None
 
     contract_id: str
+    line_item_id: str | None = None
+    affected_breach_ids: list[str] = Field(default_factory=list)
     remedy_proposal_id: str | None = None
 
     reason_code: str

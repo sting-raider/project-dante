@@ -132,6 +132,28 @@ def test_multi_item_brief_accepts_a_parent_budget_without_line_caps():
     assert all(item.max_price_paise is None for item in intent.items)
 
 
+def test_phone_charger_is_one_charger_request():
+    intent = rule_compile(
+        "Get me a phone charger, spend limit is 1,500 rupees, nothing more expensive."
+    )
+
+    assert intent.items == []
+    assert _val(intent, "category") == "charger"
+    assert _val(intent, "max_price_paise") == 150_000
+    assert intent.max_total_amount_paise == 150_000
+
+
+def test_keyboard_mouse_combo_keeps_one_shared_total_cap():
+    intent = rule_compile("wireless keyboard and mouse combo under 2500 total")
+
+    assert [(item.id, item.max_price_paise) for item in intent.items] == [
+        ("keyboard-1", None),
+        ("mice-1", None),
+    ]
+    assert _val(intent, "max_price_paise") == 250_000
+    assert intent.max_total_amount_paise == 250_000
+
+
 # ---------------------------------------------------------------- price caps
 
 
@@ -553,6 +575,8 @@ def test_llm_schema_valid_but_semantically_wrong_keys_fall_back_to_rules():
     )
     try:
         assert intent.compiler_version == "rules-v1"
+        assert intent.compilation_provenance.engine == "rules"
+        assert intent.compilation_provenance.fallback_reason == "output_rejected"
         keys = {c.key for c in intent.hard_constraints}
         assert {
             "max_price_paise",
@@ -610,12 +634,260 @@ def test_llm_schema_valid_and_semantically_matching_keeps_llm_path():
     )
     try:
         assert intent.compiler_version == "llm-v1"
+        assert intent.compilation_provenance.engine == "llm"
+        assert intent.compilation_provenance.item_count == 0
         compiled = next(
             event
             for event in reversed(LOG.for_aggregate(intent.id))
             if event["event_type"] == "INTENT_COMPILED"
         )
         assert compiled["payload"]["engine"] == "llm"
+    finally:
+        STORE.delete(intent.id)
+
+
+def test_multi_item_llm_provenance_requires_and_records_every_basket_line():
+    """A model cannot earn an LLM claim by returning only shared constraints."""
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+    from project_dante.domain.events import LOG
+
+    class StubProvider:
+        provider_name = "groq"
+        model = "qwen/qwen3.8-27b"
+        retries = 0
+
+        def __init__(self, draft):
+            self.draft = draft
+
+        async def structured(self, **_kwargs):
+            return self.draft
+
+    rules = rule_compile(MULTI_ITEM_BRIEF)
+    draft = CompiledIntentSchema.model_validate(
+        {
+            "hard_constraints": [
+                constraint.model_dump(mode="json")
+                for constraint in rules.hard_constraints
+            ],
+            "soft_preferences": [
+                preference.model_dump(mode="json")
+                for preference in rules.soft_preferences
+            ],
+            "max_total_amount_paise": rules.max_total_amount_paise,
+            "substitutions_allowed": rules.substitutions_allowed,
+            "items": [
+                {
+                    "label": item.label,
+                    "hard_constraints": [
+                        constraint.model_dump(mode="json")
+                        for constraint in item.hard_constraints
+                    ],
+                    "soft_preferences": [
+                        preference.model_dump(mode="json")
+                        for preference in item.soft_preferences
+                    ],
+                    "max_price_paise": item.max_price_paise,
+                    "quantity": item.quantity,
+                }
+                for item in rules.items
+            ],
+        }
+    )
+
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=StubProvider(draft)).compile(MULTI_ITEM_BRIEF)
+    )
+    try:
+        provenance = intent.compilation_provenance
+        assert provenance.engine == "llm"
+        assert provenance.provider == "groq"
+        assert provenance.model == "qwen/qwen3.8-27b"
+        assert provenance.item_count == 2
+        assert provenance.fallback_reason is None
+
+        compiled = next(
+            event
+            for event in reversed(LOG.for_aggregate(intent.id))
+            if event["event_type"] == "INTENT_COMPILED"
+        )
+        assert compiled["payload"]["compilation_provenance"] == provenance.model_dump(
+            mode="json"
+        )
+
+        run = next(
+            record
+            for record in STORE.list("agent_run")
+            if record.get("intent_id") == intent.id
+        )
+        assert run["engine"] == "llm"
+        assert run["compilation_provenance"] == provenance.model_dump(mode="json")
+    finally:
+        STORE.delete(intent.id)
+
+
+def test_multi_item_semantic_retry_can_earn_llm_provenance():
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+
+    rules = rule_compile(MULTI_ITEM_BRIEF)
+    payload = {
+        "hard_constraints": [
+            constraint.model_dump(mode="json")
+            for constraint in rules.hard_constraints
+        ],
+        "soft_preferences": [
+            preference.model_dump(mode="json")
+            for preference in rules.soft_preferences
+        ],
+        "max_total_amount_paise": rules.max_total_amount_paise,
+        "substitutions_allowed": rules.substitutions_allowed,
+        "items": [
+            {
+                "label": item.label,
+                "hard_constraints": [
+                    constraint.model_dump(mode="json")
+                    for constraint in item.hard_constraints
+                ],
+                "soft_preferences": [
+                    preference.model_dump(mode="json")
+                    for preference in item.soft_preferences
+                ],
+                "max_price_paise": item.max_price_paise,
+                "quantity": item.quantity,
+            }
+            for item in rules.items
+        ],
+    }
+
+    class SequencedProvider:
+        provider_name = "groq"
+        model = "qwen/qwen3.8-27b"
+        retries = 0
+
+        def __init__(self):
+            self.calls = 0
+
+        async def structured(self, **_kwargs):
+            self.calls += 1
+            response = dict(payload)
+            if self.calls == 1:
+                response["items"] = []
+            return CompiledIntentSchema.model_validate(response)
+
+    provider = SequencedProvider()
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=provider).compile(MULTI_ITEM_BRIEF)
+    )
+    try:
+        assert provider.calls == 2
+        assert intent.compilation_provenance.engine == "llm"
+        assert intent.compilation_provenance.fallback_reason is None
+        assert intent.compilation_provenance.validation_retries == 1
+    finally:
+        STORE.delete(intent.id)
+
+
+def test_multi_item_llm_operator_aliases_are_normalized_before_validation():
+    """NVIDIA-style ``includes``/``one_of`` operators remain safe and usable."""
+    import asyncio
+
+    from project_dante.agents.compiler import CompiledIntentSchema
+    from project_dante.db.store import STORE
+
+    rules = rule_compile(MULTI_ITEM_BRIEF)
+    items = []
+    for item in rules.items:
+        hard_constraints = []
+        for constraint in item.hard_constraints:
+            payload = constraint.model_dump(mode="json")
+            if payload["op"] == "contains":
+                payload["op"] = "includes"
+            elif payload["op"] == "in":
+                payload["op"] = "one_of"
+            hard_constraints.append(payload)
+        items.append(
+            {
+                "label": item.label,
+                "hard_constraints": hard_constraints,
+                "soft_preferences": [
+                    preference.model_dump(mode="json")
+                    for preference in item.soft_preferences
+                ],
+                "max_price_paise": item.max_price_paise,
+                "quantity": item.quantity,
+            }
+        )
+
+    class StubProvider:
+        provider_name = "nvidia"
+        model = "nvidia/nemotron-3-super-120b-a12b"
+        retries = 0
+
+        async def structured(self, **_kwargs):
+            return CompiledIntentSchema.model_validate(
+                {
+                    "hard_constraints": [
+                        constraint.model_dump(mode="json")
+                        for constraint in rules.hard_constraints
+                    ],
+                    "soft_preferences": [
+                        preference.model_dump(mode="json")
+                        for preference in rules.soft_preferences
+                    ],
+                    "max_total_amount_paise": rules.max_total_amount_paise,
+                    "substitutions_allowed": rules.substitutions_allowed,
+                    "items": items,
+                }
+            )
+
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=StubProvider()).compile(MULTI_ITEM_BRIEF)
+    )
+    try:
+        assert intent.compilation_provenance.engine == "llm"
+        assert intent.compilation_provenance.provider == "nvidia"
+        assert intent.compilation_provenance.item_count == 2
+        assert intent.compilation_provenance.fallback_reason is None
+        assert [item.id for item in intent.items] == ["monitor-1", "keyboard-1"]
+    finally:
+        STORE.delete(intent.id)
+
+
+def test_configured_llm_provider_error_is_persisted_as_deterministic_fallback():
+    import asyncio
+
+    from project_dante.db.store import STORE
+    from project_dante.domain.events import LOG
+
+    class FailingProvider:
+        provider_name = "groq"
+        model = "qwen/qwen3.8-27b"
+        retries = 0
+
+        async def structured(self, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+    intent = asyncio.run(
+        IntentCompilerAgent(provider=FailingProvider()).compile(HERO)
+    )
+    try:
+        assert intent.compiler_version == "rules-v1"
+        assert intent.compilation_provenance.engine == "rules"
+        assert intent.compilation_provenance.provider == "groq"
+        assert intent.compilation_provenance.fallback_reason == "provider_error"
+
+        compiled = next(
+            event
+            for event in reversed(LOG.for_aggregate(intent.id))
+            if event["event_type"] == "INTENT_COMPILED"
+        )
+        assert compiled["payload"]["engine"] == "rules"
+        assert compiled["payload"]["compilation_provenance"]["engine"] == "rules"
     finally:
         STORE.delete(intent.id)
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import random
 import re
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -363,13 +364,15 @@ async def compile_intent(body: CompileBody) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="raw_text must be non-empty")
     compiler = get_compiler()
     intent = await compiler.compile(body.raw_text)
-    return {"intent": intent.model_dump(mode="json"), "engine": _engine_of(compiler.name)}
-
-
-def _engine_of(agent_name: str) -> str:
-    # The agent logs its own engine to STORE; read the latest run for it.
-    runs = [r for r in STORE.list("agent_run") if r.get("agent_name") == agent_name]
-    return runs[-1].get("engine", "rules") if runs else "rules"
+    # The compiled intent is the authoritative server record.  Do not infer
+    # the engine from a "latest run" query: concurrent buyers could otherwise
+    # make this response label the wrong intent as LLM-compiled.
+    provenance = intent.compilation_provenance.model_dump(mode="json")
+    return {
+        "intent": intent.model_dump(mode="json"),
+        "engine": intent.compilation_provenance.engine,
+        "compilation_provenance": provenance,
+    }
 
 
 @router.post("/{intent_id}/search")
@@ -655,11 +658,11 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
     evidence_ids: list[str] = []
     frozen_rows: list[dict[str, Any]] = []
     frozen_via = "pipeline"
+    bind_to_contract: Callable[..., int] | None = None
+    freeze_promise_set: Callable[..., dict[str, Any]] | None = None
     try:
         from project_dante.domain.promises.pipeline import bind_to_contract, freeze_promise_set
     except ImportError:
-        bind_to_contract = None
-        freeze_promise_set = None
         frozen_via = "inline-fallback"
 
     for row in resolved:
@@ -710,13 +713,18 @@ async def select_offer(intent_id: str, body: SelectOfferBody) -> dict[str, Any]:
         frozen_rows.append(row)
 
         evaluation = row["evaluation"]
-        constraints = evaluation.get("constraints") or [
-            constraint
-            for constraint in (
+        constraints = evaluation.get("constraints")
+        if not isinstance(constraints, list) or not constraints:
+            raw_constraints = (
                 item.get("hard_constraints") if item else intent.get("hard_constraints")
             )
-            if constraint.get("critical", True)
-        ]
+            if not isinstance(raw_constraints, list):
+                raw_constraints = []
+            constraints = [
+                constraint
+                for constraint in raw_constraints
+                if isinstance(constraint, dict) and constraint.get("critical", True)
+            ]
         STORE.update(
             evaluation["id"],
             contract_id=contract_id,

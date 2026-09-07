@@ -8,12 +8,15 @@ POST /api/contracts/{id}/verify    -> {breaches, status, satisfied}
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from project_dante.api.routes.webhooks import handle_webhook_bytes
 from project_dante.db.store import STORE
 from project_dante.domain.events import LOG, append_event
 from project_dante.domain.promises.pipeline import compute_contract_hash
@@ -47,6 +50,50 @@ def _to_model(model_cls: type[BaseModel], record: dict[str, Any]) -> dict[str, A
 async def get_contract(contract_id: str) -> dict[str, Any]:
     """Contract dossier: frozen promise set + any rights created against it."""
     contract = _get_contract_or_404(contract_id)
+
+    # Active reconciliation fallback for live-test-mode:
+    # If the contract is waiting for payment and a live gateway order exists,
+    # but the webhook was dropped (tunnel/network glitch), check Razorpay directly
+    # and deliver any captured payment through the signature-verified webhook handler.
+    status = contract.get("status")
+    order_id = contract.get("razorpay_order_id")
+    if (
+        status in ("PAYMENT_ORDER_CREATED", "PAYMENT_PENDING")
+        and isinstance(order_id, str)
+        and order_id.startswith("order_")
+        and not contract.get("sandbox_mode")
+    ):
+        try:
+            from project_dante.integrations.razorpay import service
+
+            if service.mode() == "live-test-mode":
+                payments = service.fetch_order_payments(order_id)
+                captured = next(
+                    (
+                        p
+                        for p in payments
+                        if isinstance(p, dict)
+                        and (p.get("status") == "captured" or p.get("captured") is True)
+                    ),
+                    None,
+                )
+                if captured and captured.get("id"):
+                    payload = {
+                        "entity": "event",
+                        "account_id": service.key_id_public(),
+                        "event": "payment.captured",
+                        "contains": ["payment"],
+                        "payload": {"payment": {"entity": captured}},
+                        "created_at": int(time.time()),
+                    }
+                    raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                    sig = service.sign_webhook_payload(raw_body)
+                    event_id = f"evt_recon_{captured['id']}"
+                    await handle_webhook_bytes(raw_body, sig, event_id)
+                    contract = _get_contract_or_404(contract_id)
+        except Exception:
+            pass
+
     promises = [p for p in STORE.list("promise") if p.get("contract_id") == contract_id]
     entitlements = [e for e in STORE.list("entitlement") if e.get("contract_id") == contract_id]
     return {
@@ -87,6 +134,7 @@ async def authorize_contract(contract_id: str) -> dict[str, Any]:
         for p in STORE.list("promise")
         if p.get("contract_id") == contract_id and p.get("key") == "price.amount_paise"
     ]
+    amount_paise: int | None = None
     line_items = contract.get("line_items") or []
     if line_items:
         amount_paise = 0
@@ -115,10 +163,12 @@ async def authorize_contract(contract_id: str) -> dict[str, Any]:
                 )
             amount_paise += price * quantity
     else:
-        amount_paise = next(
+        legacy_amount = next(
             (p["value"] for p in price_promises if isinstance(p.get("value"), int)),
             None,
         )
+        if isinstance(legacy_amount, int) and not isinstance(legacy_amount, bool):
+            amount_paise = legacy_amount
     if amount_paise is None or amount_paise <= 0:
         raise HTTPException(status_code=409, detail="Cannot authorize: frozen price unknown")
     if contract.get("amount_paise") != amount_paise:

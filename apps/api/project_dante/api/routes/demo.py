@@ -170,12 +170,17 @@ def deliver(
 @router.post("/contracts/{contract_id}/replacement-unavailable")
 def replacement_unavailable(
     contract_id: str,
+    body: dict = Body(default={}),
     x_demo_operator_token: str | None = Header(default=None),
 ) -> dict:
     _require_demo_mode(x_demo_operator_token)
     if STORE.get(contract_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown contract: {contract_id}")
+    line_item_id = (body or {}).get("line_item_id")
     result = service.apply_fulfillment_event(
-        contract_id, "replacement_check", scenario="unavailable"
+        contract_id,
+        "replacement_check",
+        scenario="unavailable",
+        line_item_id=line_item_id,
     )
     return {**result, "observed_facts": result["facts"], "synthetic": True}

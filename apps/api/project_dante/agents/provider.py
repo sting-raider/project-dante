@@ -20,9 +20,10 @@ latency are recorded.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -36,6 +37,9 @@ ANTHROPIC_VERSION = "2023-06-01"
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 REQUEST_TIMEOUT_S = 30.0
 MAX_ATTEMPTS = 2  # initial attempt + one validation-error retry
+NVIDIA_TRANSIENT_HTTP_ATTEMPTS = 3
+NVIDIA_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+NVIDIA_TRANSIENT_RETRY_DELAY_S = 0.5
 
 
 class AgentValidationError(Exception):
@@ -62,21 +66,26 @@ def _log_agent_run(
     started: float,
     validation_retries: int,
     trace_id: str,
+    intent_id: str | None = None,
+    compilation_provenance: dict[str, Any] | None = None,
 ) -> None:
-    STORE.put(
-        {
-            "id": new_id("run_"),
-            "_type": "agent_run",
-            "agent_name": agent_name,
-            "engine": engine,
-            "input_summary": input_summary[:500],
-            "output_summary": output_summary[:500],
-            "latency_ms": int((time.monotonic() - started) * 1000),
-            "validation_retries": validation_retries,
-            "trace_id": trace_id,
-            "created_at": now_iso(),
-        }
-    )
+    record: dict[str, Any] = {
+        "id": new_id("run_"),
+        "_type": "agent_run",
+        "agent_name": agent_name,
+        "engine": engine,
+        "input_summary": input_summary[:500],
+        "output_summary": output_summary[:500],
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "validation_retries": validation_retries,
+        "trace_id": trace_id,
+        "created_at": now_iso(),
+    }
+    if intent_id is not None:
+        record["intent_id"] = intent_id
+    if compilation_provenance is not None:
+        record["compilation_provenance"] = compilation_provenance
+    STORE.put(record)
 
 
 class AnthropicProvider:
@@ -94,6 +103,7 @@ class AnthropicProvider:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = settings.llm_api_key
+        self.provider_name = "anthropic"
         self.model = settings.llm_model or "claude-sonnet-4-5"
         self._transport = transport  # test seam: httpx.MockTransport
         self.retries = 0
@@ -188,6 +198,9 @@ class OpenAICompatibleProvider:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = settings.llm_api_key.strip()
+        configured_provider = settings.llm_provider.strip().lower()
+        self.provider_name = configured_provider or "openai-compatible"
+        self._is_nvidia_nim = configured_provider == "nvidia"
         self.model = settings.llm_model.strip() or "gpt-4o-mini"
         self.base_url = (settings.llm_base_url.strip() or OPENAI_DEFAULT_BASE_URL).rstrip("/")
         self._transport = transport  # test seam: httpx.MockTransport
@@ -233,30 +246,61 @@ class OpenAICompatibleProvider:
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.1,
+                # NVIDIA's Nemotron NIM recommends this sampling pair. Other
+                # compatible providers retain Dante's conservative default.
+                "temperature": 1.0 if self._is_nvidia_nim else 0.1,
                 "response_format": {"type": "json_object"},
             }
+            if self._is_nvidia_nim:
+                # OpenAI's SDK calls these extra_body fields; raw HTTP must
+                # place them at the top level. Disable the reasoning trace so
+                # the structured response remains a JSON object.
+                payload["top_p"] = 0.95
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
             # The api key is sent only in the Authorization header and is never
             # logged — error strings below carry URL/status only.
-            try:
-                async with httpx.AsyncClient(
-                    timeout=REQUEST_TIMEOUT_S, transport=self._transport
-                ) as client:
-                    resp = await client.post(
-                        self.endpoint,
-                        headers={
-                            "Authorization": f"Bearer {self._api_key}",
-                            "content-type": "application/json",
-                        },
-                        json=payload,
+            resp: httpx.Response | None = None
+            request_attempts = (
+                NVIDIA_TRANSIENT_HTTP_ATTEMPTS if self._is_nvidia_nim else 1
+            )
+            for request_attempt in range(1, request_attempts + 1):
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=REQUEST_TIMEOUT_S, transport=self._transport
+                    ) as client:
+                        resp = await client.post(
+                            self.endpoint,
+                            headers={
+                                "Authorization": f"Bearer {self._api_key}",
+                                "content-type": "application/json",
+                            },
+                            json=payload,
+                        )
+                        resp.raise_for_status()
+                    break
+                except httpx.HTTPStatusError as exc:
+                    is_transient = (
+                        self._is_nvidia_nim
+                        and exc.response.status_code in NVIDIA_TRANSIENT_STATUS_CODES
                     )
-                    resp.raise_for_status()
-            except httpx.HTTPError as exc:
-                request_url = exc.request.url if exc.request is not None else self.endpoint
-                raise AgentValidationError(
-                    f"openai-compatible request failed: {type(exc).__name__} "
-                    f"POST {request_url}"
-                ) from exc
+                    if not is_transient or request_attempt == request_attempts:
+                        request_url = (
+                            exc.request.url if exc.request is not None else self.endpoint
+                        )
+                        raise AgentValidationError(
+                            f"openai-compatible request failed: {type(exc).__name__} "
+                            f"POST {request_url}"
+                        ) from exc
+                    await asyncio.sleep(NVIDIA_TRANSIENT_RETRY_DELAY_S * request_attempt)
+                except httpx.HTTPError as exc:
+                    request_url = exc.request.url if exc.request is not None else self.endpoint
+                    raise AgentValidationError(
+                        f"openai-compatible request failed: {type(exc).__name__} "
+                        f"POST {request_url}"
+                    ) from exc
+
+            if resp is None:  # pragma: no cover - loop either returns or raises
+                raise AgentValidationError("openai-compatible request produced no response")
 
             try:
                 text = self._extract_text(resp.json())
@@ -319,7 +363,7 @@ def get_provider(settings: Settings) -> AnthropicProvider | OpenAICompatibleProv
 
     Selection is delegated entirely to settings.llm_engine so provider/key
     usability is decided in exactly one place: 'anthropic' -> Anthropic,
-    'openai-compatible'/'groq' -> OpenAICompatible, '' => rules engine.
+    'openai-compatible'/'groq'/'nvidia' -> OpenAICompatible, '' => rules engine.
     """
     engine = settings.llm_engine
     if not engine:

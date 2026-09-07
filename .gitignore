@@ -34,7 +34,7 @@ Thumbs.db
 *.log
 logs/
 .claude/settings.local.json
-evals/reports/*.json
+!evals/reports/*.json
 !evals/reports/.gitkeep
 evals/reports/.pytest-subsets/
 
