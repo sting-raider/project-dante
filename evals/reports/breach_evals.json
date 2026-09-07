@@ -1,0 +1,150 @@
+{
+  "run_name": "breach_evals",
+  "status": "PASS",
+  "dataset": "evals/datasets/breach_cases.json",
+  "module_under_test": "project_dante.domain.promises.verifier.evaluate_contract",
+  "metrics": {
+    "cases_run": 25,
+    "true_positives": 15,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "true_negatives": 10,
+    "breach_precision": 1.0,
+    "breach_recall": 1.0,
+    "breach_f1": 1.0,
+    "supported_key_tp": 15,
+    "supported_key_fn": 0,
+    "breach_recall_supported_keys": 1.0,
+    "breach_f1_supported_keys": 1.0,
+    "failures": 0
+  },
+  "failures": [],
+  "results": [
+    {
+      "id": "BRC-001",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-002",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-003",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-004",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-005",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-006",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-007",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-008",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-009",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-010",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-011",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-012",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-013",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-014",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-015",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-016",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-017",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-018",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-019",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-020",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-021",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-022",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-023",
+      "passed": true,
+      "expect_breach": true
+    },
+    {
+      "id": "BRC-024",
+      "passed": true,
+      "expect_breach": false
+    },
+    {
+      "id": "BRC-025",
+      "passed": true,
+      "expect_breach": true
+    }
+  ],
+  "generated_at": "2026-08-31T19:28:23.202162+00:00"
+}

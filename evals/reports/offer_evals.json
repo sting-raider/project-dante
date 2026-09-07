@@ -1,0 +1,128 @@
+{
+  "run_name": "offer_evals",
+  "status": "PASS",
+  "dataset": "evals/datasets/offer_cases.json",
+  "modules_under_test": [
+    "project_dante.agents.compiler.rule_compile",
+    "project_dante.agents.evaluator.OfferEvaluatorAgent.evaluate",
+    "project_dante.integrations.merchant.service.search_catalog"
+  ],
+  "metrics": {
+    "scenarios_run": 26,
+    "catalog_products_seeded": 112,
+    "feasibility_checks": 117,
+    "hard_constraint_violations": 0,
+    "hard_constraint_violation_rate": 0.0,
+    "false_negative_skus": 0,
+    "scenario_accuracy": 1.0,
+    "failures": 0
+  },
+  "failures": [],
+  "results": [
+    {
+      "id": "OFF-001",
+      "passed": true
+    },
+    {
+      "id": "OFF-002",
+      "passed": true
+    },
+    {
+      "id": "OFF-003",
+      "passed": true
+    },
+    {
+      "id": "OFF-004",
+      "passed": true
+    },
+    {
+      "id": "OFF-005",
+      "passed": true
+    },
+    {
+      "id": "OFF-006",
+      "passed": true
+    },
+    {
+      "id": "OFF-007",
+      "passed": true
+    },
+    {
+      "id": "OFF-008",
+      "passed": true
+    },
+    {
+      "id": "OFF-009",
+      "passed": true
+    },
+    {
+      "id": "OFF-010",
+      "passed": true
+    },
+    {
+      "id": "OFF-011",
+      "passed": true
+    },
+    {
+      "id": "OFF-012",
+      "passed": true
+    },
+    {
+      "id": "OFF-013",
+      "passed": true
+    },
+    {
+      "id": "OFF-014",
+      "passed": true
+    },
+    {
+      "id": "OFF-015",
+      "passed": true
+    },
+    {
+      "id": "OFF-016",
+      "passed": true
+    },
+    {
+      "id": "OFF-017",
+      "passed": true
+    },
+    {
+      "id": "OFF-018",
+      "passed": true
+    },
+    {
+      "id": "OFF-019",
+      "passed": true
+    },
+    {
+      "id": "OFF-020",
+      "passed": true
+    },
+    {
+      "id": "OFF-021",
+      "passed": true
+    },
+    {
+      "id": "OFF-022",
+      "passed": true
+    },
+    {
+      "id": "OFF-023",
+      "passed": true
+    },
+    {
+      "id": "OFF-024",
+      "passed": true
+    },
+    {
+      "id": "OFF-025",
+      "passed": true
+    },
+    {
+      "id": "OFF-026",
+      "passed": true
+    }
+  ],
+  "generated_at": "2026-08-31T19:28:22.972133+00:00"
+}

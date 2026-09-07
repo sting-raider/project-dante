@@ -119,6 +119,21 @@ export default function DemoPage() {
 
   const busy = orch.phase === "running" || orch.phase === "waiting_payment";
   const anyBusy = busy;
+  const readiness = orch.demoStatus
+    ? orch.demoStatus.demo_mode
+      ? "Ready"
+      : "Locked"
+    : "Probing";
+  const runState =
+    orch.phase === "complete"
+      ? "Complete"
+      : orch.phase === "idle"
+        ? "Ready to run"
+        : orch.phase === "waiting_payment"
+          ? "Awaiting payment"
+          : orch.phase === "halted"
+            ? "Needs retry"
+            : "Running";
 
   /* --------------------------------------------------- manual controls */
 
@@ -150,9 +165,9 @@ export default function DemoPage() {
   }
 
   return (
-    <main className="min-h-screen bg-paper">
+    <main className="demo-control-page min-h-screen bg-paper">
       {/* Warning strip */}
-      <div className="border-b border-warning bg-warning/[0.08] px-6 py-3 md:px-10">
+      <div className="demo-warning-strip border-b border-warning bg-warning/[0.08] px-6 py-3 md:px-10">
         <p className="folio-label text-warning flex flex-wrap items-center gap-2">
           <span className="rounded-sm border border-warning px-1.5 py-[2px]">DEMO SIMULATION CONTROL</span>
           <span className="normal-case tracking-normal">
@@ -166,7 +181,7 @@ export default function DemoPage() {
         <Folio issue="ISSUE 00 / CONTROL ROOM" running="PRIVATE PANEL / OPERATOR" />
 
         {/* ---------------------------------------------- hero arc header */}
-        <header className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
+        <header className="demo-masthead mt-8 grid grid-cols-1 gap-6 md:grid-cols-12">
           <div className="md:col-span-7">
             <SectionLabel>THE FIVE-MINUTE ARC · RESUMABLE</SectionLabel>
             <h1 className="mt-3 font-display text-5xl leading-[1.02] md:text-6xl">
@@ -183,7 +198,7 @@ export default function DemoPage() {
               Refresh the page mid-arc and the console picks up where it left off.
             </p>
           </div>
-          <div className="flex items-start gap-3 md:col-span-5 md:justify-end">
+          <div className="demo-run-action flex items-start gap-3 md:col-span-5 md:justify-end">
             {!anyBusy && (
               <Button onClick={orch.startNewRun} size="lg" data-testid="run-hero">
                 ▶ RUN HERO SCENARIO
@@ -192,8 +207,31 @@ export default function DemoPage() {
           </div>
         </header>
 
+        <div className="demo-readiness-grid" aria-label="Demo readiness">
+          <div className="demo-readiness-card">
+            <span className="demo-readiness-label">Control room</span>
+            <strong className={cn("demo-readiness-value", readiness === "Locked" ? "text-danger" : "text-success")}>{readiness}</strong>
+            <span className="demo-readiness-detail">{orch.demoStatus ? "API posture confirmed" : "Waiting for API health"}</span>
+          </div>
+          <div className="demo-readiness-card">
+            <span className="demo-readiness-label">Payment rail</span>
+            <strong className="demo-readiness-value">{orch.railMode === "live-test-mode" ? "Test Mode" : orch.railMode === "sandbox" ? "Sandbox" : "Probing"}</strong>
+            <span className="demo-readiness-detail">{orch.railMode === "live-test-mode" ? "Razorpay test credentials" : "No real money moves"}</span>
+          </div>
+          <div className="demo-readiness-card">
+            <span className="demo-readiness-label">Run state</span>
+            <strong className="demo-readiness-value demo-readiness-value-small">{runState}</strong>
+            <span className="demo-readiness-detail">{orch.steps.length ? `${orch.steps.filter((step) => step.status === "ok").length} of 15 steps recorded` : "15-step guided arc"}</span>
+          </div>
+          <div className="demo-readiness-card">
+            <span className="demo-readiness-label">Operator gate</span>
+            <strong className="demo-readiness-value demo-readiness-value-small">{orch.tokenRequired ? "Token required" : "Open locally"}</strong>
+            <span className="demo-readiness-detail">writes stay server-protected</span>
+          </div>
+        </div>
+
         {/* ------------------------------------------------- posture strip */}
-        <section aria-label="Payment rail posture" className="mt-8">
+        <section aria-label="Payment rail posture" className="demo-posture-section mt-8">
           <Panel
             tone="bright"
             label="RAIL POSTURE"
@@ -357,7 +395,7 @@ export default function DemoPage() {
             animate={{ opacity: 1 }}
             aria-label="Hero scenario step log"
             data-testid="hero-ticker"
-            className="mt-6 max-h-96 overflow-y-auto rounded-md border border-rule bg-paper-bright p-4 font-mono text-xs leading-relaxed"
+            className="demo-ticker mt-6 max-h-96 overflow-y-auto rounded-md border border-rule bg-paper-bright p-4 font-mono text-xs leading-relaxed"
           >
             {orch.steps.map((s, i) => (
               <TickerRow
@@ -402,8 +440,11 @@ export default function DemoPage() {
         )}
 
         {/* --------------------------------------------- manual controls */}
-        <section className="mt-14" aria-label="Manual demo controls">
-          <SectionLabel>MANUAL CONTROLS</SectionLabel>
+        <details className="demo-manual-controls mt-14" aria-label="Manual demo controls">
+          <summary className="demo-manual-summary">
+            <span><SectionLabel>MANUAL CONTROLS</SectionLabel><span className="mt-2 block text-sm font-normal normal-case tracking-normal text-ink-soft">Reset, ship, deliver, or mark replacement unavailable.</span></span>
+            <span className="demo-manual-summary-action" aria-hidden="true">Expand controls <span>＋</span></span>
+          </summary>
           <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Panel label="SEED" aside={<SyntheticBadge synthetic />}>
               <p className="text-sm leading-relaxed text-ink-soft">
@@ -516,7 +557,7 @@ export default function DemoPage() {
               )}
             </Panel>
           </div>
-        </section>
+        </details>
 
         {/* --------------------------------------------------- brief note */}
         <section className="mt-10 border-t border-rule pt-4" aria-label="Hero brief">

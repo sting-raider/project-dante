@@ -129,6 +129,8 @@ export type EntitlementStatus =
 export type Entitlement = {
   id: string;
   contract_id?: string | null;
+  line_item_id?: string | null;
+  affected_breach_ids?: string[];
   issuer_type?: string;
   issuer_name?: string;
   /** Stable human slug when the engine provides one, else the raw id. */
@@ -151,6 +153,8 @@ export type Entitlement = {
 export type RemedyProposal = {
   id: string;
   breach_id?: string | null;
+  line_item_id?: string | null;
+  affected_breach_ids?: string[];
   entitlement_id?: string | null;
   contract_id?: string | null;
   remedy_type: string;
@@ -178,6 +182,8 @@ export type MoneyAction = {
   id: string;
   type: string;
   amount_paise: number;
+  line_item_id?: string | null;
+  affected_breach_ids?: string[];
   currency?: string;
   razorpay_payment_id?: string | null;
   razorpay_order_id?: string | null;

@@ -1,0 +1,362 @@
+{
+  "run_name": "intent_evals",
+  "status": "PASS",
+  "dataset": "evals/datasets/intent_cases.json",
+  "module_under_test": "project_dante.agents.compiler.rule_compile (rules engine path)",
+  "metrics": {
+    "cases_run": 68,
+    "critical_cases": 58,
+    "critical_recall": 1.0,
+    "overall_accuracy": 1.0,
+    "failures": 0
+  },
+  "thresholds": {
+    "critical_recall": "critical_recall=1.0 (PASS, required: == 1.0)",
+    "overall_accuracy": "overall_accuracy=1.0 (PASS, required: == 1.0)",
+    "failures": "failures=0 (PASS, required: == 0)"
+  },
+  "failures": [],
+  "results": [
+    {
+      "id": "INT-001",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-002",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-003",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-004",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-005",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-006",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-007",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-008",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-009",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-010",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-011",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-012",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-013",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-014",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-015",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-016",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-017",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-018",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-019",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-020",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-021",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-022",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-023",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-024",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-025",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-026",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-027",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-028",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-029",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-030",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-031",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-032",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-033",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-034",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-035",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-036",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-037",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-038",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-039",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-040",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-041",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-042",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-043",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-044",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-045",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-046",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-047",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-048",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-049",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-050",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-051",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-052",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-053",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-054",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-055",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-056",
+      "passed": true,
+      "critical": false
+    },
+    {
+      "id": "INT-057",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-058",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-059",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-060",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-061",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-062",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-063",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-064",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-065",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-066",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-067",
+      "passed": true,
+      "critical": true
+    },
+    {
+      "id": "INT-068",
+      "passed": true,
+      "critical": true
+    }
+  ],
+  "generated_at": "2026-08-31T19:28:22.390276+00:00"
+}
