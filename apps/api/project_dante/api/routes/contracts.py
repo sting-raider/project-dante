@@ -8,12 +8,15 @@ POST /api/contracts/{id}/verify    -> {breaches, status, satisfied}
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from project_dante.api.routes.webhooks import handle_webhook_bytes
 from project_dante.db.store import STORE
 from project_dante.domain.events import LOG, append_event
 from project_dante.domain.promises.pipeline import compute_contract_hash
@@ -49,9 +52,9 @@ async def get_contract(contract_id: str) -> dict[str, Any]:
     contract = _get_contract_or_404(contract_id)
 
     # Active reconciliation fallback for live-test-mode:
-    # If the contract is waiting for payment and bound to a live gateway order,
-    # but the server-to-server webhook was dropped or delayed by a tunnel/network glitch,
-    # check Razorpay for captured payment and deliver it through the signature-verified webhook handler.
+    # If the contract is waiting for payment and a live gateway order exists,
+    # but the webhook was dropped (tunnel/network glitch), check Razorpay directly
+    # and deliver any captured payment through the signature-verified webhook handler.
     status = contract.get("status")
     order_id = contract.get("razorpay_order_id")
     if (
@@ -75,10 +78,6 @@ async def get_contract(contract_id: str) -> dict[str, Any]:
                     None,
                 )
                 if captured and captured.get("id"):
-                    import json
-                    import time
-                    from project_dante.api.routes.webhooks import handle_webhook_bytes
-
                     payload = {
                         "entity": "event",
                         "account_id": service.key_id_public(),
